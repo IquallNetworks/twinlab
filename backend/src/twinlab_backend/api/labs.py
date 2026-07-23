@@ -427,9 +427,17 @@ async def _finish_deploy(
     config-time validation failure is reported (status `validation_failed`), not
     raised — the lab stays deployed."""
     nodes = [n.node_name for n in deployed.nodes]
+    # Always wait for the devices to actually be ready (NOS booted, accepting
+    # SSH/console) before reporting the deploy done — even without a config push.
+    # IOL/IOS keeps booting ~60-90s after its container is up, so a bare deploy
+    # that returned immediately would hand back nodes that reject connections.
+    templates = _config_fileset(library, lab)
+    ready = await runner.ready(definition, templates)
+    if isinstance(ready, Err):
+        raise _ready_failed(ready.error)
     if not configure:
         return DeployResponse(status="deployed", lab_name=deployed.name, nodes=nodes)
-    pushed = await _push_config(runner, definition, _config_fileset(library, lab))
+    pushed = await _push_config(runner, definition, templates)
     if isinstance(pushed, Err):
         raise pushed.error
     report = pushed.value
@@ -1018,6 +1026,16 @@ def _netlab_failed(message: str, stderr: str) -> HTTPException:
 
 def _deploy_failed(message: str) -> HTTPException:
     return HTTPException(status_code=502, detail={"stage": "clab-api", "message": message})
+
+
+def _ready_failed(error: RunnerError) -> HTTPException:
+    # A bad definition is the caller's fault (422); otherwise the nodes didn't come
+    # up in time — the lab is deployed but not usable yet (502, retry the deploy).
+    status = 422 if error.reason == "bad_definition" else 502
+    return HTTPException(
+        status_code=status,
+        detail={"stage": "ready", "reason": error.reason, "message": error.message},
+    )
 
 
 def _runner_failed(error: RunnerError) -> HTTPException:

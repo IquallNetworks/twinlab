@@ -71,3 +71,28 @@ async def test_configure_maps_bad_definition_to_typed_error() -> None:
     result = await _client(handler).configure("nonsense", {})
     assert isinstance(result, Err)
     assert result.error.reason == "bad_definition"
+
+
+async def test_ready_reports_ready_and_sends_templates() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/ready"
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"ready": True})
+
+    templates = {"mpls_te/ios.j2": "conf"}
+    result = await _client(handler).ready("name: tl-1\n", templates)
+    assert isinstance(result, Ok), result
+    assert result.value.ready
+    assert seen["templates"] == templates
+
+
+async def test_ready_maps_not_ready_to_typed_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 504: netlab exhausted its retry budget (a node never came up).
+        return httpx.Response(504, json={"detail": "devices did not become ready"})
+
+    result = await _client(handler).ready("name: tl-1\n", {})
+    assert isinstance(result, Err)
+    assert result.error.reason == "runner"

@@ -366,3 +366,68 @@ clab-api `exec`):**
    per-node CPU/mem/traffic straight from the Docker API). **Open scope question
    to resolve when this is picked up:** full observability stack vs. lightweight
    Docker-API stats.
+
+### Validation-gate parallelization · **deferred** (until gate wall-time warrants it)
+
+10. **Run the config-time gate's checks concurrently.** The gate runs its
+    `(test, node)` checks **sequentially** today. That is fine at current scale
+    (the `mpls-l3vpn-iol` gate = 26 checks in ~23s over `netlab exec`), so this is
+    **parked** — the full design and race analysis are captured here so it doesn't
+    need re-deriving when the time comes.
+
+**Trigger to pick this up:** gate wall-time becomes painful — a lab with enough
+nodes × checks that sequential execs run into minutes, or a suite where the
+sequential **worst case** matters. Today a slow-converging check blocks the rest,
+so the worst case is *the sum of every test's `wait`*; parallelizing makes it
+*`max(wait)`* instead. (Historical note: an apparent ~8-minute "hang" during the
+custom-config work was **not** this — it was a bug where every exec 422'd and each
+test polled its full `wait`; fixed. Post-fix the sequential gate is ~23s, hence the
+deferral.)
+
+**Where the serialization lives (two layers — both must change):**
+- Backend — `run_suite` (`services/validation.py`) is a sequential
+  `[await _run_check(...) for test… for node…]`.
+- Runner — `app.py`'s `_netlab_lock` (one `asyncio.Lock`) wraps **every** `/exec`,
+  so backend concurrency alone would still serialize at the runner.
+
+**Design:**
+- Backend: `run_suite` fans out with `asyncio.gather`, bounded by a semaphore
+  (~8). Each `_run_check` keeps polling independently.
+- Runner: stop holding a global lock across the whole exec. `netlab exec` is a
+  **separate subprocess that only reads** shared files, so many can run at once;
+  only the writers (`netlab create` / `initial`) stay serialized.
+
+**Verified facts behind the design (checked during the custom-config work):**
+- `netlab exec` = `load_snapshot` (read the per-lab pickle) + `connect_to_node`
+  (spawn ssh/docker); a separate subprocess, no shared in-process state, read-only
+  on shared files. 4 concurrent execs ran in 3s vs 13s sequential, no corruption.
+- `netlab exec` loads the snapshot fine under an isolated `HOME` (reaches the SSH
+  stage), and netlab already guards stats with `~/.netlab/stats.json.lock`.
+
+**Race conditions + handling:**
+- **R1 — cold-cache build stampede.** N parallel execs on a cold inventory cache
+  would all `rmtree`+`netlab create` the same `exec-cache/<lab>` dir. → **double-
+  checked locking**: fast lockless cache check; on miss take a per-lab lock,
+  **re-check** (another thread may have just built it), build only if still cold.
+- **R2 — `~/.netlab` reader/writer.** `create`/`initial` (writers) vs `exec`
+  (reader) racing on the shared status dir. → **per-lab `HOME=<workdir>`
+  isolation** so labs share no `~/.netlab`; `/configure` keeps the *real* HOME (its
+  `netlab initial` needs `~/.ansible`), so it is disjoint from exec's HOME.
+  *Alternative:* a global reader-writer lock — HOME isolation is preferred (more
+  concurrency, no new lock type). **Must verify a VyOS/docker-transport exec still
+  works under a changed HOME before trusting the isolation.**
+- **R3 — result / DB write.** None needed: `gather` collects, then the endpoint
+  does a **single** `record_validation`. No per-check DB write (unchanged).
+- **R4 — resource exhaustion.** Cap in-flight execs with the semaphore (~8) to
+  protect the host and each node's `sshd MaxStartups`.
+- **R5 — poll interaction.** Each `_run_check` polls in its own gathered task;
+  concurrency turns the worst case from `sum(wait)` into `max(wait)`.
+
+**Scope when built:** `netlab-runner/runner.py` (double-checked per-lab build lock
++ `HOME=<workdir>` on the cache-build create and on exec), `netlab-runner/app.py`
+(drop `_netlab_lock` from `/exec`, keep it for `/configure`),
+`backend/services/validation.py` (`run_suite` → bounded `gather`). Tests: runner
+concurrency (parallel execs don't corrupt / build exactly once) + backend
+`run_suite` issues checks concurrently. **Interacts with** the Phase 1.1
+"Config-push `~/.netlab` race (runner)" note — that `asyncio.Lock` stays, guarding
+`/configure` only.

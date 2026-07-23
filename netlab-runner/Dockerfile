@@ -47,5 +47,23 @@ RUN ansible-galaxy collection install community.docker cisco.ios ansible.netcomm
 # container's filesystem (the real mount is the host's, at deploy time).
 RUN mkdir -p /lib/modules
 
+# Lab nodes are ephemeral: every (re)deploy recreates the container with a NEW
+# SSH host key, so host-key pinning only ever breaks — a stale known_hosts entry
+# makes the next config push fail with "host key mismatch". The Ansible
+# network_cli/paramiko connection Cisco IOS/IOL uses loads ~/.ssh/known_hosts even
+# though netlab sets host_key_checking=False, so the reliable fix is to make that
+# file unable to hold a stale key: point it at /dev/null. There is then never a
+# prior key to mismatch (a missing key is auto-added and the connection proceeds),
+# and netlab's record_host_keys=false means nothing is written back. These are
+# throwaway sandbox nodes on a private mgmt net, so pinning buys nothing. The ssh
+# config + env cover any plain-ssh/other-tool path (netlab's own readiness probe
+# already passes these flags inline).
+ENV ANSIBLE_HOST_KEY_CHECKING=False
+RUN mkdir -p /root/.ssh \
+    && ln -sf /dev/null /root/.ssh/known_hosts \
+    && printf 'Host *\n    StrictHostKeyChecking no\n    UserKnownHostsFile /dev/null\n' \
+       > /root/.ssh/config \
+    && chmod 700 /root/.ssh && chmod 600 /root/.ssh/config
+
 EXPOSE 8000
 CMD ["uvicorn", "netlab_runner.app:app", "--host", "0.0.0.0", "--port", "8000"]

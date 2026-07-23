@@ -12,7 +12,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from netlab_runner.runner import ConfigureOutcome, ExecOutcome, configure, exec_command
+from netlab_runner.runner import (
+    ConfigureOutcome,
+    ExecOutcome,
+    ReadyOutcome,
+    configure,
+    exec_command,
+    wait_ready,
+)
 
 app = FastAPI(title="Twinlab netlab-runner", version="0.1.0")
 
@@ -83,6 +90,41 @@ async def exec_endpoint(request: ExecRequest) -> ExecResponse:
     if isinstance(outcome, ExecOutcome):
         return ExecResponse(node=outcome.node, stdout=outcome.stdout)
     status = 422 if outcome.stage == "netlab-create" else 500
+    raise HTTPException(
+        status_code=status,
+        detail={
+            "stage": outcome.stage,
+            "message": outcome.message,
+            "output": outcome.output[-2000:],
+        },
+    )
+
+
+class ReadyRequest(BaseModel):
+    # A netlab definition (YAML) with a stable `name:`, plus the custom-config
+    # templates its `config:` may reference (the readiness inventory is built with
+    # netlab create, which validates them).
+    definition: str = Field(min_length=1)
+    templates: dict[str, str] = Field(default_factory=dict)
+
+
+class ReadyResponse(BaseModel):
+    ready: bool
+
+
+@app.post("/ready")
+async def ready_endpoint(request: ReadyRequest) -> ReadyResponse:
+    # Readiness polls SSH/console per node; keep it off the loop and serialized (a
+    # cache-miss runs `netlab create`, which races on ~/.netlab).
+    async with _netlab_lock:
+        outcome = await run_in_threadpool(wait_ready, request.definition, request.templates)
+    if isinstance(outcome, ReadyOutcome):
+        return ReadyResponse(ready=outcome.ready)
+    # netlab-create = bad definition (422); netlab-ready = nodes never came up (504,
+    # a timeout upstream); anything else is an internal fault (500).
+    status = (
+        422 if outcome.stage == "netlab-create" else 504 if outcome.stage == "netlab-ready" else 500
+    )
     raise HTTPException(
         status_code=status,
         detail={

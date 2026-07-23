@@ -23,6 +23,9 @@ _CONFIGURE_TIMEOUT_SECONDS = 600.0
 # One validation exec is a single show command; keep headroom for a cold-cache
 # `netlab create` on the first check of a lab, then it is quick.
 _EXEC_TIMEOUT_SECONDS = 120.0
+# Readiness polls each node's SSH/console until the NOS boots (netlab budget ~100s
+# per node); allow more than the runner's own 200s cap so the HTTP call outlives it.
+_READY_TIMEOUT_SECONDS = 240.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,15 @@ class _ExecResponse(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class ReadyReport:
+    ready: bool
+
+
+class _ReadyResponse(BaseModel):
+    ready: bool
+
+
+@dataclass(frozen=True, slots=True)
 class RunnerClient:
     client: httpx.AsyncClient
     base_url: str
@@ -108,6 +120,34 @@ class RunnerClient:
                 ),
             )
         )
+
+    async def ready(
+        self, definition: str, templates: dict[str, str]
+    ) -> Result[ReadyReport, RunnerError]:
+        """Wait for every node to become ready (NOS booted, accepting SSH/console)
+        via the runner's `netlab initial --ready` — no config push. `templates` is
+        the custom-config fileset the definition may reference (its readiness
+        inventory is built with netlab create). Returns once ready, or a typed
+        error if a node never came up."""
+        try:
+            resp = await self.client.post(
+                f"{self.base_url}/ready",
+                json={"definition": definition, "templates": templates},
+                timeout=_READY_TIMEOUT_SECONDS,
+            )
+        except httpx.HTTPError as exc:
+            return Err(RunnerError("transport", f"ready request failed: {exc}"))
+
+        if resp.status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
+            return Err(RunnerError("bad_definition", resp.text))
+        if resp.status_code != HTTPStatus.OK:
+            return Err(RunnerError("runner", f"ready failed: {resp.text}"))
+
+        try:
+            parsed = _ReadyResponse.model_validate_json(resp.content)
+        except ValidationError as exc:
+            return Err(RunnerError("runner", f"unexpected ready response: {exc}"))
+        return Ok(ReadyReport(ready=parsed.ready))
 
     async def exec_command(
         self, definition: str, node: str, command: str, templates: dict[str, str]

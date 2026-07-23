@@ -37,6 +37,10 @@ _INITIAL_TIMEOUT_SECONDS = 600
 # One `netlab exec` (a single show command over ssh/docker) is quick; cap it so a
 # hung connection can't stall a validation poll.
 _EXEC_TIMEOUT_SECONDS = 60
+# `netlab initial --ready` polls each node's SSH/console until the NOS has booted;
+# netlab's default budget is 20 retries x 5s = 100s per node (concurrent), so give
+# it headroom for a slow IOL boot.
+_READY_TIMEOUT_SECONDS = 200
 # Cached netlab inventories for validation execs, one workdir per lab name so a
 # suite's many checks don't re-run `netlab create` each time.
 _EXEC_CACHE_ROOT = Path("/tmp/netlab-exec-cache")
@@ -267,6 +271,36 @@ def _ensure_inventory(definition: str, name: str, templates: dict[str, str]) -> 
         return RunnerError("netlab-create", "netlab create failed", created.stderr)
     _ = stamp.write_text(digest)
     return workdir
+
+
+@dataclass(frozen=True, slots=True)
+class ReadyOutcome:
+    ready: bool  # True on success; a failure is a RunnerError, not ready=False
+
+
+def wait_ready(definition: str, templates: dict[str, str]) -> ReadyOutcome | RunnerError:
+    """Wait for every node to become ready (its NOS booted and accepting SSH/
+    console) via `netlab initial --ready` — a readiness poll, no config push. Used
+    on the deploy path so a lab is reported done only once its devices actually
+    respond (IOL/IOS keeps booting ~60-90s after the container is up). Needs the
+    inventory, and the custom-config templates the definition's `config:` may
+    reference (netlab create validates them). `definition` must carry the stable
+    `name:`."""
+    name = _definition_name(definition)
+    if name is None:
+        return RunnerError("internal", "definition has no name")
+    workdir = _ensure_inventory(definition, name, templates)
+    if isinstance(workdir, RunnerError):
+        return workdir
+    result = _run(["netlab", "initial", "--ready"], workdir, _READY_TIMEOUT_SECONDS)
+    if isinstance(result, str):
+        return RunnerError("internal", result)
+    if result.returncode != 0:
+        # netlab exhausted its retry budget: a node never came up.
+        return RunnerError(
+            "netlab-ready", "devices did not become ready", result.stdout + result.stderr
+        )
+    return ReadyOutcome(ready=True)
 
 
 def exec_command(

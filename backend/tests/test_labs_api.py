@@ -5,7 +5,7 @@ import pytest
 
 from twinlab_backend.api.labs import lab_detail, lab_summary
 from twinlab_backend.db.models import Lab, User
-from twinlab_backend.models import NetemSetRequest
+from twinlab_backend.models import DeployRequest, NetemSetRequest
 from twinlab_backend.services.clab_api import NodeInfo
 
 _TS = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
@@ -79,3 +79,19 @@ def test_netem_set_accepts_a_single_impairment() -> None:
     # A lone impairment is valid; delay+jitter together satisfy the dependency.
     assert NetemSetRequest(interface="eth1", loss=1.5).loss == 1.5
     assert NetemSetRequest(interface="eth1", delay="50ms", jitter="5ms").jitter == "5ms"
+
+
+def test_deploy_request_requires_name() -> None:
+    with pytest.raises(pydantic.ValidationError, match="name"):
+        _ = DeployRequest.model_validate({"definition": "nodes: [r1]\n"})
+
+
+def test_deploy_request_rejects_unsafe_name() -> None:
+    # The name is a URL segment and a clab identity, so the charset is tight.
+    with pytest.raises(pydantic.ValidationError):
+        _ = DeployRequest(name="../evil", definition="nodes: [r1]\n")
+
+
+def test_deploy_request_accepts_valid_name() -> None:
+    request = DeployRequest(name="mpls-l3vpn", definition="nodes: [r1]\n")
+    assert request.name == "mpls-l3vpn"

@@ -1,11 +1,23 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
+import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { FieldError } from '@/components/field-error'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -19,6 +31,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -35,6 +48,7 @@ import { formatDateTime, statusBadgeVariant } from '@/lib/format'
 import { labsQueryOptions, meQueryOptions } from '@/lib/queries'
 
 const PERM_LAB_CREATE = 'lab:create'
+const PERM_LAB_DESTROY = 'lab:destroy'
 
 const DEFINITION_PLACEHOLDER = `provider: clab
 defaults.device: vyos
@@ -44,6 +58,16 @@ links: [r1-r2]
 `
 
 const deploySchema = z.object({
+  // Same path-safe charset the backend enforces (`_Name`): the name keys the
+  // record and every /labs/{name} route, so it must be a safe URL segment.
+  name: z
+    .string()
+    .min(1, 'A lab name is required')
+    .max(64, 'At most 64 characters')
+    .regex(
+      /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
+      'Start with a letter or digit; then letters, digits, dot, dash or underscore',
+    ),
   definition: z.string().min(1, 'A netlab definition is required'),
   configure: z.boolean(),
   skipConfigTimeChecks: z.boolean(),
@@ -56,7 +80,7 @@ function DeployLabDialog() {
 
   const deploy = useMutation({
     mutationFn: (value: z.infer<typeof deploySchema>) =>
-      api.deployLab(value.definition, value.configure, value.skipConfigTimeChecks),
+      api.deployLab(value.name, value.definition, value.configure, value.skipConfigTimeChecks),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
       if (result.status === 'validation_failed') {
@@ -71,7 +95,7 @@ function DeployLabDialog() {
   })
 
   const form = useForm({
-    defaultValues: { definition: '', configure: false, skipConfigTimeChecks: false },
+    defaultValues: { name: '', definition: '', configure: false, skipConfigTimeChecks: false },
     validators: { onSubmit: deploySchema },
     onSubmit: async ({ value }) => {
       await deploy.mutateAsync(value)
@@ -100,11 +124,30 @@ function DeployLabDialog() {
           <DialogHeader>
             <DialogTitle>Deploy lab</DialogTitle>
             <DialogDescription>
-              Paste a netlab definition. It must name each node&apos;s device and the provider.
+              Name the lab, then paste a netlab definition. It must name each node&apos;s device and
+              the provider.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-4 py-4">
+            <form.Field name="name">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={field.name}>Name</Label>
+                  <Input
+                    id={field.name}
+                    className="font-mono text-sm"
+                    placeholder="mpls-l3vpn"
+                    autoComplete="off"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+
             <form.Field name="definition">
               {(field) => (
                 <div className="flex flex-col gap-2">
@@ -179,10 +222,57 @@ function DeployLabDialog() {
   )
 }
 
+/** Per-row delete: soft-deletes the lab (tearing it down first if it's up) and
+ * refreshes the list. Confirmed behind an alert dialog since it's destructive. */
+function DeleteLabAction({ name }: { name: string }) {
+  const queryClient = useQueryClient()
+  const del = useMutation({
+    mutationFn: () => api.deleteLab(name),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
+      toast.success(`Deleted ${name}`)
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+  })
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground hover:text-destructive size-8"
+          disabled={del.isPending}
+          title={`Delete ${name}`}
+        >
+          <Trash2 className="size-4" />
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the lab from the catalog, tearing down its running nodes first if it&apos;s
+            up. Its definition is kept server-side but it no longer appears here.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => del.mutate()}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
 export function LabsPage() {
   const { data: labs, isPending, isError, error } = useQuery(labsQueryOptions)
   const { data: me } = useQuery(meQueryOptions)
   const canCreate = me?.permissions.includes(PERM_LAB_CREATE) ?? false
+  const canDestroy = me?.permissions.includes(PERM_LAB_DESTROY) ?? false
+  // Base columns (name/status/owner/nodes/created) plus the actions column when
+  // the caller can delete — keeps the loading/empty colSpan in step.
+  const colCount = canDestroy ? 6 : 5
 
   return (
     <div className="flex flex-col gap-6">
@@ -204,20 +294,21 @@ export function LabsPage() {
               <TableHead>Owner</TableHead>
               <TableHead>Nodes</TableHead>
               <TableHead>Created</TableHead>
+              {canDestroy && <TableHead className="w-0 text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {isPending ? (
               Array.from({ length: 3 }).map((_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={5}>
+                  <TableCell colSpan={colCount}>
                     <Skeleton className="h-6 w-full" />
                   </TableCell>
                 </TableRow>
               ))
             ) : labs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground text-center">
+                <TableCell colSpan={colCount} className="text-muted-foreground text-center">
                   No labs yet.
                 </TableCell>
               </TableRow>
@@ -241,6 +332,11 @@ export function LabsPage() {
                   <TableCell className="text-muted-foreground">
                     {formatDateTime(lab.created_at)}
                   </TableCell>
+                  {canDestroy && (
+                    <TableCell className="text-right">
+                      <DeleteLabAction name={lab.name} />
+                    </TableCell>
+                  )}
                 </TableRow>
               ))
             )}

@@ -19,7 +19,7 @@ frontend (Vite/React) --/api/v1--> backend (FastAPI)
 
 | Service | What it is |
 |---------|-----------|
-| `frontend/` | Vite + React + TypeScript (pnpm), shadcn/ui + TanStack (Query/Router/Form) + zod. Login, user management, and lab management. Dev server proxies `/api/v1` to the backend. See [`frontend/README.md`](frontend/README.md). |
+| `frontend/` | Vite + React + TypeScript (pnpm), shadcn/ui + TanStack (Query/Router/Form) + zod. Login, user management, and lab management (deploy/edit/redeploy/configure/destroy, per-node power control, logs, interfaces, netem link impairment, a web console, declarative test suites, and live SSE updates). Dev server proxies `/api/v1` to the backend. See [`frontend/README.md`](frontend/README.md). |
 | `backend/` | FastAPI (uv). Runs `netlab create`, deploys the topology through the clab-api server (piped inline), and delegates config push to the netlab-runner. See [`backend/README.md`](backend/README.md). |
 | `netlab-runner/` | Config-push sidecar: `netlab initial` over Ansible's `docker` connection. netlab (MIT) + ansible-core + community.docker (GPLv3) + the docker CLI; needs the Docker socket, no host network. |
 | `clab-api` | [srl-labs/clab-api-server](https://github.com/srl-labs/clab-api-server) (Apache-2.0). Host-coupled: runs on the host network with the Docker socket + PAM databases mounted, and deploys lab nodes as sibling containers. |
@@ -62,13 +62,13 @@ curl -s -c jar.txt -X POST http://localhost:8000/api/v1/auth/login \
   -d "{\"username\":\"$BOOTSTRAP_ADMIN_USERNAME\",\"password\":\"$BOOTSTRAP_ADMIN_PASSWORD\"}"
 
 # 4. Drive the flow: netlab definition -> netlab create -> clab-api deploy.
+#    "name" is required and is the lab's stable identity (it keys every
+#    /labs/{name} route and overrides any `name:` in the definition).
 #    Add "configure": true to also push config after deploy (via the netlab-runner:
-#    `netlab initial`); the response reports per-node status. The response's
-#    lab_name is the lab's stable identity (a top-level `name:` in the definition,
-#    or a generated tl-<hex> when absent).
+#    `netlab initial`); the response reports per-node status.
 curl -s -b jar.txt http://localhost:8000/api/v1/labs \
   -H 'Content-Type: application/json' \
-  -d '{"definition":"provider: clab\ndefaults.device: vyos\nmodule: [ospf]\nnodes: [r1, r2]\nlinks: [r1-r2]\n","configure":true}'
+  -d '{"name":"demo","definition":"provider: clab\ndefaults.device: vyos\nmodule: [ospf]\nnodes: [r1, r2]\nlinks: [r1-r2]\n","configure":true}'
 docker ps --filter name=clab-                         # confirm the nodes are up
 
 # List labs (durable records merged with live node state), or inspect one:
@@ -79,6 +79,10 @@ curl -s -b jar.txt http://localhost:8000/api/v1/labs/<lab_name>
 # resupplied — the one stored at deploy is reused, so a re-push can't drift:
 curl -s -b jar.txt -X POST http://localhost:8000/api/v1/labs/<lab_name>/configure
 ```
+
+> A fuller definition than the two-node example above lives at
+> [`examples/mpls-l3vpn.yml`](examples/mpls-l3vpn.yml) — a VyOS MPLS L3VPN core
+> (4 PE + 3 P, OSPF area 0, MPLS LDP, MP-BGP VPNv4). Deploy it with any `"name"`.
 
 > Config push is delegated to netlab, so any platform netlab supports can be
 > configured; **VyOS** is what's verified end-to-end today. netlab drives Ansible
@@ -113,18 +117,23 @@ Seeded roles → permissions:
 
 | Role | Permissions |
 |------|-------------|
-| `admin` | `lab:create`, `lab:configure`, `lab:destroy`, `lab:read`, `user:manage` |
-| `operator` | `lab:create`, `lab:configure`, `lab:destroy`, `lab:read` |
+| `admin` | `lab:create`, `lab:configure`, `lab:destroy`, `lab:read`, `lab:terminal`, `lab:validate`, `user:manage` |
+| `operator` | `lab:create`, `lab:configure`, `lab:destroy`, `lab:read`, `lab:terminal`, `lab:validate` |
 | `viewer` | `lab:read` |
 
 Lab routes are guarded by permission:
 
-- `lab:read` — `GET /api/v1/labs`, `GET /api/v1/labs/{name}`, `GET
-  /api/v1/labs/{name}/nodes/{node}/logs`, `GET /api/v1/labs/{name}/interfaces`.
+- `lab:read` — `GET /api/v1/labs`, `GET /api/v1/labs/{name}`, node logs, interfaces,
+  the `GET /api/v1/events` SSE stream, netem show, and test-suite read.
 - `lab:create` — `POST /api/v1/labs` (deploy), `PUT /api/v1/labs/{name}` (edit the
-  stored definition), `POST /api/v1/labs/{name}/redeploy`.
+  stored definition), `POST /api/v1/labs/{name}/redeploy`, and test-suite authoring.
 - `lab:configure` — `POST /api/v1/labs/{name}/configure`, the node/lab
-  `start|stop|restart` actions, and `POST /api/v1/labs/{name}/save`.
+  `start|stop|restart` and `pause|unpause` actions, `POST /api/v1/labs/{name}/save`,
+  and netem set/reset. (The automatic config-time validation run rides this.)
+- `lab:validate` — running a test suite on demand (`POST
+  /api/v1/labs/{name}/test-suites/{suite}/run`).
+- `lab:terminal` — the per-node web console (`WS
+  /api/v1/labs/{name}/nodes/{node}/terminal`).
 - `lab:destroy` — `DELETE /api/v1/labs/{name}`.
 
 Editing the definition (`PUT`) is validated by a dry `netlab create` and re-pins

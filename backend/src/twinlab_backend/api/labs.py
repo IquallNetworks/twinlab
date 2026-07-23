@@ -12,7 +12,6 @@ that stored record with live node state read from clab-api. This HTTP boundary
 maps typed errors to status codes.
 """
 
-import secrets
 import uuid
 from http import HTTPStatus
 from typing import Annotated, Literal
@@ -64,7 +63,6 @@ from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
 from twinlab_backend.services.netlab import (
     create_clab_topology,
-    read_lab_name,
     read_mgmt_subnet,
     set_lab_name,
     set_mgmt_subnet,
@@ -90,12 +88,6 @@ NodeAction = Literal["start", "stop", "restart", "pause", "unpause"]
 # Lab-level freeze verbs. clab-api has no whole-lab pause, so these fan out over
 # the lab's nodes (see `_lab_freeze`); non-atomic by nature.
 FreezeAction = Literal["pause", "unpause"]
-
-
-def _generate_lab_name() -> str:
-    # Stable identity for a lab whose definition names none. Charset is clab-safe
-    # (leading alnum) and short; the token keeps concurrent labs distinct.
-    return f"tl-{secrets.token_hex(4)}"
 
 
 def _named_definition(definition: str, name: str) -> str:
@@ -401,7 +393,7 @@ async def deploy_lab(
     user: CurrentUserDep,
     settings: SettingsDep,
 ) -> DeployResponse:
-    name = read_lab_name(request.definition) or _generate_lab_name()
+    name = request.name
 
     existing = await lab_store.get_lab(db, name)
     if existing is not None and existing.status in (
@@ -650,18 +642,40 @@ async def run_test_suite(
 
 
 @router.delete("/{lab_name}", dependencies=[Depends(require(perms.LAB_DESTROY))])
-async def destroy_lab(lab_name: LabName, clab: ClabClientDep, db: SessionDep) -> DestroyResponse:
+async def destroy_lab(
+    lab_name: LabName, clab: ClabClientDep, db: SessionDep, remove: bool = False
+) -> DestroyResponse:
+    """Tear down the running lab. Default (`remove=false`) keeps the record,
+    flipping it to `destroyed` (redeployable) — and so requires the lab to be up.
+    With `remove=true` it also soft-deletes the record (hidden from the catalog,
+    row kept); tearing down is then best-effort, so a lab that isn't running is
+    fine (a `destroyed` lab can be deleted from the list)."""
     result = await clab.destroy(lab_name)
     if isinstance(result, Err):
-        # Distinguish "no such lab" from an upstream failure.
-        status = 404 if result.error.status_code == HTTPStatus.NOT_FOUND else 502
-        raise HTTPException(
-            status_code=status,
-            detail={"stage": "clab-api", "message": result.error.message},
-        )
+        not_found = result.error.status_code == HTTPStatus.NOT_FOUND
+        # A not-running lab is fatal for a plain destroy, but expected when
+        # deleting one that's already down. Any other upstream failure is a 502.
+        if not remove or not not_found:
+            raise HTTPException(
+                status_code=404 if not_found else 502,
+                detail={"stage": "clab-api", "message": result.error.message},
+            )
+        teardown_detail = "lab was not running"
+    else:
+        teardown_detail = result.value
+
+    if remove:
+        deleted = await lab_store.soft_delete(db, lab_name)
+        if isinstance(deleted, lab_store.LabStoreError):
+            # Absent or already deleted — nothing to remove from the catalog.
+            raise HTTPException(
+                status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
+            )
+        return DestroyResponse(status="deleted", detail=teardown_detail)
+
     # Retain the definition, flip status. not_found (deployed out-of-band) is fine.
     await lab_store.mark_destroyed(db, lab_name)
-    return DestroyResponse(status="destroyed", detail=result.value)
+    return DestroyResponse(status="destroyed", detail=teardown_detail)
 
 
 # --- Runtime control & observability (operate on live clab-api state, not the

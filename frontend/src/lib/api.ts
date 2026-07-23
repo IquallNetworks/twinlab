@@ -105,10 +105,11 @@ export const api = {
   getLab: (name: string) => request(`/labs/${encodeURIComponent(name)}`, labDetailSchema),
   // skipConfigTimeChecks bypasses the automatic config-time suites (only meaningful
   // alongside configure); it is off by default so convergence gating is on.
-  deployLab: (definition: string, configure: boolean, skipConfigTimeChecks = false) =>
+  deployLab: (name: string, definition: string, configure: boolean, skipConfigTimeChecks = false) =>
     request('/labs', deployResponseSchema, {
       method: 'POST',
       body: JSON.stringify({
+        name,
         definition,
         configure,
         skip_config_time_checks: skipConfigTimeChecks,
@@ -121,6 +122,13 @@ export const api = {
     }),
   destroyLab: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}`, destroyResponseSchema, { method: 'DELETE' }),
+  // Delete removes the lab from the catalog (soft-delete: the record is retained
+  // server-side but hidden). `remove=true` also tears the lab down first if it's
+  // still up, so a running or already-destroyed lab can both be deleted.
+  deleteLab: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}?remove=true`, destroyResponseSchema, {
+      method: 'DELETE',
+    }),
 
   updateLabDefinition: (name: string, definition: string) =>
     request(`/labs/${encodeURIComponent(name)}`, labDetailSchema, {

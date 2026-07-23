@@ -121,9 +121,13 @@ class TestSuitesResponse(BaseModel):
 
 
 class DeployRequest(BaseModel):
+    # The lab's stable identity, chosen by the caller and required — it keys the
+    # durable record and every `/labs/{name}` route, and is pinned into the
+    # definition so create/deploy/configure share one name. Any `name:` in the
+    # definition is overridden by this.
+    name: _Name
     # A netlab definition (YAML). It must name each node's `device` and the
-    # `provider`; Twinlab does not default them. An optional top-level `name:`
-    # sets the lab's stable identity; when absent, one is generated.
+    # `provider`; Twinlab does not default them.
     definition: str = Field(min_length=1)
     # Opt-in config push after deploy. Default False because a bare deploy (nodes
     # up but unconfigured) is a legitimate intent and configuring adds minutes;

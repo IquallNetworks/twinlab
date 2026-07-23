@@ -125,6 +125,12 @@ class Lab(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    # Soft-delete marker. NULL means active; a timestamp means the lab was deleted
+    # from the catalog (torn down and hidden from list/detail) but the row is kept
+    # — the definition is retained for audit, and the mgmt subnet stays reserved so
+    # it isn't handed to a new lab. Distinct from `destroyed` (a lifecycle status: a
+    # still-listed lab that can be redeployed).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     owner: Mapped["User | None"] = relationship(lazy="selectin")
 

@@ -119,6 +119,16 @@ export function LabDetailPage({ name }: { name: string }) {
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Destroy failed'),
   })
 
+  const del = useMutation({
+    mutationFn: () => api.deleteLab(name),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
+      toast.success(`Deleted ${name}`)
+      await navigate({ to: '/labs' })
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+  })
+
   if (isPending) {
     return (
       <div className="flex flex-col gap-6">
@@ -166,7 +176,7 @@ export function LabDetailPage({ name }: { name: string }) {
           {can(PERM_LAB_DESTROY) && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="destructive" disabled={destroy.isPending}>
+                <Button variant="outline" disabled={destroy.isPending || del.isPending}>
                   Destroy
                 </Button>
               </AlertDialogTrigger>
@@ -181,6 +191,29 @@ export function LabDetailPage({ name }: { name: string }) {
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction onClick={() => destroy.mutate()}>Destroy</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+          {can(PERM_LAB_DESTROY) && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={destroy.isPending || del.isPending}>
+                  Delete
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete {lab.name}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This removes the lab from the catalog{isDeployed ? ', tearing down its running nodes first' : ''}.
+                    Unlike Destroy, it no longer appears in the list; its definition is kept
+                    server-side but can only return by deploying a new lab.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => del.mutate()}>Delete</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>

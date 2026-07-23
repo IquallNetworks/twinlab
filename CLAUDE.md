@@ -13,8 +13,10 @@ purpose is digital-twin and network-automation testing: validating configuration
 workflows, service provisioning, and operational procedures in a safe sandbox before applying them
 to production networks.
 
-The declarative input looks like `topology.yml` at the repo root — netlab syntax (`provider`,
-`defaults.device`, `module`, `nodes`, `links`).
+The declarative input is a netlab definition — netlab syntax (`provider`, `defaults.device`,
+`module`, `nodes`, `links`). A worked example lives at `examples/mpls-l3vpn.yml` (a VyOS MPLS
+L3VPN core: OSPF + LDP + MP-BGP VPNv4). The lab's name is not taken from the definition — it is a
+required field on the deploy request (see `DeployRequest.name`).
 
 **Twinlab is fully open source.** Everything we distribute must be open source too: every
 dependency, bundled tool, and reference platform we ship or require must carry an OSI-approved
@@ -57,7 +59,9 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `netlab create` to generate a containerlab topology, then deploys it through the clab-api server
   (piped inline as `topologyContent`). Config push is delegated to the netlab-runner. A stable lab
   name is injected into the definition (`set_lab_name`) so create/deploy/configure share one
-  identity; a nameless definition gets a generated `tl-<hex>`. A distinct management `/24` is also
+  identity; the name is a **required field on the deploy request** (`DeployRequest.name`), not
+  read from the definition — any `name:` in the definition is overridden. A distinct management
+  `/24` is also
   pinned per lab (`set_mgmt_subnet` + a `_network`), allocated from `MGMT_SUBNET_POOL` and stored on
   the record so concurrent labs don't collide on netlab's default `192.168.121.0/24`; an explicit
   `addressing.mgmt.ipv4` in the definition is honored instead. A lab is a **durable record**: its

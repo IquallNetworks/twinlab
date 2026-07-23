@@ -9,6 +9,7 @@ raise — only domain outcomes are values.
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -31,12 +32,24 @@ class LabStoreError:
     detail: str = ""
 
 
-async def get_lab(session: AsyncSession, name: str) -> Lab | None:
-    return await session.scalar(select(Lab).where(Lab.name == name))
+async def get_lab(session: AsyncSession, name: str, *, include_deleted: bool = False) -> Lab | None:
+    """Fetch a lab by name. Soft-deleted rows are hidden by default so every read
+    endpoint that resolves a lab treats a deleted one as absent (404). Internal
+    machinery that must find the row regardless of state (reservation, which
+    revives a deleted name on redeploy) passes `include_deleted=True`."""
+    stmt = select(Lab).where(Lab.name == name)
+    if not include_deleted:
+        stmt = stmt.where(Lab.deleted_at.is_(None))
+    return await session.scalar(stmt)
 
 
 async def list_labs(session: AsyncSession) -> list[Lab]:
-    return list((await session.scalars(select(Lab).order_by(Lab.name))).all())
+    """The active catalog: soft-deleted labs are excluded."""
+    return list(
+        (
+            await session.scalars(select(Lab).where(Lab.deleted_at.is_(None)).order_by(Lab.name))
+        ).all()
+    )
 
 
 async def used_mgmt_subnets(session: AsyncSession) -> set[str]:
@@ -54,8 +67,10 @@ async def reserve_lab(
     concurrent deploys can't grab the same /24. Creates the row (`deploying`) or
     re-arms a previously destroyed one. `subnet_taken` when another lab already
     holds this subnet (the unique index rejects the commit); `name_taken` when the
-    name was claimed concurrently — the caller re-allocates or 409s accordingly."""
-    lab = await get_lab(session, name)
+    name was claimed concurrently — the caller re-allocates or 409s accordingly.
+    A previously soft-deleted name is revived here (the row is reused and its
+    delete marker cleared), so a deleted lab's name is free to redeploy."""
+    lab = await get_lab(session, name, include_deleted=True)
     if lab is None:
         lab = Lab(
             name=name,
@@ -70,6 +85,7 @@ async def reserve_lab(
         lab.status = STATUS_DEPLOYING
         lab.created_by = owner_id
         lab.mgmt_subnet = mgmt_subnet
+        lab.deleted_at = None  # revive a soft-deleted name on redeploy
     try:
         await session.commit()
     except IntegrityError:
@@ -106,6 +122,20 @@ async def mark_destroyed(session: AsyncSession, name: str) -> Lab | LabStoreErro
     if lab is None:
         return LabStoreError("not_found", name)
     lab.status = STATUS_DESTROYED
+    await session.commit()
+    return lab
+
+
+async def soft_delete(session: AsyncSession, name: str) -> Lab | LabStoreError:
+    """Mark a lab deleted: hidden from list/detail and inoperable, but the row is
+    kept (definition retained, mgmt subnet stays reserved). Idempotent guard —
+    `not_found` when the lab is absent or already deleted, since `get_lab` hides
+    soft-deleted rows. Redeploying the name later revives the row (see
+    `reserve_lab`)."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.deleted_at = datetime.now(UTC)
     await session.commit()
     return lab
 

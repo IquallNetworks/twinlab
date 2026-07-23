@@ -26,13 +26,12 @@
 # IOS-only layers dropped from the VyOS port. netlab's ios/iol device has no TE
 # feature, so those will need custom config, not just a module toggle.
 #
-# Test suites live on the lab record, not in this definition. IOS-flavored
-# convergence checks ship alongside in mpls-l3vpn.iol.test-suites.json, but as
-# `runtime` (not the config-time gate): Twinlab's test-suite runner execs via
-# clab-api (docker exec = the container's Linux shell), which can't reach the IOS
-# CLI on an iol node the way it reaches VyOS's in-container vtysh. Those checks
-# were hand-verified over SSH and are staged for the planned SSH/CLI (network_cli)
-# validation transport; flip them to config-time once that lands.
+# Test suites live on the lab record, not in this definition. A config-time
+# convergence gate ships alongside in mpls-l3vpn.iol.test-suites.json (IOS show
+# commands) — seed it via the deploy request's `test_suites`, or PUT it to an
+# existing lab, to gate config-done on the L3VPN converging. Validation runs via
+# the netlab-runner's `netlab exec`, which reaches the IOS CLI over SSH (the same
+# per-NOS transport that serves VyOS over docker exec).
 
 provider: clab
 defaults.device: iol

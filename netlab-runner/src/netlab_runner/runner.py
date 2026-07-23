@@ -10,7 +10,10 @@ The subprocess calls are the boundary — the one place `try`/`except` lives; ev
 outcome is returned as a typed value.
 """
 
+import hashlib
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -24,6 +27,17 @@ _CREATE_TIMEOUT_SECONDS = 120
 # Ansible push execs into every node; a few nodes settle in well under a minute,
 # but keep headroom for larger labs.
 _INITIAL_TIMEOUT_SECONDS = 600
+# One `netlab exec` (a single show command over ssh/docker) is quick; cap it so a
+# hung connection can't stall a validation poll.
+_EXEC_TIMEOUT_SECONDS = 60
+# Cached netlab inventories for validation execs, one workdir per lab name so a
+# suite's many checks don't re-run `netlab create` each time.
+_EXEC_CACHE_ROOT = Path("/tmp/netlab-exec-cache")
+# netlab/ssh connection chatter to drop from captured command output so the pure
+# matcher sees only the device's stdout.
+_EXEC_NOISE = re.compile(
+    r"^(Connecting to .*|Warning: Permanently added .*|Connection to .* closed by remote host\.)$"
+)
 
 # Ansible's PLAY RECAP is a stable, version-independent per-host summary:
 #   r1  : ok=7  changed=5  unreachable=0  failed=0  skipped=1 ...
@@ -159,3 +173,72 @@ def configure(definition: str) -> ConfigureOutcome | RunnerError:
         nodes = aggregate(parse_recap(combined))
         succeeded = initial.returncode == 0 and all(node.succeeded for node in nodes)
         return ConfigureOutcome(lab_name=name, succeeded=succeeded, nodes=nodes, output=combined)
+
+
+@dataclass(frozen=True, slots=True)
+class ExecOutcome:
+    node: str
+    stdout: str
+
+
+def _definition_name(definition: str) -> str | None:
+    """The definition's stable `name:` (injected by the backend). Keys the exec
+    inventory cache and must match the deployed lab."""
+    try:
+        parsed: Any = yaml.safe_load(definition)
+    except yaml.YAMLError:
+        return None
+    if isinstance(parsed, dict):
+        name = cast("dict[str, object]", parsed).get("name")
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def _clean_exec_output(text: str) -> str:
+    """Strip netlab/ssh connection chatter so only device stdout remains."""
+    return "\n".join(line for line in text.splitlines() if not _EXEC_NOISE.match(line.strip()))
+
+
+def _ensure_inventory(definition: str, name: str) -> Path | RunnerError:
+    """Return a workdir holding this lab's netlab inventory, regenerating it only
+    when absent or when the definition changed (hash-stamped). Cached per lab so a
+    suite's many validation execs don't each pay for `netlab create`. Callers
+    serialize this (netlab create races on ~/.netlab); see app.py."""
+    workdir = _EXEC_CACHE_ROOT / name
+    digest = hashlib.sha256(definition.encode()).hexdigest()
+    stamp = workdir / ".defhash"
+    if stamp.is_file() and stamp.read_text() == digest and (workdir / _CLAB_OUTPUT).is_file():
+        return workdir
+    shutil.rmtree(workdir, ignore_errors=True)
+    workdir.mkdir(parents=True, exist_ok=True)
+    _ = (workdir / "topology.yml").write_text(definition)
+    created = _run(["netlab", "create", "topology.yml"], workdir, _CREATE_TIMEOUT_SECONDS)
+    if isinstance(created, str):
+        return RunnerError("internal", created)
+    if created.returncode != 0:
+        return RunnerError("netlab-create", "netlab create failed", created.stderr)
+    _ = stamp.write_text(digest)
+    return workdir
+
+
+def exec_command(definition: str, node: str, command: str) -> ExecOutcome | RunnerError:
+    """Run one operational `command` on `node` via `netlab exec`, which picks the
+    per-NOS transport (docker exec for VyOS/FRR, ssh for Cisco/Nokia/…) from the
+    netlab inventory — so this stays NOS-agnostic. `definition` must carry the
+    stable `name:`. Returns the command's stdout (connection chatter stripped)."""
+    name = _definition_name(definition)
+    if name is None:
+        return RunnerError("internal", "definition has no name")
+    workdir = _ensure_inventory(definition, name)
+    if isinstance(workdir, RunnerError):
+        return workdir
+    argv = ["netlab", "exec", node, *shlex.split(command)]
+    result = _run(argv, workdir, _EXEC_TIMEOUT_SECONDS)
+    if isinstance(result, str):
+        return RunnerError("internal", result)
+    if result.returncode != 0:
+        # netlab exec couldn't reach or run on the node (e.g. node down).
+        message = (result.stderr or result.stdout or "netlab exec failed").strip()
+        return RunnerError("netlab-exec", message)
+    return ExecOutcome(node=node, stdout=_clean_exec_output(result.stdout))

@@ -20,6 +20,9 @@ from twinlab_backend.result import Err, Ok, Result
 # netlab create + Ansible push blocks until every node is configured; for several
 # nodes this runs into minutes, well past the client default.
 _CONFIGURE_TIMEOUT_SECONDS = 600.0
+# One validation exec is a single show command; keep headroom for a cold-cache
+# `netlab create` on the first check of a lab, then it is quick.
+_EXEC_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +62,11 @@ class _ConfigureResponse(BaseModel):
     nodes: list[_NodeResult]
 
 
+class _ExecResponse(BaseModel):
+    node: str
+    stdout: str
+
+
 @dataclass(frozen=True, slots=True)
 class RunnerClient:
     client: httpx.AsyncClient
@@ -94,3 +102,29 @@ class RunnerClient:
                 ),
             )
         )
+
+    async def exec_command(
+        self, definition: str, node: str, command: str
+    ) -> Result[str, RunnerError]:
+        """Run one operational command on a node via the runner's `netlab exec`
+        (per-NOS transport). `definition` carries the stable `name:` so the runner
+        can (re)build the matching inventory. Returns the command's stdout."""
+        try:
+            resp = await self.client.post(
+                f"{self.base_url}/exec",
+                json={"definition": definition, "node": node, "command": command},
+                timeout=_EXEC_TIMEOUT_SECONDS,
+            )
+        except httpx.HTTPError as exc:
+            return Err(RunnerError("transport", f"exec request failed: {exc}"))
+
+        if resp.status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
+            return Err(RunnerError("bad_definition", resp.text))
+        if resp.status_code != HTTPStatus.OK:
+            return Err(RunnerError("runner", f"exec rejected: {resp.text}"))
+
+        try:
+            parsed = _ExecResponse.model_validate_json(resp.content)
+        except ValidationError as exc:
+            return Err(RunnerError("runner", f"unexpected exec response: {exc}"))
+        return Ok(parsed.stdout)

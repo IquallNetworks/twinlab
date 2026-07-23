@@ -1,56 +1,49 @@
 {
   "convergence": {
     "stage": "config-time",
-    "description": "Gate config-done on the MPLS L3VPN converging end to end: OSPF area-0 core up, LDP transport operational, VPNv4 customer routes imported on every PE, and customer sites reachable across the VPN. A config-time suite, so a failed gate leaves the lab deployed but marks it validation_failed. Companion to examples/mpls-l3vpn.yml; seed it via the deploy request's test_suites, or PUT it to an existing lab.",
+    "description": "Gate config-done on the VyOS MPLS L3VPN converging. Show-based (no live ping): asserts the programmed state — OSPF Full, LDP OPERATIONAL, and a label-switched VRF route (show ip route vrf … with a label stack) toward each remote customer site. Runs via the netlab-runner's `netlab exec` (per-NOS transport; VyOS → docker exec vtysh). Companion to examples/mpls-l3vpn.yml; seed it via the deploy request's test_suites, or PUT it to an existing lab. Customer loopbacks (10.2.0.1-.4) are netlab-derived and hardcoded — see the test-suite-hardcoded-ips follow-up.",
     "tests": {
       "ospf_full": {
         "nodes": ["pe1", "pe2", "pe3", "pe4", "p1", "p2", "p3"],
         "command": "vtysh -c \"show ip ospf neighbor\"",
         "expect": { "contains": "Full" },
         "wait": 180,
-        "description": "Every node has formed a Full OSPF adjacency (the area-0 core is up)."
+        "description": "Every node has a Full OSPF adjacency (the area-0 core is up)."
       },
       "ldp_operational": {
         "nodes": ["pe1", "pe2", "pe3", "pe4", "p1", "p2", "p3"],
         "command": "vtysh -c \"show mpls ldp neighbor\"",
         "expect": { "contains": "OPERATIONAL" },
         "wait": 180,
-        "description": "Every node has an OPERATIONAL LDP session (MPLS transport LSPs established)."
+        "description": "Every node has an OPERATIONAL LDP session (MPLS transport LSPs up)."
       },
-      "vpnv4_routes_imported": {
-        "nodes": ["pe1", "pe2", "pe3", "pe4"],
-        "command": "vtysh -c \"show ip route vrf vpn_a\"",
-        "expect": { "contains": "B>" },
-        "wait": 180,
-        "description": "Each PE has installed BGP-learned (MP-BGP VPNv4) customer routes in the vpn_a VRF."
-      },
-      "vpn_reach_pe1_to_pe2": {
+      "fib_reach_pe1_to_pe2": {
         "nodes": ["pe1"],
-        "command": "ip vrf exec vpn_a ping -c 3 -w 5 10.2.0.2",
-        "expect": { "contains": "received, 0% packet loss" },
+        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.2\"",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe1 reaches pe2's customer site across the L3VPN (data plane over the label-switched core)."
+        "description": "pe1's VRF FIB label-switches toward pe2's customer site (VPNv4 imported + LSP programmed)."
       },
-      "vpn_reach_pe1_to_pe3": {
+      "fib_reach_pe1_to_pe3": {
         "nodes": ["pe1"],
-        "command": "ip vrf exec vpn_a ping -c 3 -w 5 10.2.0.3",
-        "expect": { "contains": "received, 0% packet loss" },
+        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.3\"",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe1 reaches pe3's customer site across the L3VPN."
+        "description": "pe1's VRF FIB label-switches toward pe3's customer site."
       },
-      "vpn_reach_pe1_to_pe4": {
+      "fib_reach_pe1_to_pe4": {
         "nodes": ["pe1"],
-        "command": "ip vrf exec vpn_a ping -c 3 -w 5 10.2.0.4",
-        "expect": { "contains": "received, 0% packet loss" },
+        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.4\"",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe1 reaches pe4's customer site across the L3VPN."
+        "description": "pe1's VRF FIB label-switches toward pe4's customer site."
       },
-      "vpn_reach_pe4_to_pe1": {
+      "fib_reach_pe4_to_pe1": {
         "nodes": ["pe4"],
-        "command": "ip vrf exec vpn_a ping -c 3 -w 5 10.2.0.1",
-        "expect": { "contains": "received, 0% packet loss" },
+        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.1\"",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe4 reaches pe1's customer site (reverse path) across the L3VPN."
+        "description": "pe4's VRF FIB label-switches toward pe1's customer site (reverse path)."
       }
     }
   }

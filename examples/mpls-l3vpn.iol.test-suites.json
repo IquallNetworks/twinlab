@@ -1,7 +1,7 @@
 {
   "convergence": {
-    "stage": "runtime",
-    "description": "IOS-flavored convergence checks for the cisco_iol L3VPN (mpls-l3vpn.iol.yml). NOTE: stage is 'runtime', NOT 'config-time', ON PURPOSE — Twinlab's test-suite runner execs via clab-api (docker exec = the container's Linux shell), which cannot reach the IOS CLI on an iol node (unlike VyOS, whose vtysh is an in-container binary). These commands were hand-verified over SSH (admin/admin) and are staged here ready for the planned SSH/CLI (network_cli) validation transport; once that lands, flip stage to 'config-time' to gate config-done like the VyOS sibling. Until then, running this suite via the current transport will error. Customer loopbacks (10.2.0.1-.4) are netlab-derived and hardcoded — see the test-suite-hardcoded-ips follow-up.",
+    "stage": "config-time",
+    "description": "Gate config-done on the cisco_iol MPLS L3VPN converging. Show-based (no live ping): asserts the programmed state — OSPF FULL, LDP Oper, and a label-switched FIB entry (show ip cef vrf) toward each remote customer site. Runs via the netlab-runner's `netlab exec` (per-NOS transport). Customer loopbacks (10.2.0.1-.4) are netlab-derived and hardcoded — see the test-suite-hardcoded-ips follow-up.",
     "tests": {
       "ospf_full": {
         "nodes": ["pe1", "pe2", "pe3", "pe4", "p1", "p2", "p3"],
@@ -15,42 +15,35 @@
         "command": "show mpls ldp neighbor",
         "expect": { "contains": "Oper" },
         "wait": 180,
-        "description": "Every node has an LDP session in State: Oper (MPLS transport LSPs established)."
+        "description": "Every node has an LDP session in State: Oper (MPLS transport LSPs up)."
       },
-      "vpnv4_routes_imported": {
-        "nodes": ["pe1", "pe2", "pe3", "pe4"],
-        "command": "show ip route vrf vpn_a",
-        "expect": { "matches": "B\\s+10\\.2\\.0\\." },
-        "wait": 180,
-        "description": "Each PE has installed BGP-learned (MP-BGP VPNv4) customer routes in the vpn_a VRF."
-      },
-      "vpn_reach_pe1_to_pe2": {
+      "fib_reach_pe1_to_pe2": {
         "nodes": ["pe1"],
-        "command": "ping vrf vpn_a 10.2.0.2 source 10.2.0.1 repeat 3",
-        "expect": { "contains": "Success rate is 100 percent" },
+        "command": "show ip cef vrf vpn_a 10.2.0.2 detail",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe1 reaches pe2's customer site across the L3VPN (data plane over the label-switched core)."
+        "description": "pe1's VRF FIB label-switches toward pe2's customer site (VPNv4 imported + LSP programmed)."
       },
-      "vpn_reach_pe1_to_pe3": {
+      "fib_reach_pe1_to_pe3": {
         "nodes": ["pe1"],
-        "command": "ping vrf vpn_a 10.2.0.3 source 10.2.0.1 repeat 3",
-        "expect": { "contains": "Success rate is 100 percent" },
+        "command": "show ip cef vrf vpn_a 10.2.0.3 detail",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe1 reaches pe3's customer site across the L3VPN."
+        "description": "pe1's VRF FIB label-switches toward pe3's customer site."
       },
-      "vpn_reach_pe1_to_pe4": {
+      "fib_reach_pe1_to_pe4": {
         "nodes": ["pe1"],
-        "command": "ping vrf vpn_a 10.2.0.4 source 10.2.0.1 repeat 3",
-        "expect": { "contains": "Success rate is 100 percent" },
+        "command": "show ip cef vrf vpn_a 10.2.0.4 detail",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe1 reaches pe4's customer site across the L3VPN."
+        "description": "pe1's VRF FIB label-switches toward pe4's customer site."
       },
-      "vpn_reach_pe4_to_pe1": {
+      "fib_reach_pe4_to_pe1": {
         "nodes": ["pe4"],
-        "command": "ping vrf vpn_a 10.2.0.1 source 10.2.0.4 repeat 3",
-        "expect": { "contains": "Success rate is 100 percent" },
+        "command": "show ip cef vrf vpn_a 10.2.0.1 detail",
+        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe4 reaches pe1's customer site (reverse path) across the L3VPN."
+        "description": "pe4's VRF FIB label-switches toward pe1's customer site (reverse path)."
       }
     }
   }

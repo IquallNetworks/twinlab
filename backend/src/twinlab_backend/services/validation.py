@@ -1,18 +1,20 @@
 """Test-suite validation runner.
 
 Twinlab's own validation — deliberately not `netlab validate` (see ROADMAP Phase
-5): a suite's tests run over clab-api `exec` and match a command's stdout with a
-small, safe primitive. Config-time suites run after a configure to gate "config
-done"; runtime suites run on demand. The matcher (`evaluate_expectation`) is a
-pure function so it is unit-tested directly; the runner reaches the lab only
-through the injected clab-api client. Errors are values; the one boundary
-`try`/`except` sits around JSON parsing of a command's output.
+5): a suite's tests run a command on a node and match its stdout with a small,
+safe primitive. Config-time suites run after a configure to gate "config done";
+runtime suites run on demand. The matcher (`evaluate_expectation`) is a pure
+function so it is unit-tested directly; the runner reaches nodes only through an
+injected `NodeExecutor`, so it stays agnostic to the CLI transport (today
+`netlab exec`, which picks per-NOS docker/ssh). Errors are values; the one
+boundary `try`/`except` sits around JSON parsing of a command's output.
 """
 
 import asyncio
 import json
 import re
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import cast
 
@@ -23,8 +25,12 @@ from twinlab_backend.models import (
     TestSuite,
     ValidationTest,
 )
-from twinlab_backend.result import Err
-from twinlab_backend.services.clab_api import ClabApiClient
+from twinlab_backend.result import Err, Result
+
+# A command transport: given (node, command), return the command's stdout, or a
+# typed error string when it couldn't run. Injected so validation is agnostic to
+# *how* a node's CLI is reached — today the netlab-runner's `netlab exec`.
+type NodeExecutor = Callable[[str, str], Awaitable[Result[str, str]]]
 
 # Poll cadence while waiting for a test to converge: short enough to notice a
 # just-formed adjacency promptly, slow enough not to hammer clab-api exec.
@@ -86,33 +92,19 @@ def _elapsed_ms(started: float) -> int:
 
 
 async def _run_check(
-    clab: ClabApiClient,
-    lab_name: str,
-    containers: dict[str, str],
-    inspect_error: str | None,
+    executor: NodeExecutor,
     test_name: str,
     test: ValidationTest,
     node: str,
 ) -> TestResult:
     """Run one test on one node, polling until it passes or its `wait` window
-    elapses. A node absent from the live lab, or an exec that never succeeds within
-    the window, is an `error` (not a `fail`): the assertion couldn't be evaluated."""
+    elapses. An exec that never succeeds within the window (e.g. the node is down)
+    is an `error` — the assertion couldn't be evaluated; a command that runs but
+    whose output doesn't match is a `fail`."""
     started = time.monotonic()
-    container = containers.get(node)
-    if container is None:
-        detail = inspect_error or f"node '{node}' is not running in the lab"
-        return TestResult(
-            test=test_name,
-            node=node,
-            status="error",
-            command=test.command,
-            output="",
-            detail=detail,
-            elapsed_ms=_elapsed_ms(started),
-        )
     deadline = started + test.wait
     while True:
-        run = await clab.exec(lab_name, container, test.command)
+        run = await executor(node, test.command)
         if isinstance(run, Err):
             if time.monotonic() < deadline:
                 await asyncio.sleep(_POLL_INTERVAL_SECONDS)
@@ -123,39 +115,29 @@ async def _run_check(
                 status="error",
                 command=test.command,
                 output="",
-                detail=f"exec failed: {run.error.message}",
+                detail=f"exec failed: {run.error}",
                 elapsed_ms=_elapsed_ms(started),
             )
-        passed, detail = evaluate_expectation(run.value.stdout, test.expect)
+        passed, detail = evaluate_expectation(run.value, test.expect)
         if passed or time.monotonic() >= deadline:
             return TestResult(
                 test=test_name,
                 node=node,
                 status="pass" if passed else "fail",
                 command=test.command,
-                output=run.value.stdout[:_MAX_OUTPUT_CHARS],
+                output=run.value[:_MAX_OUTPUT_CHARS],
                 detail=detail,
                 elapsed_ms=_elapsed_ms(started),
             )
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 
-async def run_suite(
-    clab: ClabApiClient, lab_name: str, suite_name: str, suite: TestSuite
-) -> SuiteReport:
-    """Run every (test, node) in a suite and tally the outcomes. One live inspect
-    resolves node -> container up front; if it fails, every check reports the
-    inspect error rather than silently passing."""
-    inspected = await clab.inspect(lab_name)
-    if isinstance(inspected, Err):
-        containers: dict[str, str] = {}
-        inspect_error: str | None = inspected.error.message
-    else:
-        containers = {n.node_name: n.container_name for n in inspected.value}
-        inspect_error = None
-
+async def run_suite(executor: NodeExecutor, suite_name: str, suite: TestSuite) -> SuiteReport:
+    """Run every (test, node) in a suite and tally the outcomes. The executor
+    resolves each node's transport (netlab exec), so no container/name resolution
+    is needed here; a node that's down surfaces as a per-check `error`."""
     results = [
-        await _run_check(clab, lab_name, containers, inspect_error, test_name, test, node)
+        await _run_check(executor, test_name, test, node)
         for test_name, test in suite.tests.items()
         for node in test.nodes
     ]
@@ -172,12 +154,12 @@ async def run_suite(
 
 
 async def run_config_time_suites(
-    clab: ClabApiClient, lab_name: str, suites: dict[str, TestSuite]
+    executor: NodeExecutor, suites: dict[str, TestSuite]
 ) -> list[SuiteReport]:
     """Run the `config-time` suites (in declaration order) — the automatic gate at
     the end of a configure. Runtime suites are left for on-demand runs."""
     return [
-        await run_suite(clab, lab_name, name, suite)
+        await run_suite(executor, name, suite)
         for name, suite in suites.items()
         if suite.stage == "config-time"
     ]

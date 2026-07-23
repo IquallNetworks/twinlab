@@ -1,13 +1,11 @@
 import json
-from collections.abc import Callable
 
-import httpx
 import pydantic
 import pytest
 
 from twinlab_backend.models import TestExpectation, TestSuite, ValidationTest
-from twinlab_backend.services.clab_api import ClabApiClient
-from twinlab_backend.services.validation import evaluate_expectation, run_suite
+from twinlab_backend.result import Err, Ok, Result
+from twinlab_backend.services.validation import NodeExecutor, evaluate_expectation, run_suite
 
 # --- The matcher (pure) ---
 
@@ -62,46 +60,25 @@ def test_bad_regex_is_rejected() -> None:
         _ = TestExpectation(matches="(")
 
 
-# --- The runner (over a mocked clab-api) ---
-
-_NODE = {
-    "nodeName": "r1",
-    "name": "clab-lab1-r1",
-    "image": "vyos",
-    "state": "running",
-    "ipv4_address": "10.0.0.1/24",
-}
+# --- The runner (over an injected executor) ---
 
 
-def _client(handler: Callable[[httpx.Request], httpx.Response]) -> ClabApiClient:
-    return ClabApiClient(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        base_url="http://clab.test",
-        username="u",
-        password="p",
-    )
+def _executor_ok(stdout: str) -> NodeExecutor:
+    """An executor returning fixed stdout for any (node, command)."""
+
+    async def execute(node: str, command: str) -> Result[str, str]:
+        return Ok(stdout)
+
+    return execute
 
 
-def _exec_stdout(stdout: str) -> Callable[[httpx.Request], httpx.Response]:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/login":
-            return httpx.Response(200, json={"token": "t"})
-        if request.method == "GET" and request.url.path == "/api/v1/labs/lab1":
-            return httpx.Response(200, json=[_NODE])
-        if request.method == "POST" and request.url.path == "/api/v1/labs/lab1/exec":
-            # exec keys the node by container name, not the short node name.
-            assert request.url.params.get("nodeFilter") == "clab-lab1-r1"
-            return httpx.Response(
-                200,
-                json={
-                    "clab-lab1-r1": [
-                        {"cmd": ["sh"], "return-code": 0, "stdout": stdout, "stderr": ""}
-                    ]
-                },
-            )
-        raise AssertionError(f"unexpected {request.method} {request.url.path}")
+def _executor_err(message: str) -> NodeExecutor:
+    """An executor that always fails — e.g. the node is unreachable."""
 
-    return handler
+    async def execute(node: str, command: str) -> Result[str, str]:
+        return Err(message)
+
+    return execute
 
 
 async def test_run_suite_passes_when_expectation_holds() -> None:
@@ -112,7 +89,7 @@ async def test_run_suite_passes_when_expectation_holds() -> None:
             )
         }
     )
-    report = await run_suite(_client(_exec_stdout("neighbor Full")), "lab1", "conv", suite)
+    report = await run_suite(_executor_ok("neighbor Full"), "conv", suite)
     assert report.suite == "conv"
     assert (report.passed, report.failed, report.errored) == (1, 0, 0)
     assert report.ok
@@ -127,14 +104,14 @@ async def test_run_suite_fails_when_expectation_misses() -> None:
             )
         }
     )
-    report = await run_suite(_client(_exec_stdout("neighbor Init")), "lab1", "conv", suite)
+    report = await run_suite(_executor_ok("neighbor Init"), "conv", suite)
     assert (report.passed, report.failed) == (0, 1)
     assert not report.ok
     assert report.results[0].status == "fail"
 
 
-async def test_run_suite_errors_when_node_absent() -> None:
-    # r2 isn't in the live lab (inspect returns only r1) -> error, not fail.
+async def test_run_suite_errors_when_exec_fails() -> None:
+    # The node is unreachable (executor errors) -> error, not fail.
     suite = TestSuite(
         tests={
             "adj": ValidationTest(
@@ -142,7 +119,7 @@ async def test_run_suite_errors_when_node_absent() -> None:
             )
         }
     )
-    report = await run_suite(_client(_exec_stdout("irrelevant")), "lab1", "conv", suite)
+    report = await run_suite(_executor_err("node 'r2' is down"), "conv", suite)
     assert (report.errored, report.passed, report.failed) == (1, 0, 0)
     assert report.results[0].status == "error"
     assert not report.ok

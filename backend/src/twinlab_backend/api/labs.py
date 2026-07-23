@@ -69,7 +69,7 @@ from twinlab_backend.services.netlab import (
     strip_generated_binds,
 )
 from twinlab_backend.services.runner_client import ConfigureReport, RunnerClient, RunnerError
-from twinlab_backend.services.validation import run_config_time_suites, run_suite
+from twinlab_backend.services.validation import NodeExecutor, run_config_time_suites, run_suite
 
 router = APIRouter(prefix="/labs", tags=["labs"])
 
@@ -233,8 +233,23 @@ def _test_suites_response(lab: Lab) -> TestSuitesResponse:
     )
 
 
+def _runner_executor(runner: RunnerClient, definition: str) -> NodeExecutor:
+    """Bind a lab's definition to the runner's `netlab exec` as a NodeExecutor:
+    (node, command) -> stdout. netlab picks the per-NOS transport (docker/ssh), so
+    validation stays NOS-agnostic; the definition (stable name + mgmt subnet baked
+    in) lets the runner rebuild the matching inventory."""
+
+    async def execute(node: str, command: str) -> Result[str, str]:
+        result = await runner.exec_command(definition, node, command)
+        if isinstance(result, Err):
+            return Err(result.error.message)
+        return Ok(result.value)
+
+    return execute
+
+
 async def _run_config_time(
-    clab: ClabApiClient, db: AsyncSession, lab: Lab, *, skip: bool
+    runner: RunnerClient, db: AsyncSession, lab: Lab, *, skip: bool
 ) -> tuple[str, list[SuiteReport] | None]:
     """Run the lab's config-time suites after a successful config push. Returns
     `(status, reports)`: `configured` when they pass — or are skipped, or none
@@ -244,7 +259,7 @@ async def _run_config_time(
     suites = _load_suites(lab.test_suites)
     if skip or not any(s.stage == "config-time" for s in suites.values()):
         return "configured", None
-    reports = await run_config_time_suites(clab, lab.name, suites)
+    reports = await run_config_time_suites(_runner_executor(runner, lab.definition), suites)
     ok = all(r.ok for r in reports)
     stored: dict[str, object] = {r.suite: r.model_dump(mode="json") for r in reports}
     _ = await lab_store.record_validation(
@@ -358,7 +373,6 @@ async def _finish_deploy(
     deployed: DeployedLab,
     definition: str,
     runner: RunnerClient,
-    clab: ClabApiClient,
     db: AsyncSession,
     lab: Lab,
     *,
@@ -379,7 +393,7 @@ async def _finish_deploy(
     configuration = _to_models(report)
     if not report.succeeded:
         raise _config_failed(report.lab_name, configuration)
-    status, validation = await _run_config_time(clab, db, lab, skip=skip_config_time)
+    status, validation = await _run_config_time(runner, db, lab, skip=skip_config_time)
     return DeployResponse(
         status=status,
         lab_name=deployed.name,
@@ -443,7 +457,6 @@ async def deploy_lab(
         deployed.value,
         definition,
         runner,
-        clab,
         db,
         lab,
         configure=request.configure,
@@ -520,7 +533,6 @@ async def redeploy_lab(
         deployed.value,
         lab.definition,
         runner,
-        clab,
         db,
         lab,
         configure=request.configure,
@@ -551,7 +563,6 @@ async def get_lab(lab_name: LabName, clab: ClabClientDep, db: SessionDep) -> Lab
 @router.post("/{lab_name}/configure", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
 async def configure_nodes(
     lab_name: LabName,
-    clab: ClabClientDep,
     runner: RunnerClientDep,
     db: SessionDep,
     request: ConfigureRequest | None = None,
@@ -575,7 +586,7 @@ async def configure_nodes(
     if not report.succeeded:
         raise _config_failed(lab_name, configuration)
     skip = request.skip_config_time_checks if request is not None else False
-    status, validation = await _run_config_time(clab, db, lab, skip=skip)
+    status, validation = await _run_config_time(runner, db, lab, skip=skip)
     return ConfigureResponse(
         status=status, lab_name=lab_name, configuration=configuration, validation=validation
     )
@@ -619,7 +630,7 @@ async def put_test_suites(
     dependencies=[Depends(require(perms.LAB_VALIDATE))],
 )
 async def run_test_suite(
-    lab_name: LabName, suite: SuiteName, clab: ClabClientDep, db: SessionDep
+    lab_name: LabName, suite: SuiteName, runner: RunnerClientDep, db: SessionDep
 ) -> SuiteReport:
     # Run one suite on demand — any stage; a config-time suite can be re-run here
     # too. The result is persisted (updating just this suite's last run) but the
@@ -635,7 +646,7 @@ async def run_test_suite(
             status_code=404,
             detail={"stage": "labs", "message": f"lab '{lab_name}' has no suite '{suite}'"},
         )
-    report = await run_suite(clab, lab_name, suite, target)
+    report = await run_suite(_runner_executor(runner, lab.definition), suite, target)
     _ = await lab_store.record_validation(
         db,
         lab_name,

@@ -66,6 +66,7 @@ from twinlab_backend.services.netlab import (
     read_mgmt_subnet,
     set_lab_name,
     set_mgmt_subnet,
+    strip_generated_binds,
 )
 from twinlab_backend.services.runner_client import ConfigureReport, RunnerClient, RunnerError
 from twinlab_backend.services.validation import run_config_time_suites, run_suite
@@ -343,7 +344,11 @@ async def _run_deploy(
     topology = await run_in_threadpool(create_clab_topology, definition)
     if isinstance(topology, Err):
         return Err(_netlab_failed(topology.error.message, topology.error.stderr))
-    deployed = await clab.deploy(topology.value, reconfigure=reconfigure)
+    # We deploy inline (topologyContent) and ship no files, so drop binds netlab
+    # points at its generated node_files/* (e.g. cisco_iol's ifstate) — the clab
+    # kind regenerates them, and clab-api would otherwise reject the bind path.
+    shippable = strip_generated_binds(topology.value)
+    deployed = await clab.deploy(shippable, reconfigure=reconfigure)
     if isinstance(deployed, Err):
         return Err(_deploy_failed(deployed.error.message))
     return Ok(deployed.value)

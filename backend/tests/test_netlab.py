@@ -5,6 +5,7 @@ from twinlab_backend.services.netlab import (
     read_mgmt_subnet,
     set_lab_name,
     set_mgmt_subnet,
+    strip_generated_binds,
 )
 
 # device and provider are stated explicitly — Twinlab never defaults them.
@@ -76,3 +77,50 @@ def test_set_mgmt_subnet_preserves_explicit_network() -> None:
 
 def test_set_mgmt_subnet_rejects_non_mapping_addressing() -> None:
     assert isinstance(set_mgmt_subnet("addressing: not-a-map\n", "10.0.0.0/24", "n"), Err)
+
+
+def test_strip_generated_binds_drops_node_files_binds() -> None:
+    # A cisco_iol-style topology: pe1 binds only its generated ifstate; p1 also
+    # has a genuine host bind (which must survive); r1 has none.
+    topology: dict[str, object] = {
+        "name": "lab",
+        "topology": {
+            "nodes": {
+                "pe1": {"kind": "cisco_iol", "binds": ["node_files/pe1/ifstate:/iol/ifstate.cfg"]},
+                "p1": {
+                    "kind": "cisco_iol",
+                    "binds": ["node_files/p1/ifstate:/iol/ifstate.cfg", "/etc/hosts:/etc/hosts:ro"],
+                },
+                "r1": {"kind": "vyos"},
+            }
+        },
+    }
+    expected: dict[str, object] = {
+        "name": "lab",
+        "topology": {
+            "nodes": {
+                # pe1's only bind was generated -> the key is dropped entirely.
+                "pe1": {"kind": "cisco_iol"},
+                # p1 keeps the genuine host bind, loses the generated one.
+                "p1": {"kind": "cisco_iol", "binds": ["/etc/hosts:/etc/hosts:ro"]},
+                "r1": {"kind": "vyos"},
+            }
+        },
+    }
+    assert strip_generated_binds(topology) == expected
+    # The input is not mutated (pe1 still carries its original bind).
+    assert topology["topology"] == {
+        "nodes": {
+            "pe1": {"kind": "cisco_iol", "binds": ["node_files/pe1/ifstate:/iol/ifstate.cfg"]},
+            "p1": {
+                "kind": "cisco_iol",
+                "binds": ["node_files/p1/ifstate:/iol/ifstate.cfg", "/etc/hosts:/etc/hosts:ro"],
+            },
+            "r1": {"kind": "vyos"},
+        }
+    }
+
+
+def test_strip_generated_binds_tolerates_missing_sections() -> None:
+    # No topology/nodes sections -> returned unchanged, no error.
+    assert strip_generated_binds({"name": "lab"}) == {"name": "lab"}

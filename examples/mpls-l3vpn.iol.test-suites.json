@@ -1,0 +1,57 @@
+{
+  "convergence": {
+    "stage": "runtime",
+    "description": "IOS-flavored convergence checks for the cisco_iol L3VPN (mpls-l3vpn.iol.yml). NOTE: stage is 'runtime', NOT 'config-time', ON PURPOSE — Twinlab's test-suite runner execs via clab-api (docker exec = the container's Linux shell), which cannot reach the IOS CLI on an iol node (unlike VyOS, whose vtysh is an in-container binary). These commands were hand-verified over SSH (admin/admin) and are staged here ready for the planned SSH/CLI (network_cli) validation transport; once that lands, flip stage to 'config-time' to gate config-done like the VyOS sibling. Until then, running this suite via the current transport will error. Customer loopbacks (10.2.0.1-.4) are netlab-derived and hardcoded — see the test-suite-hardcoded-ips follow-up.",
+    "tests": {
+      "ospf_full": {
+        "nodes": ["pe1", "pe2", "pe3", "pe4", "p1", "p2", "p3"],
+        "command": "show ip ospf neighbor",
+        "expect": { "contains": "FULL" },
+        "wait": 180,
+        "description": "Every node has a FULL OSPF adjacency (the area-0 core is up)."
+      },
+      "ldp_operational": {
+        "nodes": ["pe1", "pe2", "pe3", "pe4", "p1", "p2", "p3"],
+        "command": "show mpls ldp neighbor",
+        "expect": { "contains": "Oper" },
+        "wait": 180,
+        "description": "Every node has an LDP session in State: Oper (MPLS transport LSPs established)."
+      },
+      "vpnv4_routes_imported": {
+        "nodes": ["pe1", "pe2", "pe3", "pe4"],
+        "command": "show ip route vrf vpn_a",
+        "expect": { "matches": "B\\s+10\\.2\\.0\\." },
+        "wait": 180,
+        "description": "Each PE has installed BGP-learned (MP-BGP VPNv4) customer routes in the vpn_a VRF."
+      },
+      "vpn_reach_pe1_to_pe2": {
+        "nodes": ["pe1"],
+        "command": "ping vrf vpn_a 10.2.0.2 source 10.2.0.1 repeat 3",
+        "expect": { "contains": "Success rate is 100 percent" },
+        "wait": 120,
+        "description": "pe1 reaches pe2's customer site across the L3VPN (data plane over the label-switched core)."
+      },
+      "vpn_reach_pe1_to_pe3": {
+        "nodes": ["pe1"],
+        "command": "ping vrf vpn_a 10.2.0.3 source 10.2.0.1 repeat 3",
+        "expect": { "contains": "Success rate is 100 percent" },
+        "wait": 120,
+        "description": "pe1 reaches pe3's customer site across the L3VPN."
+      },
+      "vpn_reach_pe1_to_pe4": {
+        "nodes": ["pe1"],
+        "command": "ping vrf vpn_a 10.2.0.4 source 10.2.0.1 repeat 3",
+        "expect": { "contains": "Success rate is 100 percent" },
+        "wait": 120,
+        "description": "pe1 reaches pe4's customer site across the L3VPN."
+      },
+      "vpn_reach_pe4_to_pe1": {
+        "nodes": ["pe4"],
+        "command": "ping vrf vpn_a 10.2.0.1 source 10.2.0.4 repeat 3",
+        "expect": { "contains": "Success rate is 100 percent" },
+        "wait": 120,
+        "description": "pe4 reaches pe1's customer site (reverse path) across the L3VPN."
+      }
+    }
+  }
+}

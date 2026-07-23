@@ -12,6 +12,7 @@ that name into the definition before generating, so create/deploy/configure all
 share it.
 """
 
+import copy
 import os
 import subprocess
 import tempfile
@@ -27,6 +28,11 @@ from twinlab_backend.result import Err, Ok, Result
 # clab-api server wants it as a JSON object, so we hand back parsed data rather
 # than raw YAML.
 type ClabTopology = dict[str, object]
+
+# netlab writes per-node bind sources under this relative dir (e.g.
+# `node_files/pe1/ifstate` for cisco_iol). Twinlab deploys the topology inline
+# and ships no working-directory files, so binds pointing here can't be honored.
+_GENERATED_BIND_PREFIX = "node_files/"
 
 # `netlab create` writes the containerlab topology under this fixed name in its
 # working directory (the clab provider's default output file).
@@ -156,3 +162,39 @@ def create_clab_topology(definition: str) -> Result[ClabTopology, NetlabError]:
     if not isinstance(parsed, dict):
         return Err(NetlabError(f"{_CLAB_OUTPUT} was not a mapping", proc.stderr))
     return Ok(cast("ClabTopology", parsed))
+
+
+def strip_generated_binds(topology: ClabTopology) -> ClabTopology:
+    """Drop per-node binds whose source is a netlab-generated `node_files/*` path.
+
+    Twinlab deploys the topology inline (clab-api `topologyContent`) and ships no
+    working-directory files, so such a bind can't be satisfied on the clab-api
+    host — clab-api rejects the deploy with "failed to verify bind path". The
+    containerlab kind regenerates what it needs from the topology itself (e.g.
+    cisco_iol's `ifstate`), so dropping these binds is safe. A node left with no
+    binds loses the now-empty `binds` key. Returns a new topology; the input is
+    not mutated."""
+    result = copy.deepcopy(topology)
+    inner = result.get("topology")
+    if not isinstance(inner, dict):
+        return result
+    nodes = cast("dict[str, object]", inner).get("nodes")
+    if not isinstance(nodes, dict):
+        return result
+    for node in cast("dict[str, object]", nodes).values():
+        if not isinstance(node, dict):
+            continue
+        node_map = cast("dict[str, object]", node)
+        binds = node_map.get("binds")
+        if not isinstance(binds, list):
+            continue
+        kept = [
+            bind
+            for bind in cast("list[object]", binds)
+            if not (isinstance(bind, str) and bind.startswith(_GENERATED_BIND_PREFIX))
+        ]
+        if kept:
+            node_map["binds"] = kept
+        else:
+            del node_map["binds"]
+    return result

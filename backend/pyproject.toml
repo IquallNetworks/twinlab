@@ -1,0 +1,50 @@
+[project]
+name = "twinlab-backend"
+version = "0.1.0"
+description = "Twinlab backend: generates containerlab topologies with netlab and drives the containerlab API server."
+readme = "README.md"
+authors = [
+    { name = "Galileo Cappella", email = "galileocapp@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.18.5",
+    "asyncpg>=0.31.0",
+    "fastapi>=0.139.2",
+    "httpx>=0.28.1",
+    "networklab>=26.7",
+    "pwdlib[argon2]>=0.3.0",
+    "pyyaml>=6.0.3",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "uvicorn[standard]>=0.51.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.6,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.9",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.22",
+    "types-pyyaml>=6.0.12.20260518",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

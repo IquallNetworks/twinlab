@@ -1,0 +1,150 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this
+repository.
+
+## What Twinlab Is
+
+Twinlab generates reproducible simulated network topologies from a declarative definition. It is a
+layer on top of [Containerlab](https://containerlab.dev/) — driven through
+[netlab](https://netlab.tools/) — that lets engineers describe network nodes, links, services, and
+test scenarios declaratively, then deploys reproducible lab environments from that definition. Its
+purpose is digital-twin and network-automation testing: validating configurations, orchestration
+workflows, service provisioning, and operational procedures in a safe sandbox before applying them
+to production networks.
+
+The declarative input looks like `topology.yml` at the repo root — netlab syntax (`provider`,
+`defaults.device`, `module`, `nodes`, `links`).
+
+**Twinlab is fully open source.** Everything we distribute must be open source too: every
+dependency, bundled tool, and reference platform we ship or require must carry an OSI-approved
+license compatible with Twinlab's own (Apache 2.0). Before adding a dependency or leaning on an
+external tool, confirm its license clears this bar — a non-open-source or incompatibly-licensed
+component is a blocker to raise, not a choice to make quietly.
+
+## Current State
+
+The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of five services:
+
+- **`frontend/`** — Vite + React + TypeScript (pnpm). Its dev server proxies `/api/v1` to the
+  backend (`VITE_PROXY_TARGET`, default `http://localhost:8000`). UI stack: **shadcn/ui** (radix
+  base) on Tailwind v4, the **TanStack** family (Query for data, Router in code-based mode for
+  routing, Form for forms) and **zod** for validation. It covers the current backend scope —
+  cookie-session **login**, **user management** (`/users`: list, create, edit roles), and **lab
+  management** (`/labs` list + deploy dialog, `/labs/$name` detail: a control panel with
+  edit-definition/redeploy/configure/destroy, whole-lab and per-node start/stop/restart, save-config,
+  per-node logs, and a live interface inventory — controls in focused `components/lab/*` components).
+  Auth gate: a pathless layout route resolves `GET /auth/me` in `beforeLoad` and redirects to `/login`
+  on 401; action buttons are gated on the caller's permissions. API access goes through a typed,
+  zod-parsed fetch client (`src/lib/api.ts`). Gates: `pnpm typecheck` + `pnpm build`.
+- **`backend/`** — FastAPI (uv). Turns a declarative netlab definition into a running lab: runs
+  `netlab create` to generate a containerlab topology, then deploys it through the clab-api server
+  (piped inline as `topologyContent`). Config push is delegated to the netlab-runner. A stable lab
+  name is injected into the definition (`set_lab_name`) so create/deploy/configure share one
+  identity; a nameless definition gets a generated `tl-<hex>`. A lab is a **durable record**: its
+  definition is persisted on deploy (a `labs` table) and *reused* on configure — the caller never
+  resupplies it — and the record survives destroy (status flips to `destroyed`, definition retained).
+  Config is env-sourced through a typed `load_settings(env) -> Result` loader (not pydantic-settings).
+  Endpoints under `/api/v1`: `health`, `health/ready`, `auth/*`, `users/*`, `POST /labs` (opt-in
+  `configure` flag), `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort live
+  node state from clab-api), `PUT /labs/{name}` (replace the stored definition — validated by a dry
+  `netlab create`, name re-pinned so an edit can't rename the lab; applied only on the next
+  (re)deploy), `POST /labs/{name}/redeploy` (rebuild from the stored definition via clab deploy
+  `reconfigure=true`, opt-in `configure`), `POST /labs/{name}/configure` (no body — reuses the stored
+  definition), `DELETE /labs/{name}`. **Runtime control/observability** over live clab-api state (not
+  the definition): `POST /labs/{name}/nodes/{node}/{start|stop|restart|pause|unpause}` and
+  `POST /labs/{name}/{start|stop|restart}` (power control), `POST /labs/{name}/{pause|unpause}`
+  (whole-lab freeze — clab-api has no lab-level pause, so this fans out over the nodes, non-atomic),
+  `POST /labs/{name}/save` (persist running config), `GET /labs/{name}/nodes/{node}/logs` (container
+  logs, `?tail=`), `GET /labs/{name}/interfaces` (per-node interface inventory). Node state carries
+  the management IP (`mgmt_ip`, from clab's `ipv4_address`) for a copy-paste `ssh` command. DB-backed auth + RBAC guard them (opaque
+  session cookies; `lab:read` for reads/logs/interfaces, `lab:create` for deploy/edit/redeploy,
+  `lab:configure` for configure/power-control/save, `lab:destroy`, `user:manage`). The clab-api
+  client (`services/clab_api.py`) routes every authenticated call through one `_authed` helper.
+  Errors-as-values throughout; `try`/`except` only at the subprocess/httpx/pydantic boundaries.
+- **`netlab-runner/`** — FastAPI (uv) config-push sidecar. `POST /configure {definition}` runs
+  `netlab create` (regenerate the inventory) then `netlab initial`, which drives Ansible over the
+  `docker` connection (exec into `clab-<lab>-<node>` by name via the mounted Docker socket — no host
+  network, no SSH). Returns structured per-node results (parsed from Ansible's PLAY RECAP). netlab
+  (MIT) is aggregated with ansible-core + community.docker (GPLv3) as separate processes.
+- **`clab-api`** — the containerlab API server (`srl-labs/clab-api-server`, Apache-2.0), host-coupled
+  (host network + PID, Docker socket and PAM databases mounted); it deploys lab nodes as sibling
+  containers on the host daemon and authenticates a host user in the `clab_api` group.
+- **`postgres`** — backs the RBAC store (users, roles, permissions, sessions) and the durable lab
+  records (`labs`: definition + status + owner) via SQLAlchemy async + Alembic; migrations run in the
+  backend entrypoint.
+
+Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner quality gates: `ruff format` + `ruff
+check`, basedpyright (strict), pytest.
+
+**End-to-end deploy + config push is proven:** `POST /api/v1/labs` with `configure: true` → 201 with
+two vyos nodes deployed *and* configured (OSPF adjacency reaches Full) via clab-api deploy + the
+netlab-runner; `POST /labs/{name}/configure` re-pushes to a running lab. Needs a host user in the
+`clab_api` group, node images pulled, and clab-api running. Config push works for any platform netlab
+supports; **VyOS** is verified today. Keep this section current as the project evolves.
+
+A previous, complete iteration lives in the sibling directory **`../bak.0`** (a four-layer Python
+package with an HTTP backend / CLI client / privileged lab-runner split, plus a full `docs/` design
+set and ADRs). Treat it as **reference / prior art**, not as a spec to reproduce: consult it for how
+a problem was solved before, but only carry something over when it's asked for or clearly still
+applies. The new structure is decided here, in this tree.
+
+## Domain facts that must hold (they cost real debugging to relearn)
+
+- **netlab generates and configures, but does not deploy.** Use `netlab create` to generate the
+  Containerlab topology (deploy is clab-api's job, separately), and `netlab initial` to push device
+  config (in the netlab-runner, over Ansible's `docker` connection). **Never `netlab up`** — it
+  `sudo`s and couples deploy + config in one opaque step, breaking the reproducibility seam and the
+  clab-api deploy boundary. (History: config push was briefly hand-rolled per-device — VyOS
+  ConfigSession over the clab-api exec channel — then replaced by netlab because hand-rolling doesn't
+  scale across OSes and can't honor netlab's best-effort lines; `netlab initial` itself is
+  deterministic, so it does *not* break reproducibility the way `netlab up` does.)
+- **Declarative and reproducible is the whole point.** The definition is the sole source of truth
+  for a lab; the same definition must always produce the same environment.
+- **A node's `device` is intentful, not universal.** Don't quietly default it (e.g. to `vyos`) —
+  the definition must state it.
+
+## Working conventions
+
+These are the developer's standing preferences; they carry across sessions regardless of how the
+code is structured.
+
+### Version control
+- **Commit proactively in small, logical units** — each a self-contained change whose message says
+  *what* and *why*. Err toward more commits, not fewer (we squash before merging).
+- **Never push** and never `--no-verify` unless explicitly asked. Pushing/merging is the
+  maintainer's call.
+- **No authorship trailers** — do not add `Co-Authored-By`, `Generated with`, or any attribution to
+  commit messages or PR bodies. Keep messages to the change itself.
+
+### Code quality (once the toolchain is scaffolded)
+- Expect a strict Python setup managed with **`uv`**: `ruff format` + `ruff check` (strict),
+  **basedpyright** in strict mode (warnings are errors), and **pytest**. "Done" means all gates are
+  green.
+- **Suppressions and weakened checks require approval.** Don't add `# type: ignore`, `# noqa`,
+  per-file ignores, rule exclusions, or severity downgrades without surfacing *what*, *where*, and
+  *why it's unavoidable* first. Once approved, scope it as narrowly as possible.
+- **Ask before adding a dependency.** Don't reimplement what a maintained library does well, but get
+  approval, then add with `uv add <name>` and let uv resolve the version — never hand-pin. Confirm
+  the license is open source and Apache-2.0-compatible before proposing it (see above).
+
+### Style
+- **Errors as values, not exceptions.** Prefer returning a typed result (success-or-typed-error)
+  over raising. `try`/`except` belongs only in thin boundary adapters that translate an unavoidable
+  third-party exception (Pydantic, `subprocess`, file I/O) into a typed result — never as control
+  flow in our own code.
+- **Be spare with defaults and fallbacks.** A default is legitimate only when *every* caller is okay
+  with it; otherwise make the field required. Document every surviving default with *why this value*
+  next to it. Apply the same scrutiny to `x or <fallback>` / `.get(k, <fallback>)` — a fallback that
+  papers over a missing value is a bug hiding place; surface it as a typed error instead.
+- **Typing carries intent; docstrings are sparing.** Comment to explain what the code can't say —
+  *why this value*, a non-obvious invariant, a domain fact — not to restate a type or narrate a
+  change. Pass dependencies explicitly; keep side effects at the edges; keep modules small.
+
+### Testing
+- **Surface every failure** — flag a failing test (even a seemingly unrelated one) with a one-line
+  description and a proposed next step. Never fix it silently, skip it, or delete it to reach green.
+- **Don't inline-pipe test output to `grep`/`head`/`tail`** — write the full output to a temp file,
+  then search it. Truncated output hides the failures that matter.
+- **Never pass `-x`/`--exitfirst`** to pytest — let the suite run to completion so every failure is
+  visible at once.

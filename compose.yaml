@@ -1,0 +1,152 @@
+# Twinlab local stack.
+#
+# Topology:
+#   frontend (Vite dev server) --/api/v1--> backend (FastAPI)
+#   backend --netlab create--> clab.yml --deploy--> clab-api (containerlab)
+#   backend --configure--> netlab-runner --netlab initial (ansible/docker)--> nodes
+#   backend --> postgres (empty for now)
+#
+# The clab-api server is host-coupled by design (see its comment): it runs on the
+# host network with the Docker socket and PAM databases mounted, and deploys lab
+# nodes as sibling containers on the host daemon. The netlab-runner is similarly
+# socket-coupled: it pushes config with `netlab initial`, which drives Ansible
+# over the docker connection (exec into nodes via the mounted socket). The
+# application services run on the default bridge network and reach it via the
+# host gateway.
+
+name: twinlab
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # clab-api runs on the host network; reach it through the host gateway.
+      CLAB_API_URL: http://host.docker.internal:8090
+      CLAB_API_USERNAME: ${CLAB_API_USERNAME}
+      CLAB_API_PASSWORD: ${CLAB_API_PASSWORD}
+      # Config-push sidecar (netlab initial), on the compose network.
+      NETLAB_RUNNER_URL: http://netlab-runner:8000
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD}
+      # Local dev is HTTP, so the session cookie can't be Secure-only. Set true
+      # (the default) behind HTTPS in any real deployment.
+      SESSION_COOKIE_SECURE: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      netlab-runner:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
+      # Vite listens on FRONTEND_PORT inside the container; host:container are the
+      # same port so the mapping holds whatever the value. DEPLOYMENT_URL's host
+      # is allow-listed by the dev server (see frontend/vite.config.ts).
+      FRONTEND_PORT: ${FRONTEND_PORT:-5173}
+      DEPLOYMENT_URL: ${DEPLOYMENT_URL:-http://localhost:5173}
+    ports:
+      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
+    # Bind-mount source for HMR; keep the image's installed node_modules.
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Config-push runner: netlab + ansible-core + community.docker + the docker
+  # CLI. `netlab initial` drives Ansible over the docker connection, exec-ing
+  # into the lab nodes (deployed by clab-api on the host daemon) by container
+  # name — so it needs the Docker socket, but no host network or SSH. netlab
+  # (MIT) is aggregated with ansible-core / community.docker (GPLv3) as separate
+  # processes in this sidecar; the Apache-2.0 backend never links them.
+  netlab-runner:
+    build: ./netlab-runner
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # netlab create validates the vyos /lib/modules bind path in this fs.
+      - /lib/modules:/lib/modules:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Containerlab API server (github.com/srl-labs/clab-api-server, Apache-2.0).
+  # It authenticates a host (PAM) user in the clab_api group and runs
+  # containerlab against the host Docker daemon, so it needs host networking,
+  # host PID, the Docker socket, and the passwd/shadow/group databases. Prereqs
+  # on the host: a user in the `clab_api` group and the node images pulled.
+  clab-api:
+    image: ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.5.0
+    network_mode: host
+    pid: host
+    privileged: true
+    environment:
+      API_PORT: "8090"
+      JWT_SECRET: ${CLAB_API_JWT_SECRET}
+      API_USER_GROUP: clab_api
+      SUPERUSER_GROUP: clab_admins
+      # Local dev over plain HTTP; the backend talks to it in-host. Enable TLS
+      # (and switch CLAB_API_URL to https) for any non-local deployment.
+      TLS_ENABLE: "false"
+      LOG_LEVEL: info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/netns:/var/run/netns
+      - /var/lib/docker/containers:/var/lib/docker/containers
+      # containerlab pre-flight-stats bind sources in THIS container's fs; the
+      # actual mount happens on the host daemon. vyos nodes bind /lib/modules,
+      # so it must exist here (same path) as well as on the host.
+      - /lib/modules:/lib/modules:ro
+      - /etc/passwd:/etc/passwd:ro
+      - /etc/shadow:/etc/shadow:ro
+      - /etc/group:/etc/group:ro
+      - /etc/gshadow:/etc/gshadow:ro
+      - /home:/home
+    restart: unless-stopped
+
+volumes:
+  pgdata:

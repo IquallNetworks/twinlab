@@ -1,0 +1,47 @@
+[project]
+name = "netlab-runner"
+version = "0.1.0"
+description = "Twinlab config-push runner: netlab initial over the docker connection"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    # netlab (generator + config push) and ansible (its push engine). netlab
+    # shells out to the `ansible-playbook` on PATH; keeping both in one venv also
+    # silences netlab's "cannot import ansible" version-probe wart.
+    "networklab",
+    "ansible-core",
+    "pyyaml",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "basedpyright",
+    "pytest",
+    "pytest-asyncio",
+    "types-pyyaml",
+]
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "netlab_runner"
+module-root = "src"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

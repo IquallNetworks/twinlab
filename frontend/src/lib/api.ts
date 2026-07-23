@@ -12,6 +12,7 @@ import {
   nodeNetemSchema,
   saveConfigResponseSchema,
   suiteReportSchema,
+  customConfigResponseSchema,
   testSuitesResponseSchema,
   userInfoSchema,
   userListSchema,
@@ -202,4 +203,15 @@ export const api = {
       suiteReportSchema,
       { method: 'POST' },
     ),
+
+  // Custom-config templates. Read (lab:read) returns the shipped built-in library
+  // plus the lab's user templates; author (lab:create) replaces the user fileset.
+  // `customConfig` is a { relpath: source } map, validated server-side.
+  getCustomConfig: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}/custom-config`, customConfigResponseSchema),
+  putCustomConfig: (name: string, customConfig: unknown) =>
+    request(`/labs/${encodeURIComponent(name)}/custom-config`, customConfigResponseSchema, {
+      method: 'PUT',
+      body: JSON.stringify({ custom_config: customConfig }),
+    }),
 }

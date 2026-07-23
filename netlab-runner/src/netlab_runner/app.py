@@ -29,6 +29,11 @@ class ConfigureRequest(BaseModel):
     # A netlab definition (YAML) carrying a stable `name:` so the regenerated
     # inventory targets the deployed containers.
     definition: str = Field(min_length=1)
+    # Custom-config templates keyed by relative path (e.g. `mpls_te/ios.j2`),
+    # written into the workdir so `netlab initial` can render whichever the
+    # definition's `config:` attribute references. Default empty: most labs use
+    # no custom config. The backend owns the fileset (built-in + user templates).
+    templates: dict[str, str] = Field(default_factory=dict)
 
 
 class NodeResultModel(BaseModel):
@@ -56,6 +61,10 @@ class ExecRequest(BaseModel):
     definition: str = Field(min_length=1)
     node: str = Field(min_length=1)
     command: str = Field(min_length=1)
+    # Custom-config templates the definition may reference — needed because the
+    # exec inventory is built with `netlab create`, which validates that every
+    # `config:` template exists. Empty for a definition with no custom config.
+    templates: dict[str, str] = Field(default_factory=dict)
 
 
 class ExecResponse(BaseModel):
@@ -69,7 +78,7 @@ async def exec_endpoint(request: ExecRequest) -> ExecResponse:
     # it (a cache-miss runs `netlab create`, which races on ~/.netlab).
     async with _netlab_lock:
         outcome = await run_in_threadpool(
-            exec_command, request.definition, request.node, request.command
+            exec_command, request.definition, request.node, request.command, request.templates
         )
     if isinstance(outcome, ExecOutcome):
         return ExecResponse(node=outcome.node, stdout=outcome.stdout)
@@ -89,7 +98,7 @@ async def configure_endpoint(request: ConfigureRequest) -> ConfigureResponse:
     # netlab create + initial is blocking subprocess work; keep it off the loop.
     # Serialized so concurrent pushes don't race on netlab's shared ~/.netlab.
     async with _netlab_lock:
-        outcome = await run_in_threadpool(configure, request.definition)
+        outcome = await run_in_threadpool(configure, request.definition, request.templates)
     if isinstance(outcome, ConfigureOutcome):
         return ConfigureResponse(
             lab_name=outcome.lab_name,

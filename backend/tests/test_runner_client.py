@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 
 import httpx
@@ -28,10 +29,22 @@ async def test_configure_parses_per_node_results() -> None:
             },
         )
 
-    result = await _client(handler).configure("name: tl-1\nnodes: [r1, r2]\n")
+    result = await _client(handler).configure("name: tl-1\nnodes: [r1, r2]\n", {})
     assert isinstance(result, Ok), result
     assert result.value.succeeded
     assert result.value.nodes[0].status == "configured"
+
+
+async def test_configure_sends_template_fileset() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"lab_name": "tl-1", "succeeded": True, "nodes": []})
+
+    templates = {"mpls_te/ios.j2": "conf", "nat.j2": "user"}
+    _ = await _client(handler).configure("name: tl-1\n", templates)
+    assert seen["templates"] == templates
 
 
 async def test_configure_marks_failed_node() -> None:
@@ -45,7 +58,7 @@ async def test_configure_marks_failed_node() -> None:
             },
         )
 
-    result = await _client(handler).configure("name: tl-1\n")
+    result = await _client(handler).configure("name: tl-1\n", {})
     assert isinstance(result, Ok), result
     assert not result.value.succeeded
     assert result.value.nodes[0].status == "failed"
@@ -55,6 +68,6 @@ async def test_configure_maps_bad_definition_to_typed_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(422, json={"detail": "netlab create failed"})
 
-    result = await _client(handler).configure("nonsense")
+    result = await _client(handler).configure("nonsense", {})
     assert isinstance(result, Err)
     assert result.error.reason == "bad_definition"

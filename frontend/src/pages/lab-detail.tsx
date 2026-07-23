@@ -3,6 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronLeft, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { CustomConfig } from '@/components/lab/custom-config'
 import { EditDefinitionDialog } from '@/components/lab/edit-definition-dialog'
 import { LabInterfaces } from '@/components/lab/lab-interfaces'
 import { LabLifecycleControls } from '@/components/lab/lab-lifecycle-controls'
@@ -322,6 +323,8 @@ export function LabDetailPage({ name }: { name: string }) {
         canValidate={can(PERM_LAB_VALIDATE)}
         canEdit={can(PERM_LAB_CREATE)}
       />
+
+      <CustomConfig name={lab.name} canEdit={can(PERM_LAB_CREATE)} />
 
       <Card>
         <CardHeader>

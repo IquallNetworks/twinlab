@@ -1,0 +1,26 @@
+{#
+  IP SLA active probes for Cisco IOS / iol — a Twinlab built-in custom-config
+  template (netlab models no active measurement). Rendered per node over the
+  netlab data model (referenced as `config: [ip_sla]`).
+
+  On each PE (a node with the customer VPN), define one ICMP-echo probe per
+  remote customer site: sourced from this PE's VRF loopback, targeting every other
+  PE's VRF loopback inside vrf vpn_a — proving the L3VPN data path end to end. The
+  probe number is the remote site's host octet (stable, collision-free); the probe
+  runs at the IOS default 60s cadence. Probes are scheduled to run forever.
+
+  `vrf` is a sub-command of the icmp-echo *operation* (IOS config-ip-sla-echo
+  mode), one level below `icmp-echo`, so it is indented two spaces — ios_config
+  uses indentation to re-enter the right mode and to match the running config.
+#}
+{% if mpls.vpn is defined and vrfs is defined and 'vpn_a' in vrfs %}
+{% set src = vrfs.vpn_a.loopback_address.ipv4.split('/')[0] %}
+{% for nb in bgp.neighbors|default([]) if nb.vpnv4 is defined %}
+{% set dst = hostvars[nb.name].vrfs.vpn_a.loopback_address.ipv4.split('/')[0] %}
+ip sla {{ dst.split('.')[-1] }}
+ icmp-echo {{ dst }} source-ip {{ src }}
+  vrf vpn_a
+ip sla schedule {{ dst.split('.')[-1] }} life forever start-time now
+!
+{% endfor %}
+{% endif %}

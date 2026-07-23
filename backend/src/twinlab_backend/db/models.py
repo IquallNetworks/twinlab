@@ -116,6 +116,11 @@ class Lab(Base):
     # / skipped / no config-time suites), True (passed), False (failed). An explicit
     # flag so a lab whose config-time checks failed is unambiguous in a listing.
     config_time_ok: Mapped[bool | None] = mapped_column(Boolean(), default=None)
+    # User-authored netlab custom-config templates: a {relpath: content} fileset
+    # (e.g. {"nat/ios.j2": "..."}), shipped to the runner alongside the built-in
+    # library on every configure. Built-ins live in code, not here. Never sent to
+    # `netlab create`. NULL means the lab has no user templates.
+    custom_config: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
     # The twinlab user who created the lab. SET NULL (not CASCADE): deleting a
     # user must not erase the durable definition they authored.
     created_by: Mapped[uuid.UUID | None] = mapped_column(

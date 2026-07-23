@@ -23,6 +23,7 @@ from twinlab_backend.config import load_settings
 from twinlab_backend.db.base import create_engine, make_session_factory
 from twinlab_backend.result import Err
 from twinlab_backend.services.clab_api import ClabApiClient
+from twinlab_backend.services.custom_config import load_builtins
 from twinlab_backend.services.runner_client import RunnerClient
 
 _HTTP_TIMEOUT_SECONDS = 30.0
@@ -36,6 +37,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     if isinstance(loaded, Err):
         raise RuntimeError(loaded.error.message)
     settings = loaded.value
+
+    # Load the built-in custom-config template library from packaged sources. A
+    # broken/missing built-in is a packaging error, so fail fast like config.
+    builtins = load_builtins()
+    if isinstance(builtins, Err):
+        raise RuntimeError(builtins.error)
+    builtin_library = builtins.value
 
     engine = create_engine(settings.database_url)
     session_factory = make_session_factory(engine)
@@ -52,6 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         app.state.settings = settings
+        app.state.builtin_library = builtin_library
         app.state.session_factory = session_factory
         app.state.clab_client = ClabApiClient(
             client=client,

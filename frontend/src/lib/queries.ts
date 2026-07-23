@@ -44,3 +44,9 @@ export const testSuitesQueryOptions = (name: string) =>
     queryKey: ['labs', name, 'test-suites'],
     queryFn: () => api.getTestSuites(name),
   })
+
+export const customConfigQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'custom-config'],
+    queryFn: () => api.getCustomConfig(name),
+  })

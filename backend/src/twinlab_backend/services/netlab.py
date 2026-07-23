@@ -14,6 +14,7 @@ share it.
 
 import copy
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -23,6 +24,12 @@ from typing import Any, cast
 import yaml
 
 from twinlab_backend.result import Err, Ok, Result
+
+# A custom-config template relpath (mirrors the models/runner contract): relative,
+# traversal-free, `.j2`. `netlab create` validates that every template a
+# definition's `config:` references exists, so the fileset must be written into
+# the workdir before create — not just at config-push time.
+_TEMPLATE_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*\.j2$")
 
 # The parsed containerlab topology (name, topology.nodes/links, ...). The
 # clab-api server wants it as a JSON object, so we hand back parsed data rather
@@ -121,13 +128,35 @@ def set_mgmt_subnet(definition: str, subnet: str, network_name: str) -> Result[s
     return Ok(yaml.safe_dump(definition_map, sort_keys=False))
 
 
-def create_clab_topology(definition: str) -> Result[ClabTopology, NetlabError]:
+def _write_templates(workdir: Path, templates: dict[str, str]) -> NetlabError | None:
+    """Write custom-config templates into the create workdir so `netlab create`'s
+    validation of `config:` references passes. Paths are already validated upstream
+    (pydantic for user templates, trusted literals for built-ins); this rejects an
+    unsafe path defensively rather than trusting the caller."""
+    for relpath, content in templates.items():
+        if not _TEMPLATE_PATH.match(relpath) or ".." in Path(relpath).parts:
+            return NetlabError(f"unsafe template path: {relpath!r}", "")
+        target = workdir / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _ = target.write_text(content)
+    return None
+
+
+def create_clab_topology(
+    definition: str, templates: dict[str, str] | None = None
+) -> Result[ClabTopology, NetlabError]:
     """Run `netlab create` on a netlab definition and return the generated
     containerlab topology as parsed data. The definition must state each node's
-    `device` and the `provider` — Twinlab never defaults those."""
+    `device` and the `provider` — Twinlab never defaults those. `templates` is the
+    custom-config fileset the definition may reference (built-in + user); netlab
+    validates their existence at create time, so they are written into the workdir
+    first. Omit it for a definition with no custom config."""
     with tempfile.TemporaryDirectory() as workdir:
         source = Path(workdir) / "topology.yml"
         _ = source.write_text(definition)
+        written = _write_templates(Path(workdir), templates or {})
+        if written is not None:
+            return Err(written)
 
         try:
             proc = subprocess.run(

@@ -95,3 +95,18 @@ def test_deploy_request_rejects_unsafe_name() -> None:
 def test_deploy_request_accepts_valid_name() -> None:
     request = DeployRequest(name="mpls-l3vpn", definition="nodes: [r1]\n")
     assert request.name == "mpls-l3vpn"
+
+
+def test_deploy_request_accepts_custom_config_fileset() -> None:
+    request = DeployRequest(
+        name="lab", definition="nodes: [r1]\n", custom_config={"nat/ios.j2": "conf"}
+    )
+    assert request.custom_config == {"nat/ios.j2": "conf"}
+
+
+def test_deploy_request_rejects_unsafe_template_path() -> None:
+    # Template paths are relative .j2 files; a traversal or bad suffix is rejected.
+    with pytest.raises(pydantic.ValidationError):
+        _ = DeployRequest(name="lab", definition="nodes: [r1]\n", custom_config={"../x.j2": "c"})
+    with pytest.raises(pydantic.ValidationError):
+        _ = DeployRequest(name="lab", definition="nodes: [r1]\n", custom_config={"x.cfg": "c"})

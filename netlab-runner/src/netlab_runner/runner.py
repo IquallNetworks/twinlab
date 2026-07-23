@@ -11,6 +11,7 @@ outcome is returned as a typed value.
 """
 
 import hashlib
+import json
 import re
 import shlex
 import shutil
@@ -23,6 +24,12 @@ from typing import Any, cast
 import yaml
 
 _CLAB_OUTPUT = "clab.yml"
+# Custom-config template paths the backend ships alongside a definition. netlab
+# resolves a `config: [name]` attribute to `name.j2` (or `name/<device>.j2`) in
+# its search path, which includes the workdir (`.`), so we drop these files there
+# before `netlab create`. The contract mirrors the backend's _TemplatePath: a
+# relative, traversal-free path ending in `.j2`.
+_TEMPLATE_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*\.j2$")
 _CREATE_TIMEOUT_SECONDS = 120
 # Ansible push execs into every node; a few nodes settle in well under a minute,
 # but keep headroom for larger labs.
@@ -148,12 +155,43 @@ def _run(argv: list[str], workdir: Path, timeout: int) -> subprocess.CompletedPr
         return f"could not run {' '.join(argv)}: {exc}"
 
 
-def configure(definition: str) -> ConfigureOutcome | RunnerError:
+def template_path_error(relpath: str) -> str | None:
+    """Reject an unsafe custom-config template path, or None if it is safe. Safe
+    means relative, traversal-free, `.j2`, and (once joined to the workdir) still
+    inside it — the untrusted-input check for the fileset the backend ships."""
+    if not _TEMPLATE_PATH.match(relpath) or ".." in Path(relpath).parts:
+        return f"unsafe template path: {relpath!r}"
+    root = Path("/__wd__")
+    if not (root / relpath).resolve().is_relative_to(root):
+        return f"template path escapes workdir: {relpath!r}"
+    return None
+
+
+def _write_templates(wd: Path, templates: dict[str, str]) -> RunnerError | None:
+    """Write custom-config templates into the workdir so `netlab initial` can
+    render whichever ones the definition's `config:` references. This is the
+    untrusted-input boundary, so a bad path is a typed error, not an exception."""
+    for relpath, content in templates.items():
+        error = template_path_error(relpath)
+        if error is not None:
+            return RunnerError("internal", error)
+        target = wd / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _ = target.write_text(content)
+    return None
+
+
+def configure(definition: str, templates: dict[str, str]) -> ConfigureOutcome | RunnerError:
     """Render the lab and push its config. `definition` must carry a stable
-    `name:` so the regenerated inventory targets the deployed containers."""
+    `name:` so the regenerated inventory targets the deployed containers.
+    `templates` is the custom-config fileset (built-in + user) — written into the
+    workdir before create so `netlab initial` deploys the referenced ones."""
     with tempfile.TemporaryDirectory() as workdir:
         wd = Path(workdir)
         _ = (wd / "topology.yml").write_text(definition)
+        written = _write_templates(wd, templates)
+        if written is not None:
+            return written
 
         created = _run(["netlab", "create", "topology.yml"], wd, _CREATE_TIMEOUT_SECONDS)
         if isinstance(created, str):
@@ -200,19 +238,28 @@ def _clean_exec_output(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not _EXEC_NOISE.match(line.strip()))
 
 
-def _ensure_inventory(definition: str, name: str) -> Path | RunnerError:
+def _ensure_inventory(definition: str, name: str, templates: dict[str, str]) -> Path | RunnerError:
     """Return a workdir holding this lab's netlab inventory, regenerating it only
-    when absent or when the definition changed (hash-stamped). Cached per lab so a
-    suite's many validation execs don't each pay for `netlab create`. Callers
-    serialize this (netlab create races on ~/.netlab); see app.py."""
+    when absent or when the definition or its templates changed (hash-stamped).
+    Cached per lab so a suite's many validation execs don't each pay for `netlab
+    create`. The custom-config `templates` must be written before create because
+    netlab validates that every `config:` reference exists — a definition using
+    custom config fails create without them. Callers serialize this (netlab create
+    races on ~/.netlab); see app.py."""
     workdir = _EXEC_CACHE_ROOT / name
-    digest = hashlib.sha256(definition.encode()).hexdigest()
+    # Templates are part of the cache key: a built-in/user template change must
+    # regenerate the inventory (its create validation depends on them).
+    keyed = definition + "\0" + json.dumps(templates, sort_keys=True)
+    digest = hashlib.sha256(keyed.encode()).hexdigest()
     stamp = workdir / ".defhash"
     if stamp.is_file() and stamp.read_text() == digest and (workdir / _CLAB_OUTPUT).is_file():
         return workdir
     shutil.rmtree(workdir, ignore_errors=True)
     workdir.mkdir(parents=True, exist_ok=True)
     _ = (workdir / "topology.yml").write_text(definition)
+    written = _write_templates(workdir, templates)
+    if written is not None:
+        return written
     created = _run(["netlab", "create", "topology.yml"], workdir, _CREATE_TIMEOUT_SECONDS)
     if isinstance(created, str):
         return RunnerError("internal", created)
@@ -222,15 +269,19 @@ def _ensure_inventory(definition: str, name: str) -> Path | RunnerError:
     return workdir
 
 
-def exec_command(definition: str, node: str, command: str) -> ExecOutcome | RunnerError:
+def exec_command(
+    definition: str, node: str, command: str, templates: dict[str, str]
+) -> ExecOutcome | RunnerError:
     """Run one operational `command` on `node` via `netlab exec`, which picks the
     per-NOS transport (docker exec for VyOS/FRR, ssh for Cisco/Nokia/…) from the
     netlab inventory — so this stays NOS-agnostic. `definition` must carry the
-    stable `name:`. Returns the command's stdout (connection chatter stripped)."""
+    stable `name:`; `templates` is the custom-config fileset the definition may
+    reference (needed for the inventory's `netlab create`). Returns the command's
+    stdout (connection chatter stripped)."""
     name = _definition_name(definition)
     if name is None:
         return RunnerError("internal", "definition has no name")
-    workdir = _ensure_inventory(definition, name)
+    workdir = _ensure_inventory(definition, name, templates)
     if isinstance(workdir, RunnerError):
         return workdir
     argv = ["netlab", "exec", node, *shlex.split(command)]

@@ -1,0 +1,33 @@
+{#
+  MPLS-TE (RSVP-TE) for Cisco IOS / iol — a Twinlab built-in custom-config
+  template, since netlab models no traffic-engineering on any NOS. Rendered per
+  node over the netlab data model (referenced as `config: [mpls_te]`).
+
+  Every node: enable TE globally, enable it + RSVP bandwidth on each OSPF core
+  (point-to-point) interface, and advertise the TE topology into OSPF. PE routers
+  (those with an MPLS VPN) additionally head-end an autoroute tunnel to every
+  other PE's Loopback0 — the vpnv4 iBGP peers — with a dynamically computed path.
+#}
+mpls traffic-eng tunnels
+!
+{% for l in interfaces if l.type == 'p2p' and l.ospf is defined %}
+interface {{ l.ifname }}
+ mpls traffic-eng tunnels
+ ip rsvp bandwidth
+!
+{% endfor %}
+router ospf {{ ospf.process|default(1) }}
+ mpls traffic-eng router-id {{ loopback.ifname }}
+ mpls traffic-eng area {{ ospf.areas[0]._area_int|default(0) }}
+!
+{% if mpls.vpn is defined %}
+{% for nb in bgp.neighbors|default([]) if nb.vpnv4 is defined %}
+interface Tunnel{{ nb.ipv4.split('.')[-1] }}
+ ip unnumbered {{ loopback.ifname }}
+ tunnel mode mpls traffic-eng
+ tunnel destination {{ nb.ipv4 }}
+ tunnel mpls traffic-eng autoroute announce
+ tunnel mpls traffic-eng path-option 10 dynamic
+!
+{% endfor %}
+{% endif %}

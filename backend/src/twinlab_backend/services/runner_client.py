@@ -72,11 +72,17 @@ class RunnerClient:
     client: httpx.AsyncClient
     base_url: str
 
-    async def configure(self, definition: str) -> Result[ConfigureReport, RunnerError]:
+    async def configure(
+        self, definition: str, templates: dict[str, str]
+    ) -> Result[ConfigureReport, RunnerError]:
+        """Render and push a lab's config. `templates` is the custom-config fileset
+        (built-in library merged with the lab's user templates); the runner writes
+        it into its workdir so `netlab initial` deploys whichever the definition
+        references. Pass an empty map for a lab with no custom config."""
         try:
             resp = await self.client.post(
                 f"{self.base_url}/configure",
-                json={"definition": definition},
+                json={"definition": definition, "templates": templates},
                 timeout=_CONFIGURE_TIMEOUT_SECONDS,
             )
         except httpx.HTTPError as exc:
@@ -104,15 +110,22 @@ class RunnerClient:
         )
 
     async def exec_command(
-        self, definition: str, node: str, command: str
+        self, definition: str, node: str, command: str, templates: dict[str, str]
     ) -> Result[str, RunnerError]:
         """Run one operational command on a node via the runner's `netlab exec`
         (per-NOS transport). `definition` carries the stable `name:` so the runner
-        can (re)build the matching inventory. Returns the command's stdout."""
+        can (re)build the matching inventory; `templates` is the custom-config
+        fileset it references (the inventory's `netlab create` validates them).
+        Returns the command's stdout."""
         try:
             resp = await self.client.post(
                 f"{self.base_url}/exec",
-                json={"definition": definition, "node": node, "command": command},
+                json={
+                    "definition": definition,
+                    "node": node,
+                    "command": command,
+                    "templates": templates,
+                },
                 timeout=_EXEC_TIMEOUT_SECONDS,
             )
         except httpx.HTTPError as exc:

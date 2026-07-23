@@ -13,11 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from twinlab_backend.config import Settings
 from twinlab_backend.services.clab_api import ClabApiClient
+from twinlab_backend.services.custom_config import BuiltinLibrary
 from twinlab_backend.services.runner_client import RunnerClient
 
 
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def get_builtin_library(request: Request) -> BuiltinLibrary:
+    return request.app.state.builtin_library
 
 
 def get_clab_client(request: Request) -> ClabApiClient:
@@ -35,6 +40,7 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+BuiltinLibraryDep = Annotated[BuiltinLibrary, Depends(get_builtin_library)]
 ClabClientDep = Annotated[ClabApiClient, Depends(get_clab_client)]
 RunnerClientDep = Annotated[RunnerClient, Depends(get_runner_client)]
 SessionDep = Annotated[AsyncSession, Depends(get_db)]

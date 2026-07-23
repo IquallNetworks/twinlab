@@ -114,6 +114,19 @@ export const testSuitesResponseSchema = z.object({
 })
 export type TestSuitesResponse = z.infer<typeof testSuitesResponseSchema>
 
+export const builtinTemplateSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  files: z.record(z.string(), z.string()),
+})
+export type BuiltinTemplate = z.infer<typeof builtinTemplateSchema>
+
+export const customConfigResponseSchema = z.object({
+  builtin: z.array(builtinTemplateSchema),
+  custom_config: z.record(z.string(), z.string()),
+})
+export type CustomConfigResponse = z.infer<typeof customConfigResponseSchema>
+
 export const nodeConfigResultSchema = z.object({
   node: z.string(),
   status: z.string(), // "configured" | "failed"

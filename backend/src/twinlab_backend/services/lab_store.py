@@ -167,6 +167,20 @@ async def update_test_suites(
     return lab
 
 
+async def update_custom_config(
+    session: AsyncSession, name: str, custom_config: dict[str, object]
+) -> Lab | LabStoreError:
+    """Replace a lab's user-defined custom-config templates. The caller has
+    validated the paths and checked them against the built-in namespace; here we
+    only persist. `not_found` when the lab was never recorded here."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.custom_config = custom_config
+    await session.commit()
+    return lab
+
+
 async def record_validation(
     session: AsyncSession,
     name: str,

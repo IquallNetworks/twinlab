@@ -14,6 +14,16 @@ _Name = Annotated[
 # A JSON scalar an expectation can assert equality against (json_path form).
 type JsonScalar = str | int | float | bool
 
+# A custom-config template path: a relative, traversal-free `.j2` path (flat like
+# `nat.j2` or per-device like `nat/ios.j2`). The runner enforces the same contract
+# at its write boundary; keeping it here rejects a bad path before it is stored.
+_TemplatePath = Annotated[
+    str,
+    StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_./-]*\.j2$", min_length=1, max_length=128),
+]
+# A fileset of custom-config templates: path -> Jinja source.
+type CustomConfigFileset = dict[_TemplatePath, str]
+
 
 class TestExpectation(BaseModel):
     """How a test decides pass/fail from a command's stdout. Exactly one matcher is
@@ -120,6 +130,30 @@ class TestSuitesResponse(BaseModel):
     config_time_ok: bool | None
 
 
+class BuiltinTemplateOut(BaseModel):
+    """A built-in custom-config template as the API exposes it: the `config:` name,
+    a description, and its per-device source files. Read-only (non-deletable)."""
+
+    name: str
+    description: str
+    files: dict[str, str]
+
+
+class UpdateCustomConfigRequest(BaseModel):
+    # Replace a lab's user-defined template fileset. Stored on the record, never
+    # sent to `netlab create`. Paths are validated (relative, .j2) and may not
+    # shadow a built-in (rejected with 409).
+    custom_config: CustomConfigFileset
+
+
+class CustomConfigResponse(BaseModel):
+    """A lab's custom config: the shipped built-in library (read-only) plus the
+    lab's own user-defined templates ({relpath: source}, editable)."""
+
+    builtin: list[BuiltinTemplateOut]
+    custom_config: dict[str, str]
+
+
 class DeployRequest(BaseModel):
     # The lab's stable identity, chosen by the caller and required — it keys the
     # durable record and every `/labs/{name}` route, and is pinned into the
@@ -136,6 +170,11 @@ class DeployRequest(BaseModel):
     # Suites to store on the lab as it is created, so a first deploy+configure can
     # also run its config-time checks. Omitted leaves the lab with no suites.
     test_suites: dict[_Name, TestSuite] | None = None
+    # User-defined custom-config templates to store on the lab (a {relpath: source}
+    # fileset), referenced from the definition's `config:` attribute. Omitted leaves
+    # the lab with no user templates; built-ins are always available. A path may not
+    # shadow a built-in (rejected at deploy).
+    custom_config: CustomConfigFileset | None = None
     # Skip the automatic config-time suites at the end of a configure. Default
     # False: convergence gating is on unless the caller opts out.
     skip_config_time_checks: bool = False

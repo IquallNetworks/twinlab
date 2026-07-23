@@ -1,0 +1,480 @@
+"""Wire models for the Twinlab API v1.0.
+
+Frozen dataclasses mirroring the settled contract (`docs/twinlab_client_shape.py`
+in the Twinlab repository). These shapes carry no behavior; parsing to and from
+the wire lives in `_wire.py`.
+
+Unordered unique collections (roles, permissions, scopes) are `set`s here; the
+wire is a JSON array either way. Ids are UUIDs.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Final, Literal
+from uuid import UUID
+
+# --------------------------------------------------------------------------- #
+# Vocabularies
+# --------------------------------------------------------------------------- #
+# Each Literal alias has a runtime tuple alongside it (same values) so parsers
+# can validate without repeating the vocabulary.
+
+LabStatus = Literal["created", "deploying", "deployed", "destroyed"]
+LAB_STATUSES: Final[tuple[LabStatus, ...]] = ("created", "deploying", "deployed", "destroyed")
+
+DeployStatus = Literal["deployed", "configured", "config_failed", "validation_failed"]
+DEPLOY_STATUSES: Final[tuple[DeployStatus, ...]] = (
+    "deployed",
+    "configured",
+    "config_failed",
+    "validation_failed",
+)
+
+ConfigureStatus = Literal["configured", "config_failed", "validation_failed"]
+CONFIGURE_STATUSES: Final[tuple[ConfigureStatus, ...]] = (
+    "configured",
+    "config_failed",
+    "validation_failed",
+)
+
+# No "skipped" state on purpose: a skipped gate RETAINS the previous result;
+# "no config-time suites" = "not_run".
+ConfigTimeStatus = Literal["not_run", "passed", "failed"]
+CONFIG_TIME_STATUSES: Final[tuple[ConfigTimeStatus, ...]] = ("not_run", "passed", "failed")
+
+# Docker engine's container-state vocabulary; the backend normalizes clab-api's
+# passthrough to it.
+ContainerState = Literal["created", "running", "paused", "restarting", "removing", "exited", "dead"]
+CONTAINER_STATES: Final[tuple[ContainerState, ...]] = (
+    "created",
+    "running",
+    "paused",
+    "restarting",
+    "removing",
+    "exited",
+    "dead",
+)
+
+NodeConfigStatus = Literal["configured", "failed"]
+NODE_CONFIG_STATUSES: Final[tuple[NodeConfigStatus, ...]] = ("configured", "failed")
+
+DestroyStatus = Literal["destroyed", "deleted"]
+DESTROY_STATUSES: Final[tuple[DestroyStatus, ...]] = ("destroyed", "deleted")
+
+ReadinessStatus = Literal["ready", "degraded"]
+READINESS_STATUSES: Final[tuple[ReadinessStatus, ...]] = ("ready", "degraded")
+
+RoleScope = Literal["global", "lab"]
+ROLE_SCOPES: Final[tuple[RoleScope, ...]] = ("global", "lab")
+
+PrincipalType = Literal["user", "group"]
+PRINCIPAL_TYPES: Final[tuple[PrincipalType, ...]] = ("user", "group")
+
+SuiteStage = Literal["config-time", "runtime"]
+SUITE_STAGES: Final[tuple[SuiteStage, ...]] = ("config-time", "runtime")
+
+TestStatus = Literal["pass", "fail", "skip", "error"]
+TEST_STATUSES: Final[tuple[TestStatus, ...]] = ("pass", "fail", "skip", "error")
+
+DurationUnit = Literal["us", "ms", "s"]
+DURATION_UNITS: Final[tuple[DurationUnit, ...]] = ("us", "ms", "s")
+
+# Lab-level pause/unpause fan out per node (clab-api has no lab pause); the fan
+# out is non-atomic — partial failure is a 502 listing the failed nodes.
+LabPowerAction = Literal["start", "stop", "restart", "pause", "unpause"]
+NodePowerAction = Literal["start", "stop", "restart", "pause", "unpause"]
+
+TerminalProtocol = Literal["ssh", "shell"]
+
+
+# --------------------------------------------------------------------------- #
+# Auth / identity shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class UserInfo:
+    """`GET /auth/me` / login response. GLOBAL roles/permissions only —
+    per-lab permissions ride on each lab payload."""
+
+    username: str
+    roles: set[str]
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class UserSummary:
+    """One user (`/users`). `roles` = global roles."""
+
+    id: UUID
+    username: str
+    is_active: bool
+    roles: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class GroupMember:
+    id: UUID
+    username: str
+
+
+@dataclass(frozen=True, slots=True)
+class GroupSummary:
+    """Admin-defined user group; members inherit its global roles and lab grants."""
+
+    id: UUID
+    name: str
+    description: str
+    members: list[GroupMember]
+    roles: set[str]  # global roles bound to the group
+
+
+@dataclass(frozen=True, slots=True)
+class Role:
+    """One catalog role (`GET /roles`) — never hardcode the role list."""
+
+    name: str
+    scopes: set[RoleScope]
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKey:
+    """One API key, as listings show it — never the secret."""
+
+    id: UUID
+    name: str  # caller-chosen label, e.g. "ci"
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyCreated:
+    """Create response — the only time the secret is returned."""
+
+    key: str  # the bearer secret; shown once, stored hashed server-side
+    info: ApiKey
+
+
+@dataclass(frozen=True, slots=True)
+class Principal:
+    id: UUID
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class LabOwner:
+    """`PUT /labs/{name}/owner` response."""
+
+    lab: str
+    owner: Principal
+
+
+@dataclass(frozen=True, slots=True)
+class Principals:
+    """`GET /principals`: id+name of all users/groups, for grantors lacking
+    user:manage / group:manage."""
+
+    users: list[Principal]
+    groups: list[Principal]
+
+
+@dataclass(frozen=True, slots=True)
+class Grant:
+    """One lab-scoped role binding. `principal_name` is None if the principal
+    no longer exists (defensive — only reachable via out-of-band DB edits)."""
+
+    id: UUID
+    principal_type: PrincipalType
+    principal_id: UUID
+    principal_name: str | None
+    role: str
+
+
+# --------------------------------------------------------------------------- #
+# Health shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class Liveness:
+    status: Literal["ok"]
+
+
+@dataclass(frozen=True, slots=True)
+class Readiness:
+    """`GET /health/ready` — same body on 200 and 503 (degraded is data).
+    Check values are "ok" or the failure message."""
+
+    status: ReadinessStatus
+    checks: dict[str, str]
+
+
+# --------------------------------------------------------------------------- #
+# Lab shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class LabNodeState:
+    """Live per-node state from clab-api (best-effort)."""
+
+    name: str  # short node name, e.g. "r1"
+    container: str  # "clab-<lab>-<node>"
+    image: str
+    state: ContainerState
+    mgmt_ip: str  # bare IP (CIDR stripped); "" when none
+
+
+@dataclass(frozen=True, slots=True)
+class LabSummary:
+    """One row of `GET /labs`. `status` is the durable record; `nodes` is the
+    live count (0 when down or clab-api unreachable). `permissions` = caller's
+    effective set on THIS lab (global + grants + owner-implicit)."""
+
+    name: str
+    status: LabStatus
+    owner: Principal | None
+    created_at: datetime
+    updated_at: datetime
+    nodes: int
+    config_time_status: ConfigTimeStatus
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class LabDetail:
+    """`GET /labs/{name}`: stored record + live nodes. `definition` is the
+    lab's source of truth — None until authored (a "created" lab)."""
+
+    name: str
+    status: LabStatus
+    definition: str | None  # None only while status="created"
+    owner: Principal | None
+    created_at: datetime
+    updated_at: datetime
+    nodes: list[LabNodeState]
+    config_time_status: ConfigTimeStatus
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeConfigResult:
+    """Per-node outcome of a config push (from Ansible's PLAY RECAP)."""
+
+    node: str
+    status: NodeConfigStatus
+    changed: int
+    failed: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeployResponse:
+    """`POST /labs/{name}/deploy`.
+
+    - bare deploy:               status="deployed", configuration/validation None
+    - +configure, gate ok:       status="configured" (validation None if skipped
+      or no config-time suites)
+    - +configure, push failed:   status="config_failed" — configuration carries
+      the per-node results, validation None (gate not run)
+    - +configure, gate failed:   status="validation_failed"
+    All four are 2xx: HTTP errors mean the operation could not run at all.
+    """
+
+    status: DeployStatus
+    lab_name: str
+    nodes: list[str]  # short node names
+    configuration: list[NodeConfigResult] | None
+    validation: list["SuiteReport"] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureResponse:
+    """`POST /labs/{name}/configure`. Like DeployResponse, but `configuration`
+    is always present (a push that couldn't run raises 422/502 instead)."""
+
+    status: ConfigureStatus
+    lab_name: str
+    configuration: list[NodeConfigResult]
+    validation: list["SuiteReport"] | None
+
+
+@dataclass(frozen=True, slots=True)
+class DestroyResponse:
+    """`DELETE /labs/{name}`. "destroyed" = record kept, redeployable;
+    "deleted" = remove=true, record soft-deleted."""
+
+    status: DestroyStatus
+    detail: str  # containerlab teardown output, or "lab was not running"
+
+
+@dataclass(frozen=True, slots=True)
+class LabActionResponse:
+    """Power/netem action result: clab-api's message, verbatim. A 2xx IS the
+    outcome; the message is decoration."""
+
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class SaveConfigResponse:
+    message: str
+    output: str  # per-node save output from containerlab
+
+
+@dataclass(frozen=True, slots=True)
+class NodeLogsResponse:
+    node: str  # short node name (echoed from the path)
+    container: str
+    logs: str
+
+
+@dataclass(frozen=True, slots=True)
+class NodeInterface:
+    name: str
+    alias: str
+    ifindex: int
+    mac: str
+    mtu: int
+    state: str
+    kind: str  # clab-api's interface `type`
+
+
+@dataclass(frozen=True, slots=True)
+class NodeInterfaces:
+    """One node's interface inventory, keyed by SHORT node name."""
+
+    node: str
+    interfaces: list[NodeInterface]
+
+
+@dataclass(frozen=True, slots=True)
+class Duration:
+    """A netem duration as a structured {value, unit} pair; the author's unit
+    choice is preserved."""
+
+    value: float
+    unit: DurationUnit
+
+
+@dataclass(frozen=True, slots=True)
+class NetemImpairment:
+    """Current netem shaping on one interface. None / 0 = that dimension
+    unshaped."""
+
+    interface: str
+    delay: Duration | None
+    jitter: Duration | None
+    loss: float  # percent
+    rate: int  # kbit/s
+    corruption: float  # percent
+
+
+@dataclass(frozen=True, slots=True)
+class LabEvent:
+    """One SSE payload from `GET /events`."""
+
+    lab: str
+    node: str | None
+    action: str  # "create" | "start" | "stop" | "kill" | "die" | "destroy" | ...
+    timestamp: str
+
+
+# --------------------------------------------------------------------------- #
+# Test-suite shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class TestExpectation:
+    """Exactly ONE of contains/not_contains/matches/json_path (server-checked);
+    `equals` required with — and only with — json_path. No expression eval."""
+
+    contains: str | None = None
+    not_contains: str | None = None
+    matches: str | None = None  # regex, re.search on stdout
+    json_path: str | None = None  # dotted path into JSON-parsed stdout
+    equals: str | int | float | bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationTest:
+    """Run `command` on each node; check stdout. `wait` (0-600 s) polls until
+    the expectation holds — the convergence knob."""
+
+    nodes: list[str]
+    command: str
+    expect: TestExpectation
+    wait: int = 0
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TestSuite:
+    """Named test group. `stage` controls only *automatic* runs: config-time
+    suites run after every configure and gate "config done". Any suite can be
+    run manually."""
+
+    tests: dict[str, ValidationTest]
+    stage: SuiteStage = "runtime"
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TestResult:
+    """One (test, node) outcome. "fail" = expectation never held (after
+    `wait`); "error" = command couldn't run; "skip" reserved, unused."""
+
+    test: str
+    node: str
+    status: TestStatus
+    command: str
+    output: str
+    detail: str
+    elapsed_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class SuiteReport:
+    suite: str
+    stage: str
+    passed: int
+    failed: int
+    skipped: int
+    errored: int
+    ran_at: datetime
+    results: list[TestResult]
+
+
+@dataclass(frozen=True, slots=True)
+class TestSuitesResponse:
+    """Declared suites + last run per suite (empty if never run) + the
+    config-time gate from the most recent configure."""
+
+    test_suites: dict[str, TestSuite]
+    last_validation: dict[str, SuiteReport]
+    config_time_status: ConfigTimeStatus
+
+
+# --------------------------------------------------------------------------- #
+# Custom-config shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinTemplate:
+    """Shipped read-only template: `config:` name, description, per-device
+    files ({relpath: jinja source})."""
+
+    name: str
+    description: str
+    files: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomConfigResponse:
+    """Built-in library (identical for every lab) + this lab's user fileset.
+    Relpaths match `^[A-Za-z0-9][A-Za-z0-9_./-]*\\.j2$`, max 128."""
+
+    builtin: list[BuiltinTemplate]
+    custom_config: dict[str, str]

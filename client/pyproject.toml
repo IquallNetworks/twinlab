@@ -1,0 +1,60 @@
+[project]
+name = "twinlab-client"
+version = "0.1.0"
+description = "Async Python client for the Twinlab API — declarative, reproducible network labs."
+readme = "README.md"
+authors = [
+    { name = "Galileo Cappella", email = "galileocapp@gmail.com" }
+]
+requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["twinlab", "containerlab", "netlab", "network", "digital-twin", "lab"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Telecommunications Industry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.28.1",
+    "websockets>=16.1",
+]
+
+[project.urls]
+Repository = "https://github.com/GalileoCap/twinlab-fork"
+
+[build-system]
+requires = ["uv_build>=0.11.6,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.9",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.22",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Tests are function-style; restrict class collection so domain models named
+# `Test*` (TestSuite, TestExpectation, TestResult) aren't mistaken for test cases.
+python_classes = ["*Tests"]

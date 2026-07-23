@@ -1,0 +1,299 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
+import { api } from '@/lib/api'
+import { formatDateTime, testStatusBadgeVariant } from '@/lib/format'
+import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
+import type { SuiteReport, TestSuite } from '@/lib/schemas'
+
+function summaryLine(report: SuiteReport): string {
+  const parts = [`${report.passed} passed`, `${report.failed} failed`]
+  if (report.skipped > 0) parts.push(`${report.skipped} skipped`)
+  if (report.errored > 0) parts.push(`${report.errored} errored`)
+  return `${parts.join(' · ')} · ${formatDateTime(report.ran_at)}`
+}
+
+function ResultsTable({ report }: { report: SuiteReport }) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Test</TableHead>
+          <TableHead>Node</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Detail</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {report.results.map((r) => (
+          <TableRow key={`${r.test}:${r.node}`}>
+            <TableCell className="font-medium">{r.test}</TableCell>
+            <TableCell className="font-mono text-xs">{r.node}</TableCell>
+            <TableCell>
+              <Badge variant={testStatusBadgeVariant(r.status)}>{r.status}</Badge>
+            </TableCell>
+            <TableCell className="text-muted-foreground text-xs">{r.detail}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
+
+/** One suite: its stage/description, the last run's tally, a Run button, and an
+ * expandable per-test result table. */
+function SuiteRow({
+  suiteName,
+  suite,
+  report,
+  enabled,
+  canValidate,
+  running,
+  onRun,
+}: {
+  suiteName: string
+  suite: TestSuite
+  report: SuiteReport | undefined
+  enabled: boolean
+  canValidate: boolean
+  running: boolean
+  onRun: (suite: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const failed = report !== undefined && (report.failed > 0 || report.errored > 0)
+
+  return (
+    <div className="rounded-md border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => setOpen((v) => !v)}
+            aria-label={open ? 'Collapse' : 'Expand'}
+            disabled={report === undefined}
+          >
+            {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+          </button>
+          <span className="font-medium">{suiteName}</span>
+          <Badge variant={suite.stage === 'config-time' ? 'default' : 'secondary'}>
+            {suite.stage}
+          </Badge>
+          {report !== undefined && (
+            <Badge variant={failed ? 'destructive' : 'default'}>
+              {failed ? 'failing' : 'passing'}
+            </Badge>
+          )}
+        </div>
+        {canValidate && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onRun(suiteName)}
+            disabled={!enabled || running}
+            title={enabled ? undefined : 'Run is available while the lab is running'}
+          >
+            {running ? 'Running…' : 'Run'}
+          </Button>
+        )}
+      </div>
+      {suite.description !== '' && (
+        <p className="text-muted-foreground mt-2 text-sm">{suite.description}</p>
+      )}
+      <p className="text-muted-foreground mt-1 text-xs">
+        {report === undefined ? 'Not run yet.' : summaryLine(report)}
+      </p>
+      {open && report !== undefined && (
+        <div className="mt-3">
+          <ResultsTable report={report} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Author the whole suite set as JSON. Parsed here for syntax; the backend
+ * validates the schema and surfaces any error. */
+function SuitesEditor({ name, suitesJson }: { name: string; suitesJson: string }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState(suitesJson)
+
+  const save = useMutation({
+    mutationFn: (parsed: unknown) => api.putTestSuites(name, parsed),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: testSuitesQueryOptions(name).queryKey })
+      toast.success('Saved test suites')
+      setOpen(false)
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to save suites'),
+  })
+
+  function onSave() {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (e) {
+      toast.error(e instanceof Error ? `Invalid JSON: ${e.message}` : 'Invalid JSON')
+      return
+    }
+    save.mutate(parsed)
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setText(suitesJson) // reset to the current suites on open
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          Edit suites
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="flex flex-col sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit test suites</DialogTitle>
+          <DialogDescription>
+            A JSON map of suite name → {'{ stage, description, tests }'}. Each test runs a command on
+            nodes and matches its stdout (contains / not_contains / matches / json_path).
+          </DialogDescription>
+        </DialogHeader>
+        <Textarea
+          className="min-h-48 flex-1 resize-none font-mono text-xs"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+        />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button onClick={onSave} disabled={save.isPending}>
+            {save.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Test suites: declarative assertions run against the live lab. Config-time
+ * suites also gate a configure; runtime suites run on demand. Everyone with
+ * lab:read sees suites and their last run; lab:validate runs them; lab:create
+ * authors them. */
+export function TestSuites({
+  name,
+  enabled,
+  canValidate,
+  canEdit,
+}: {
+  name: string
+  enabled: boolean
+  canValidate: boolean
+  canEdit: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [running, setRunning] = useState<string | null>(null)
+  const { data, isPending, isError, error } = useQuery(testSuitesQueryOptions(name))
+
+  const run = useMutation({
+    mutationFn: (suite: string) => api.runTestSuite(name, suite),
+    onSuccess: async (report) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: testSuitesQueryOptions(name).queryKey }),
+        queryClient.invalidateQueries({ queryKey: labQueryOptions(name).queryKey }),
+        queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey }),
+      ])
+      const ok = report.failed === 0 && report.errored === 0
+      const message = `${report.suite}: ${summaryLine(report)}`
+      if (ok) toast.success(message)
+      else toast.error(message)
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Run failed'),
+    onSettled: () => setRunning(null),
+  })
+
+  function onRun(suite: string) {
+    setRunning(suite)
+    run.mutate(suite)
+  }
+
+  const suites = data ? Object.entries(data.test_suites) : []
+  // config-time suites first — they gate a configure and are the headline check.
+  const ordered = [...suites].sort(([, a], [, b]) => {
+    const rank = (s: TestSuite) => (s.stage === 'config-time' ? 0 : 1)
+    return rank(a) - rank(b)
+  })
+  const suitesJson = data ? JSON.stringify(data.test_suites, null, 2) : '{}'
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">Test suites</CardTitle>
+        {canEdit && data && <SuitesEditor name={name} suitesJson={suitesJson} />}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {isPending ? (
+          <p className="text-muted-foreground text-sm">Loading…</p>
+        ) : isError ? (
+          <p className="text-destructive text-sm">
+            {error instanceof Error ? error.message : 'Failed to load test suites'}
+          </p>
+        ) : (
+          <>
+            {data.config_time_ok === false && (
+              <p className="text-destructive text-sm font-medium">
+                Config-time validation failed on the last configure — the lab is deployed but did not
+                pass its convergence checks.
+              </p>
+            )}
+            {ordered.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No test suites defined{canEdit ? ' — add some with “Edit suites”.' : '.'}
+              </p>
+            ) : (
+              ordered.map(([suiteName, suite]) => (
+                <SuiteRow
+                  key={suiteName}
+                  suiteName={suiteName}
+                  suite={suite}
+                  report={data.last_validation[suiteName]}
+                  enabled={enabled}
+                  canValidate={canValidate}
+                  running={running === suiteName}
+                  onRun={onRun}
+                />
+              ))
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}

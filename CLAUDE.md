@@ -22,6 +22,15 @@ license compatible with Twinlab's own (Apache 2.0). Before adding a dependency o
 external tool, confirm its license clears this bar — a non-open-source or incompatibly-licensed
 component is a blocker to raise, not a choice to make quietly.
 
+**Target platform is Linux; do not design for anything else.** Twinlab's lab layer is host-coupled
+to Linux by nature (containerlab drives Linux kernel networking directly). The development target is
+Linux, full stop — write code, choose dependencies, and make design decisions for Linux only, never
+trading anything off for another platform. Running on Apple Silicon / macOS is a *speculative,
+below-secondary* idea parked in `docs/dev-on-apple-silicon.md` for possible later exploration; it is
+**not a goal and must never influence a decision here**. If the project never supports it, that is
+completely fine — that is precisely why it was deferred. Do not add macOS/arm64 accommodations,
+caveats, or abstractions on its behalf unless and until it is explicitly picked up as real work.
+
 ## Current State
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of five services:
@@ -33,15 +42,25 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   cookie-session **login**, **user management** (`/users`: list, create, edit roles), and **lab
   management** (`/labs` list + deploy dialog, `/labs/$name` detail: a control panel with
   edit-definition/redeploy/configure/destroy, whole-lab and per-node start/stop/restart, save-config,
-  per-node logs, and a live interface inventory — controls in focused `components/lab/*` components).
+  per-node logs, a live interface inventory, per-node netem link impairment (set/show/reset
+  delay/jitter/loss/rate/corruption), a per-node **web console** (an xterm.js terminal over a
+  WebSocket to the node, ssh/shell, shown only while the node is up), and a **test-suites** panel
+  (view suites grouped config-time-first, run one on demand, expand per-test pass/fail/error, author
+  the suite set as JSON; a "config-time failed" badge when the last gate failed) — controls in
+  focused `components/lab/*` components).
   Auth gate: a pathless layout route resolves `GET /auth/me` in `beforeLoad` and redirects to `/login`
-  on 401; action buttons are gated on the caller's permissions. API access goes through a typed,
+  on 401; action buttons are gated on the caller's permissions. Live updates: `useLabEvents`
+  (mounted in `AppShell`) subscribes to the `/events` SSE stream and invalidates the `['labs']`
+  query tree on each event, so lab state refreshes without polling. API access goes through a typed,
   zod-parsed fetch client (`src/lib/api.ts`). Gates: `pnpm typecheck` + `pnpm build`.
 - **`backend/`** — FastAPI (uv). Turns a declarative netlab definition into a running lab: runs
   `netlab create` to generate a containerlab topology, then deploys it through the clab-api server
   (piped inline as `topologyContent`). Config push is delegated to the netlab-runner. A stable lab
   name is injected into the definition (`set_lab_name`) so create/deploy/configure share one
-  identity; a nameless definition gets a generated `tl-<hex>`. A lab is a **durable record**: its
+  identity; a nameless definition gets a generated `tl-<hex>`. A distinct management `/24` is also
+  pinned per lab (`set_mgmt_subnet` + a `_network`), allocated from `MGMT_SUBNET_POOL` and stored on
+  the record so concurrent labs don't collide on netlab's default `192.168.121.0/24`; an explicit
+  `addressing.mgmt.ipv4` in the definition is honored instead. A lab is a **durable record**: its
   definition is persisted on deploy (a `labs` table) and *reused* on configure — the caller never
   resupplies it — and the record survives destroy (status flips to `destroyed`, definition retained).
   Config is env-sourced through a typed `load_settings(env) -> Result` loader (not pydantic-settings).
@@ -50,16 +69,44 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   node state from clab-api), `PUT /labs/{name}` (replace the stored definition — validated by a dry
   `netlab create`, name re-pinned so an edit can't rename the lab; applied only on the next
   (re)deploy), `POST /labs/{name}/redeploy` (rebuild from the stored definition via clab deploy
-  `reconfigure=true`, opt-in `configure`), `POST /labs/{name}/configure` (no body — reuses the stored
-  definition), `DELETE /labs/{name}`. **Runtime control/observability** over live clab-api state (not
+  `reconfigure=true`, opt-in `configure`), `POST /labs/{name}/configure` (reuses the stored
+  definition), `DELETE /labs/{name}`. **Test suites** (Twinlab's own validation, not `netlab
+  validate` — see ROADMAP Phase 5): declarative assertions stored on the lab record (never sent to
+  `netlab create`), each running a command over clab-api `exec` and matching stdout with a safe
+  primitive (contains/not_contains/matches/json_path; no expression eval), polled until they pass or
+  a per-test `wait` elapses. `GET/PUT /labs/{name}/test-suites` (read/author), `POST
+  /labs/{name}/test-suites/{suite}/run` (run one on demand). A suite's `stage` (`config-time` |
+  `runtime`) controls only *automatic* execution: `config-time` suites run at the end of a configure
+  (deploy/redeploy/configure, gated by `skip_config_time_checks`) and gate "config done" — a failure
+  leaves the lab deployed but sets `config_time_ok=false` and returns status `validation_failed`, so
+  a failed config is unambiguous (surfaced in list/detail + a UI badge). The runner + pure matcher
+  live in `services/validation.py`; results persist per-suite in `last_validation`.
+  **Runtime control/observability** over live clab-api state (not
   the definition): `POST /labs/{name}/nodes/{node}/{start|stop|restart|pause|unpause}` and
   `POST /labs/{name}/{start|stop|restart}` (power control), `POST /labs/{name}/{pause|unpause}`
   (whole-lab freeze — clab-api has no lab-level pause, so this fans out over the nodes, non-atomic),
   `POST /labs/{name}/save` (persist running config), `GET /labs/{name}/nodes/{node}/logs` (container
-  logs, `?tail=`), `GET /labs/{name}/interfaces` (per-node interface inventory). Node state carries
-  the management IP (`mgmt_ip`, from clab's `ipv4_address`) for a copy-paste `ssh` command. DB-backed auth + RBAC guard them (opaque
-  session cookies; `lab:read` for reads/logs/interfaces, `lab:create` for deploy/edit/redeploy,
-  `lab:configure` for configure/power-control/save, `lab:destroy`, `user:manage`). The clab-api
+  logs, `?tail=`), `GET /labs/{name}/interfaces` (per-node interface inventory), and **netem link
+  impairment** keyed by node+interface (`GET/POST /labs/{name}/nodes/{node}/netem` show/set delay/
+  jitter/loss/rate/corruption, `POST .../netem/reset` clear — the node's container is resolved from
+  live state, and these routes precede the `{action}` node route so `netem` isn't captured by the
+  action path param). Node state carries
+  the management IP (`mgmt_ip`, from clab's `ipv4_address`) for a copy-paste `ssh` command. A
+  **Server-Sent Events** stream at `GET /events` (`lab:read`) relays clab-api's live lab events
+  (distilled to `{lab, node, action, timestamp}`), auth resolved up front so the long-lived
+  connection doesn't pin a DB session, so the frontend refreshes without polling. A **web terminal**
+  WebSocket at `WS /labs/{name}/nodes/{node}/terminal?protocol=ssh|shell` (`lab:terminal`) proxies
+  clab-api's terminal-session stream: it authorizes off the handshake cookie *before* accept and
+  releases the DB session before the relay (same rule as `/events`), creates a clab-api terminal
+  session, and relays its JSON frames transparently in both directions (the browser does its own
+  base64 decode), deleting the session on close. clab-api's terminal stream is a client WebSocket, so
+  it uses the `websockets` library (httpx can't); terminal-sessions accepts the short node name, so no
+  container resolution is needed. DB-backed auth + RBAC guard them (opaque
+  session cookies; `lab:read` for reads/logs/interfaces/events/netem-show/test-suite-read, `lab:create`
+  for deploy/edit/redeploy/test-suite-author, `lab:configure` for configure/power-control/save/netem-set
+  (the automatic config-time run rides it), `lab:validate` for running a suite on demand, `lab:terminal`
+  for the node console, `lab:destroy`,
+  `user:manage`). The clab-api
   client (`services/clab_api.py`) routes every authenticated call through one `_authed` helper.
   Errors-as-values throughout; `try`/`except` only at the subprocess/httpx/pydantic boundaries.
 - **`netlab-runner/`** — FastAPI (uv) config-push sidecar. `POST /configure {definition}` runs

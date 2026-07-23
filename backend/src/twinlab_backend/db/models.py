@@ -7,7 +7,19 @@ the set of permission names is defined in code — see `auth.permissions`.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text, Uuid, func
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    Uuid,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from twinlab_backend.db.base import Base
@@ -85,6 +97,25 @@ class Lab(Base):
     # "deployed" | "destroyed". "stored" (saved but never deployed) is reserved
     # for a future save-only flow; today's flows only produce the first two.
     status: Mapped[str] = mapped_column(String(16))
+    # The management /24 assigned to this lab (e.g. "10.77.3.0/24"), baked into
+    # the stored definition. Kept per-record so allocation avoids it for the
+    # lab's whole lifetime. Nullable: rows predating the feature, and labs never
+    # given one, carry NULL (Postgres allows many NULLs under a unique index).
+    # UNIQUE so a subnet is reserved atomically: concurrent deploys that pick the
+    # same /24 can't both commit — the loser retries with the next free one.
+    mgmt_subnet: Mapped[str | None] = mapped_column(String(18), unique=True, default=None)
+    # Declarative test suites (the source of truth for what validation runs),
+    # stored as JSON — the serialized `dict[str, TestSuite]`. Never sent to
+    # `netlab create`, so it can't trip netlab's topology attribute validation.
+    # NULL means the lab has no suites.
+    test_suites: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # The last run of each suite, keyed by suite name (serialized SuiteReport), so
+    # the UI can show each suite's standing without re-running. NULL until first run.
+    last_validation: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # The config-time validation gate from the most recent configure: NULL (not run
+    # / skipped / no config-time suites), True (passed), False (failed). An explicit
+    # flag so a lab whose config-time checks failed is unambiguous in a listing.
+    config_time_ok: Mapped[bool | None] = mapped_column(Boolean(), default=None)
     # The twinlab user who created the lab. SET NULL (not CASCADE): deleting a
     # user must not erase the durable definition they authored.
     created_by: Mapped[uuid.UUID | None] = mapped_column(

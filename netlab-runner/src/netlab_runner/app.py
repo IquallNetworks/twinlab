@@ -6,6 +6,8 @@ definition is a 422; a failed push still returns 200 with `succeeded: false` and
 the per-node breakdown, so the backend decides how to surface it.
 """
 
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -13,6 +15,13 @@ from starlette.concurrency import run_in_threadpool
 from netlab_runner.runner import ConfigureOutcome, configure
 
 app = FastAPI(title="Twinlab netlab-runner", version="0.1.0")
+
+# netlab keeps global state under ~/.netlab (a status dir, a defaults cache) that
+# two concurrent `netlab create`/`initial` runs would race on. HOME can't be
+# isolated per call here — netlab initial's Ansible needs the real ~/.ansible — so
+# serialize config pushes instead: one lab configures at a time. Deploys stay
+# concurrent; only this push step is single-file.
+_configure_lock = asyncio.Lock()
 
 
 class ConfigureRequest(BaseModel):
@@ -43,7 +52,9 @@ async def health() -> dict[str, str]:
 @app.post("/configure")
 async def configure_endpoint(request: ConfigureRequest) -> ConfigureResponse:
     # netlab create + initial is blocking subprocess work; keep it off the loop.
-    outcome = await run_in_threadpool(configure, request.definition)
+    # Serialized so concurrent pushes don't race on netlab's shared ~/.netlab.
+    async with _configure_lock:
+        outcome = await run_in_threadpool(configure, request.definition)
     if isinstance(outcome, ConfigureOutcome):
         return ConfigureResponse(
             lab_name=outcome.lab_name,

@@ -46,6 +46,7 @@ links: [r1-r2]
 const deploySchema = z.object({
   definition: z.string().min(1, 'A netlab definition is required'),
   configure: z.boolean(),
+  skipConfigTimeChecks: z.boolean(),
 })
 
 function DeployLabDialog() {
@@ -55,10 +56,14 @@ function DeployLabDialog() {
 
   const deploy = useMutation({
     mutationFn: (value: z.infer<typeof deploySchema>) =>
-      api.deployLab(value.definition, value.configure),
+      api.deployLab(value.definition, value.configure, value.skipConfigTimeChecks),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
-      toast.success(`Lab ${result.lab_name} ${result.status}`)
+      if (result.status === 'validation_failed') {
+        toast.error(`Lab ${result.lab_name} deployed, but config-time validation failed`)
+      } else {
+        toast.success(`Lab ${result.lab_name} ${result.status}`)
+      }
       setOpen(false)
       await navigate({ to: '/labs/$name', params: { name: result.lab_name } })
     },
@@ -66,7 +71,7 @@ function DeployLabDialog() {
   })
 
   const form = useForm({
-    defaultValues: { definition: '', configure: false },
+    defaultValues: { definition: '', configure: false, skipConfigTimeChecks: false },
     validators: { onSubmit: deploySchema },
     onSubmit: async ({ value }) => {
       await deploy.mutateAsync(value)
@@ -131,6 +136,27 @@ function DeployLabDialog() {
                 </div>
               )}
             </form.Field>
+
+            <form.Subscribe selector={(s) => s.values.configure}>
+              {(configureOn) =>
+                configureOn ? (
+                  <form.Field name="skipConfigTimeChecks">
+                    {(field) => (
+                      <div className="flex items-center gap-2 pl-6">
+                        <Checkbox
+                          id={field.name}
+                          checked={field.state.value}
+                          onCheckedChange={(c) => field.handleChange(c === true)}
+                        />
+                        <Label htmlFor={field.name} className="text-muted-foreground font-normal">
+                          Skip config-time checks
+                        </Label>
+                      </div>
+                    )}
+                  </form.Field>
+                ) : null
+              }
+            </form.Subscribe>
           </div>
 
           <DialogFooter>

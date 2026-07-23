@@ -12,6 +12,7 @@ that name into the definition before generating, so create/deploy/configure all
 share it.
 """
 
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -67,6 +68,53 @@ def set_lab_name(definition: str, name: str) -> Result[str, NetlabError]:
     return Ok(yaml.safe_dump(definition_map, sort_keys=False))
 
 
+def read_mgmt_subnet(definition: str) -> str | None:
+    """Return the definition's `addressing.mgmt.ipv4` (the management subnet), or
+    None if unset/unparseable. Lets the deploy path honor an explicitly-chosen
+    subnet instead of allocating one."""
+    try:
+        parsed: Any = yaml.safe_load(definition)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    addressing = cast("dict[str, object]", parsed).get("addressing")
+    if not isinstance(addressing, dict):
+        return None
+    mgmt = cast("dict[str, object]", addressing).get("mgmt")
+    if not isinstance(mgmt, dict):
+        return None
+    ipv4 = cast("dict[str, object]", mgmt).get("ipv4")
+    return ipv4 if isinstance(ipv4, str) else None
+
+
+def set_mgmt_subnet(definition: str, subnet: str, network_name: str) -> Result[str, NetlabError]:
+    """Pin the lab's management subnet (`addressing.mgmt.ipv4`) and give it a
+    distinct Docker network (`addressing.mgmt._network`) so concurrent labs don't
+    share one mgmt bridge. `_network` is only set when absent, honoring an
+    explicit choice; other `addressing.mgmt` keys are preserved."""
+    try:
+        parsed: Any = yaml.safe_load(definition)
+    except yaml.YAMLError as exc:
+        return Err(NetlabError(f"could not parse definition: {exc}", ""))
+    if not isinstance(parsed, dict):
+        return Err(NetlabError("definition is not a mapping", ""))
+
+    definition_map = cast("dict[str, object]", parsed)
+    addressing = definition_map.setdefault("addressing", {})
+    if not isinstance(addressing, dict):
+        return Err(NetlabError("addressing is not a mapping", ""))
+    addressing_map = cast("dict[str, object]", addressing)
+    mgmt = addressing_map.setdefault("mgmt", {})
+    if not isinstance(mgmt, dict):
+        return Err(NetlabError("addressing.mgmt is not a mapping", ""))
+    mgmt_map = cast("dict[str, object]", mgmt)
+
+    mgmt_map["ipv4"] = subnet
+    mgmt_map.setdefault("_network", network_name)
+    return Ok(yaml.safe_dump(definition_map, sort_keys=False))
+
+
 def create_clab_topology(definition: str) -> Result[ClabTopology, NetlabError]:
     """Run `netlab create` on a netlab definition and return the generated
     containerlab topology as parsed data. The definition must state each node's
@@ -79,6 +127,11 @@ def create_clab_topology(definition: str) -> Result[ClabTopology, NetlabError]:
             proc = subprocess.run(
                 ["netlab", "create", source.name],
                 cwd=workdir,
+                # netlab keeps global state under ~/.netlab and its mkdir isn't
+                # concurrency-safe: two creates racing to first-create it makes one
+                # fail. Point HOME at the per-call workdir so each invocation gets
+                # its own ~/.netlab and concurrent deploys can't collide.
+                env={**os.environ, "HOME": workdir},
                 capture_output=True,
                 text=True,
                 timeout=_CREATE_TIMEOUT_SECONDS,

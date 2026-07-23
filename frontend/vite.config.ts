@@ -32,7 +32,9 @@ export default defineConfig({
     port,
     allowedHosts,
     proxy: {
-      '/api/v1': { target: proxyTarget, changeOrigin: true },
+      // `ws: true` so the WebSocket upgrade for the node terminal
+      // (/api/v1/labs/.../terminal) is proxied too, not just HTTP requests.
+      '/api/v1': { target: proxyTarget, changeOrigin: true, ws: true },
     },
   },
 })

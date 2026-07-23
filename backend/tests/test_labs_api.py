@@ -1,7 +1,11 @@
 from datetime import UTC, datetime
 
+import pydantic
+import pytest
+
 from twinlab_backend.api.labs import lab_detail, lab_summary
 from twinlab_backend.db.models import Lab, User
+from twinlab_backend.models import NetemSetRequest
 from twinlab_backend.services.clab_api import NodeInfo
 
 _TS = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
@@ -59,3 +63,19 @@ def test_detail_empty_nodes_for_destroyed_lab() -> None:
     detail = lab_detail(lab, ())
     assert detail.status == "destroyed"
     assert detail.nodes == []
+
+
+def test_netem_set_requires_at_least_one_impairment() -> None:
+    with pytest.raises(pydantic.ValidationError, match="at least one impairment"):
+        _ = NetemSetRequest(interface="eth1")
+
+
+def test_netem_set_rejects_jitter_without_delay() -> None:
+    with pytest.raises(pydantic.ValidationError, match="jitter requires delay"):
+        _ = NetemSetRequest(interface="eth1", jitter="5ms")
+
+
+def test_netem_set_accepts_a_single_impairment() -> None:
+    # A lone impairment is valid; delay+jitter together satisfy the dependency.
+    assert NetemSetRequest(interface="eth1", loss=1.5).loss == 1.5
+    assert NetemSetRequest(interface="eth1", delay="50ms", jitter="5ms").jitter == "5ms"

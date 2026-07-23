@@ -47,10 +47,14 @@ services:
       # Local dev is HTTP, so the session cookie can't be Secure-only. Set true
       # (the default) behind HTTPS in any real deployment.
       SESSION_COOKIE_SECURE: "false"
+      # Pool the per-lab management /24s are carved from (concurrent labs get
+      # distinct mgmt subnets). Override in .env if 10.77/16 clashes with a route.
+      MGMT_SUBNET_POOL: ${MGMT_SUBNET_POOL:-10.77.0.0/16}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      - "8000:8000"
+    # No host port: the backend is reached only through the frontend's /api/v1
+    # proxy (over the compose network), keeping a single same-origin ingress. It
+    # still listens on 8000 inside the network for the proxy and health checks.
     depends_on:
       postgres:
         condition: service_healthy

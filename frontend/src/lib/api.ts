@@ -9,12 +9,16 @@ import {
   labInterfacesSchema,
   labListSchema,
   nodeLogsResponseSchema,
+  nodeNetemSchema,
   saveConfigResponseSchema,
+  suiteReportSchema,
+  testSuitesResponseSchema,
   userInfoSchema,
   userListSchema,
   userSummarySchema,
   type FreezeAction,
   type LifecycleAction,
+  type NetemSetInput,
   type NodeAction,
 } from '@/lib/schemas'
 
@@ -99,14 +103,21 @@ export const api = {
 
   listLabs: () => request('/labs', labListSchema),
   getLab: (name: string) => request(`/labs/${encodeURIComponent(name)}`, labDetailSchema),
-  deployLab: (definition: string, configure: boolean) =>
+  // skipConfigTimeChecks bypasses the automatic config-time suites (only meaningful
+  // alongside configure); it is off by default so convergence gating is on.
+  deployLab: (definition: string, configure: boolean, skipConfigTimeChecks = false) =>
     request('/labs', deployResponseSchema, {
       method: 'POST',
-      body: JSON.stringify({ definition, configure }),
+      body: JSON.stringify({
+        definition,
+        configure,
+        skip_config_time_checks: skipConfigTimeChecks,
+      }),
     }),
-  configureLab: (name: string) =>
+  configureLab: (name: string, skipConfigTimeChecks = false) =>
     request(`/labs/${encodeURIComponent(name)}/configure`, configureResponseSchema, {
       method: 'POST',
+      body: JSON.stringify({ skip_config_time_checks: skipConfigTimeChecks }),
     }),
   destroyLab: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}`, destroyResponseSchema, { method: 'DELETE' }),
@@ -116,10 +127,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ definition }),
     }),
-  redeployLab: (name: string, configure: boolean) =>
+  redeployLab: (name: string, configure: boolean, skipConfigTimeChecks = false) =>
     request(`/labs/${encodeURIComponent(name)}/redeploy`, deployResponseSchema, {
       method: 'POST',
-      body: JSON.stringify({ configure }),
+      body: JSON.stringify({ configure, skip_config_time_checks: skipConfigTimeChecks }),
     }),
   nodeAction: (name: string, node: string, action: NodeAction) =>
     request(
@@ -147,4 +158,40 @@ export const api = {
     ),
   labInterfaces: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/interfaces`, labInterfacesSchema),
+
+  // Netem link impairment, keyed by node + interface (the backend resolves the
+  // node to its container). Set/reset take lab:configure; show takes lab:read.
+  nodeNetem: (name: string, node: string) =>
+    request(
+      `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/netem`,
+      nodeNetemSchema,
+    ),
+  setNodeNetem: (name: string, node: string, input: NetemSetInput) =>
+    request(
+      `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/netem`,
+      labActionResponseSchema,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  resetNodeNetem: (name: string, node: string, iface: string) =>
+    request(
+      `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/netem/reset`,
+      labActionResponseSchema,
+      { method: 'POST', body: JSON.stringify({ interface: iface }) },
+    ),
+
+  // Test suites. Read/author (lab:read / lab:create); run one on demand
+  // (lab:validate). `testSuites` is the raw suite map, validated server-side.
+  getTestSuites: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}/test-suites`, testSuitesResponseSchema),
+  putTestSuites: (name: string, testSuites: unknown) =>
+    request(`/labs/${encodeURIComponent(name)}/test-suites`, testSuitesResponseSchema, {
+      method: 'PUT',
+      body: JSON.stringify({ test_suites: testSuites }),
+    }),
+  runTestSuite: (name: string, suite: string) =>
+    request(
+      `/labs/${encodeURIComponent(name)}/test-suites/${encodeURIComponent(suite)}/run`,
+      suiteReportSchema,
+      { method: 'POST' },
+    ),
 }

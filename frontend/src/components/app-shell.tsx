@@ -6,12 +6,15 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { meQueryOptions } from '@/lib/queries'
+import { useLabEvents } from '@/lib/use-lab-events'
 
 const PERM_USER_MANAGE = 'user:manage'
 
 export function AppShell() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  // Live lab updates over SSE while authenticated (this shell wraps the auth area).
+  useLabEvents()
   // Guaranteed present: the auth route's beforeLoad resolved it before render.
   const { data: me } = useQuery(meQueryOptions)
 

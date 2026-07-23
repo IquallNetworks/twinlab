@@ -23,20 +23,25 @@ export function RedeployDialog({ name }: { name: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [configure, setConfigure] = useState(false)
+  const [skipChecks, setSkipChecks] = useState(false)
 
   const redeploy = useMutation({
-    mutationFn: () => api.redeployLab(name, configure),
+    mutationFn: () => api.redeployLab(name, configure, skipChecks),
     onSuccess: async (result) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: labQueryOptions(name).queryKey }),
         queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey }),
         queryClient.invalidateQueries({ queryKey: labInterfacesQueryOptions(name).queryKey }),
       ])
-      toast.success(
-        result.status === 'configured'
-          ? `Redeployed and configured ${name}`
-          : `Redeployed ${name} (${result.nodes.length} nodes)`,
-      )
+      if (result.status === 'validation_failed') {
+        toast.error(`Redeployed and configured ${name}, but config-time validation failed`)
+      } else {
+        toast.success(
+          result.status === 'configured'
+            ? `Redeployed and configured ${name}`
+            : `Redeployed ${name} (${result.nodes.length} nodes)`,
+        )
+      }
       setOpen(false)
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Redeploy failed'),
@@ -55,13 +60,27 @@ export function RedeployDialog({ name }: { name: string }) {
             state on the current nodes is lost.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id="redeploy-configure"
-            checked={configure}
-            onCheckedChange={(v) => setConfigure(v === true)}
-          />
-          <Label htmlFor="redeploy-configure">Push configuration after redeploy</Label>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="redeploy-configure"
+              checked={configure}
+              onCheckedChange={(v) => setConfigure(v === true)}
+            />
+            <Label htmlFor="redeploy-configure">Push configuration after redeploy</Label>
+          </div>
+          {configure && (
+            <div className="flex items-center gap-2 pl-6">
+              <Checkbox
+                id="redeploy-skip-checks"
+                checked={skipChecks}
+                onCheckedChange={(v) => setSkipChecks(v === true)}
+              />
+              <Label htmlFor="redeploy-skip-checks" className="text-muted-foreground">
+                Skip config-time checks
+              </Label>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>

@@ -29,6 +29,8 @@ export const labNodeStateSchema = z.object({
 })
 export type LabNodeState = z.infer<typeof labNodeStateSchema>
 
+// config_time_ok: the last config-time validation gate — null (not run / skipped
+// / no config-time suites), true (passed), false (failed).
 export const labSummarySchema = z.object({
   name: z.string(),
   status: z.string(), // "deployed" | "destroyed"
@@ -36,6 +38,7 @@ export const labSummarySchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   nodes: z.number(),
+  config_time_ok: z.boolean().nullable(),
 })
 export type LabSummary = z.infer<typeof labSummarySchema>
 export const labListSchema = z.array(labSummarySchema)
@@ -48,8 +51,68 @@ export const labDetailSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   nodes: z.array(labNodeStateSchema),
+  config_time_ok: z.boolean().nullable(),
 })
 export type LabDetail = z.infer<typeof labDetailSchema>
+
+// --- Test suites (see components/lab/test-suites). A suite groups tests; each
+// runs a command on nodes and matches its stdout with one safe primitive. A
+// suite's stage (config-time | runtime) controls only automatic execution. ---
+
+export const testExpectationSchema = z.object({
+  contains: z.string().nullable().optional(),
+  not_contains: z.string().nullable().optional(),
+  matches: z.string().nullable().optional(),
+  json_path: z.string().nullable().optional(),
+  equals: z.union([z.string(), z.number(), z.boolean()]).nullable().optional(),
+})
+export type TestExpectation = z.infer<typeof testExpectationSchema>
+
+export const validationTestSchema = z.object({
+  nodes: z.array(z.string()),
+  command: z.string(),
+  expect: testExpectationSchema,
+  wait: z.number(),
+  description: z.string(),
+})
+export type ValidationTest = z.infer<typeof validationTestSchema>
+
+export const testSuiteSchema = z.object({
+  stage: z.string(), // "config-time" | "runtime"
+  description: z.string(),
+  tests: z.record(z.string(), validationTestSchema),
+})
+export type TestSuite = z.infer<typeof testSuiteSchema>
+
+export const testResultSchema = z.object({
+  test: z.string(),
+  node: z.string(),
+  status: z.string(), // "pass" | "fail" | "skip" | "error"
+  command: z.string(),
+  output: z.string(),
+  detail: z.string(),
+  elapsed_ms: z.number(),
+})
+export type TestResult = z.infer<typeof testResultSchema>
+
+export const suiteReportSchema = z.object({
+  suite: z.string(),
+  stage: z.string(),
+  passed: z.number(),
+  failed: z.number(),
+  skipped: z.number(),
+  errored: z.number(),
+  ran_at: z.string(),
+  results: z.array(testResultSchema),
+})
+export type SuiteReport = z.infer<typeof suiteReportSchema>
+
+export const testSuitesResponseSchema = z.object({
+  test_suites: z.record(z.string(), testSuiteSchema),
+  last_validation: z.record(z.string(), suiteReportSchema),
+  config_time_ok: z.boolean().nullable(),
+})
+export type TestSuitesResponse = z.infer<typeof testSuitesResponseSchema>
 
 export const nodeConfigResultSchema = z.object({
   node: z.string(),
@@ -64,6 +127,7 @@ export const deployResponseSchema = z.object({
   lab_name: z.string(),
   nodes: z.array(z.string()),
   configuration: z.array(nodeConfigResultSchema).nullable().optional(),
+  validation: z.array(suiteReportSchema).nullable().optional(),
 })
 export type DeployResponse = z.infer<typeof deployResponseSchema>
 
@@ -71,6 +135,7 @@ export const configureResponseSchema = z.object({
   status: z.string(),
   lab_name: z.string(),
   configuration: z.array(nodeConfigResultSchema),
+  validation: z.array(suiteReportSchema).nullable().optional(),
 })
 export type ConfigureResponse = z.infer<typeof configureResponseSchema>
 
@@ -116,8 +181,43 @@ export const saveConfigResponseSchema = z.object({
 })
 export type SaveConfigResponse = z.infer<typeof saveConfigResponseSchema>
 
+// Current netem link impairment on one node interface (see components/lab/netem).
+// delay/jitter are netem duration strings ("50ms", "" when unset); loss/corruption
+// are percentages; rate is kbit/s (0 = unshaped).
+export const netemImpairmentSchema = z.object({
+  interface: z.string(),
+  delay: z.string(),
+  jitter: z.string(),
+  loss: z.number(),
+  rate: z.number(),
+  corruption: z.number(),
+})
+export type NetemImpairment = z.infer<typeof netemImpairmentSchema>
+export const nodeNetemSchema = z.array(netemImpairmentSchema)
+
+// Impairment to apply. Every field is optional and independent; the backend
+// rejects an all-empty set and jitter without delay. Omitted fields are left
+// unchanged rather than zeroed, so we send only the ones the user filled in.
+export interface NetemSetInput {
+  interface: string
+  delay?: string
+  jitter?: string
+  loss?: number
+  rate?: number
+  corruption?: number
+}
+
 // Whole-lab power controls (clab-api native). The node menu adds pause/unpause;
 // whole-lab freeze reuses those verbs via a backend fan-out.
 export type LifecycleAction = 'start' | 'stop' | 'restart'
 export type FreezeAction = 'pause' | 'unpause'
 export type NodeAction = LifecycleAction | FreezeAction
+
+// A lab lifecycle event pushed over SSE (see lib/use-lab-events).
+export const labEventSchema = z.object({
+  lab: z.string(),
+  node: z.string().nullable(),
+  action: z.string(),
+  timestamp: z.string(),
+})
+export type LabEvent = z.infer<typeof labEventSchema>

@@ -1,5 +1,11 @@
 from twinlab_backend.result import Err, Ok
-from twinlab_backend.services.netlab import create_clab_topology, read_lab_name, set_lab_name
+from twinlab_backend.services.netlab import (
+    create_clab_topology,
+    read_lab_name,
+    read_mgmt_subnet,
+    set_lab_name,
+    set_mgmt_subnet,
+)
 
 # device and provider are stated explicitly — Twinlab never defaults them.
 _VALID_DEFINITION = """\
@@ -41,3 +47,32 @@ def test_set_lab_name_injects_and_overrides() -> None:
 
 def test_set_lab_name_rejects_non_mapping() -> None:
     assert isinstance(set_lab_name("- just\n- a\n- list\n", "x"), Err)
+
+
+def test_read_mgmt_subnet_returns_none_when_absent() -> None:
+    assert read_mgmt_subnet(_VALID_DEFINITION) is None
+    explicit = "addressing:\n  mgmt:\n    ipv4: 10.9.0.0/24\nnodes: [r1]\n"
+    assert read_mgmt_subnet(explicit) == "10.9.0.0/24"
+
+
+def test_set_mgmt_subnet_injects_ipv4_and_network() -> None:
+    injected = set_mgmt_subnet(_VALID_DEFINITION, "10.77.3.0/24", "tl-abc_mgmt")
+    assert isinstance(injected, Ok), injected
+    assert read_mgmt_subnet(injected.value) == "10.77.3.0/24"
+    assert "tl-abc_mgmt" in injected.value
+    # the original keys survive the round-trip
+    assert "defaults.device" in injected.value
+
+
+def test_set_mgmt_subnet_preserves_explicit_network() -> None:
+    definition = "addressing:\n  mgmt:\n    _network: custom_net\nnodes: [r1]\n"
+    injected = set_mgmt_subnet(definition, "10.77.4.0/24", "tl-def_mgmt")
+    assert isinstance(injected, Ok), injected
+    # an explicitly-set _network is honored; only ipv4 is (re)assigned
+    assert "custom_net" in injected.value
+    assert "tl-def_mgmt" not in injected.value
+    assert read_mgmt_subnet(injected.value) == "10.77.4.0/24"
+
+
+def test_set_mgmt_subnet_rejects_non_mapping_addressing() -> None:
+    assert isinstance(set_mgmt_subnet("addressing: not-a-map\n", "10.0.0.0/24", "n"), Err)

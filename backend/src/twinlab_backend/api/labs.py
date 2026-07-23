@@ -13,17 +13,20 @@ maps typed errors to status codes.
 """
 
 import secrets
+import uuid
 from http import HTTPStatus
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import CurrentUserDep, require
 from twinlab_backend.db.models import Lab
-from twinlab_backend.deps import ClabClientDep, RunnerClientDep, SessionDep
+from twinlab_backend.deps import ClabClientDep, RunnerClientDep, SessionDep, SettingsDep
 from twinlab_backend.models import (
+    ConfigureRequest,
     ConfigureResponse,
     DeployRequest,
     DeployResponse,
@@ -32,13 +35,20 @@ from twinlab_backend.models import (
     LabDetail,
     LabNodeState,
     LabSummary,
+    NetemImpairment,
+    NetemResetRequest,
+    NetemSetRequest,
     NodeConfigResult,
     NodeInterface,
     NodeInterfaces,
     NodeLogsResponse,
     RedeployRequest,
     SaveConfigResponse,
+    SuiteReport,
+    TestSuite,
+    TestSuitesResponse,
     UpdateDefinitionRequest,
+    UpdateTestSuitesRequest,
 )
 from twinlab_backend.result import Err, Ok, Result
 from twinlab_backend.services import lab_store
@@ -48,10 +58,19 @@ from twinlab_backend.services.clab_api import (
     DeployedLab,
     NodeInfo,
 )
+from twinlab_backend.services.clab_api import NetemImpairment as ClabNetemImpairment
 from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfaces
 from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
-from twinlab_backend.services.netlab import create_clab_topology, read_lab_name, set_lab_name
+from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
+from twinlab_backend.services.netlab import (
+    create_clab_topology,
+    read_lab_name,
+    read_mgmt_subnet,
+    set_lab_name,
+    set_mgmt_subnet,
+)
 from twinlab_backend.services.runner_client import ConfigureReport, RunnerClient, RunnerError
+from twinlab_backend.services.validation import run_config_time_suites, run_suite
 
 router = APIRouter(prefix="/labs", tags=["labs"])
 
@@ -61,6 +80,8 @@ router = APIRouter(prefix="/labs", tags=["labs"])
 LabName = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
 # Node names come from the definition (e.g. r1); same tight, path-safe charset.
 NodeName = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
+# Suite names come from the stored suites; same tight, path-safe charset.
+SuiteName = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
 # Whole-lab power controls clab-api exposes natively (POST /labs/{lab}/{action}).
 LifecycleAction = Literal["start", "stop", "restart"]
 # Per-node controls. clab-api adds pause/unpause on top of the lab-level set;
@@ -84,6 +105,76 @@ def _named_definition(definition: str, name: str) -> str:
             status_code=422, detail={"stage": "netlab", "message": named.error.message}
         )
     return named.value
+
+
+# Bounded retries when an auto-allocated subnet is raced by a concurrent deploy;
+# each retry excludes the winner (now committed), so a handful always converges.
+_RESERVE_ATTEMPTS = 8
+
+
+async def _resolve_mgmt_subnet(
+    named_definition: str, name: str, existing_subnet: str | None, db: AsyncSession, pool: str
+) -> tuple[str, str]:
+    """Decide a lab's management subnet and bake it into its definition, returning
+    `(definition_with_mgmt, subnet)`. Precedence: an explicit `addressing.mgmt.ipv4`
+    in the definition wins (intent is honored); else the record's existing subnet
+    is reused (stable across redeploys); else a free /24 is allocated from `pool`.
+    Takes the existing subnet as a plain value (not the ORM row) so it stays
+    correct across the reservation retry loop's rollbacks."""
+    explicit = read_mgmt_subnet(named_definition)
+    if explicit is not None:
+        subnet = explicit
+    elif existing_subnet is not None:
+        subnet = existing_subnet
+    else:
+        allocated = allocate_subnet(pool, await lab_store.used_mgmt_subnets(db))
+        if isinstance(allocated, Err):
+            raise _mgmt_subnet_failed(allocated.error)
+        subnet = allocated.value
+
+    injected = set_mgmt_subnet(named_definition, subnet, network_name=f"{name}_mgmt")
+    if isinstance(injected, Err):
+        raise _netlab_failed(injected.error.message, injected.error.stderr)
+    return injected.value, subnet
+
+
+async def _reserve_deploy(
+    db: AsyncSession,
+    name: str,
+    named_definition: str,
+    existing_subnet: str | None,
+    owner_id: uuid.UUID,
+    pool: str,
+) -> tuple[str, str]:
+    """Resolve a mgmt subnet and reserve the lab row (`deploying`) BEFORE the slow
+    deploy, so two concurrent deploys can't claim the same /24. Returns
+    `(definition_with_mgmt, subnet)`. An auto-allocated subnet raced by another
+    deploy is retried; a fixed subnet (explicit in the definition, or the record's
+    own) can't be reallocated, so a clash 409s. A concurrent claim on the same
+    name also 409s."""
+    fixed = read_mgmt_subnet(named_definition) is not None or existing_subnet is not None
+    for _ in range(_RESERVE_ATTEMPTS):
+        definition, subnet = await _resolve_mgmt_subnet(
+            named_definition, name, existing_subnet, db, pool
+        )
+        reserved = await lab_store.reserve_lab(db, name, definition, subnet, owner_id)
+        if isinstance(reserved, Lab):
+            return definition, subnet
+        if reserved.reason == "name_taken":
+            raise HTTPException(
+                status_code=409,
+                detail={"stage": "labs", "message": f"lab '{name}' is being deployed"},
+            )
+        if fixed:  # subnet_taken on a subnet we can't reallocate
+            raise HTTPException(
+                status_code=409,
+                detail={"stage": "labs", "message": f"mgmt subnet {subnet} is already in use"},
+            )
+        # subnet_taken on an auto-allocated /24: retry — the winner is now excluded.
+    raise HTTPException(
+        status_code=503,
+        detail={"stage": "mgmt-subnet", "message": "could not reserve a free mgmt subnet"},
+    )
 
 
 def _to_models(report: ConfigureReport) -> list[NodeConfigResult]:
@@ -114,6 +205,7 @@ def lab_summary(lab: Lab, live: dict[str, tuple[NodeInfo, ...]]) -> LabSummary:
         created_at=lab.created_at,
         updated_at=lab.updated_at,
         nodes=len(live.get(lab.name, ())),
+        config_time_ok=lab.config_time_ok,
     )
 
 
@@ -126,7 +218,46 @@ def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...]) -> LabDetail:
         created_at=lab.created_at,
         updated_at=lab.updated_at,
         nodes=[_to_node_state(n) for n in nodes],
+        config_time_ok=lab.config_time_ok,
     )
+
+
+def _load_suites(raw: dict[str, object] | None) -> dict[str, TestSuite]:
+    """Parse a lab's stored suites back into the schema. The stored JSON was
+    validated on write, so a parse failure here is a corrupt row (a real error),
+    not a caller mistake."""
+    if not raw:
+        return {}
+    return {name: TestSuite.model_validate(spec) for name, spec in raw.items()}
+
+
+def _test_suites_response(lab: Lab) -> TestSuitesResponse:
+    last = lab.last_validation or {}
+    return TestSuitesResponse(
+        test_suites=_load_suites(lab.test_suites),
+        last_validation={name: SuiteReport.model_validate(rep) for name, rep in last.items()},
+        config_time_ok=lab.config_time_ok,
+    )
+
+
+async def _run_config_time(
+    clab: ClabApiClient, db: AsyncSession, lab: Lab, *, skip: bool
+) -> tuple[str, list[SuiteReport] | None]:
+    """Run the lab's config-time suites after a successful config push. Returns
+    `(status, reports)`: `configured` when they pass — or are skipped, or none
+    exist — and `validation_failed` when any fails. On a real run it persists the
+    per-suite results and the config-time gate (so a failed config is unambiguous
+    on the record); a skip leaves the prior gate untouched and reports nothing."""
+    suites = _load_suites(lab.test_suites)
+    if skip or not any(s.stage == "config-time" for s in suites.values()):
+        return "configured", None
+    reports = await run_config_time_suites(clab, lab.name, suites)
+    ok = all(r.ok for r in reports)
+    stored: dict[str, object] = {r.suite: r.model_dump(mode="json") for r in reports}
+    _ = await lab_store.record_validation(
+        db, lab.name, stored, config_time_ok=ok, set_config_time=True
+    )
+    return ("configured" if ok else "validation_failed"), reports
 
 
 def _logs_response(logs: ClabNodeLogs, node_name: str) -> NodeLogsResponse:
@@ -154,6 +285,36 @@ def _interfaces_response(nodes: tuple[ClabNodeInterfaces, ...]) -> list[NodeInte
     ]
 
 
+def _netem_model(impairment: ClabNetemImpairment) -> NetemImpairment:
+    return NetemImpairment(
+        interface=impairment.interface,
+        delay=impairment.delay,
+        jitter=impairment.jitter,
+        loss=impairment.loss,
+        rate=impairment.rate,
+        corruption=impairment.corruption,
+    )
+
+
+async def _resolve_container(clab: ClabApiClient, lab_name: str, node_name: str) -> str:
+    """Map a short node name to its clab container name via a live inspect. netem
+    is keyed by container (not the short node name clab-api's node routes accept),
+    so we resolve it from live state rather than reconstructing clab's naming."""
+    inspected = await clab.inspect(lab_name)
+    if isinstance(inspected, Err):
+        raise _clab_action_failed(inspected.error)
+    for node in inspected.value:
+        if node.node_name == node_name:
+            return node.container_name
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "stage": "clab-api",
+            "message": f"node '{node_name}' not found in lab '{lab_name}'",
+        },
+    )
+
+
 async def _push_config(
     runner: RunnerClient, definition: str
 ) -> Result[ConfigureReport, HTTPException]:
@@ -179,25 +340,38 @@ async def _live_detail(lab: Lab, clab: ClabApiClient) -> LabDetail:
     return lab_detail(lab, nodes)
 
 
-async def _run_deploy(definition: str, clab: ClabApiClient, *, reconfigure: bool) -> DeployedLab:
+async def _run_deploy(
+    definition: str, clab: ClabApiClient, *, reconfigure: bool
+) -> Result[DeployedLab, HTTPException]:
     """Generate the containerlab topology from a netlab definition and deploy it.
-    `reconfigure` overwrites a lab of the same name (redeploy). Raises the mapped
-    HTTPException on a netlab or clab-api failure."""
+    `reconfigure` overwrites a lab of the same name (redeploy). Returns the mapped
+    HTTPException as an error value so the caller can release a reservation before
+    re-raising, rather than unwinding through an exception."""
     # netlab create is blocking subprocess work; keep it off the event loop.
     topology = await run_in_threadpool(create_clab_topology, definition)
     if isinstance(topology, Err):
-        raise _netlab_failed(topology.error.message, topology.error.stderr)
+        return Err(_netlab_failed(topology.error.message, topology.error.stderr))
     deployed = await clab.deploy(topology.value, reconfigure=reconfigure)
     if isinstance(deployed, Err):
-        raise _deploy_failed(deployed.error.message)
-    return deployed.value
+        return Err(_deploy_failed(deployed.error.message))
+    return Ok(deployed.value)
 
 
 async def _finish_deploy(
-    deployed: DeployedLab, definition: str, runner: RunnerClient, *, configure: bool
+    deployed: DeployedLab,
+    definition: str,
+    runner: RunnerClient,
+    clab: ClabApiClient,
+    db: AsyncSession,
+    lab: Lab,
+    *,
+    configure: bool,
+    skip_config_time: bool,
 ) -> DeployResponse:
-    """Shared tail of deploy and redeploy: optionally push config, then build the
-    response. Raises on a config-push failure."""
+    """Shared tail of deploy and redeploy: optionally push config, then run the
+    config-time suites and build the response. Raises on a config-push failure; a
+    config-time validation failure is reported (status `validation_failed`), not
+    raised — the lab stays deployed."""
     nodes = [n.node_name for n in deployed.nodes]
     if not configure:
         return DeployResponse(status="deployed", lab_name=deployed.name, nodes=nodes)
@@ -208,8 +382,13 @@ async def _finish_deploy(
     configuration = _to_models(report)
     if not report.succeeded:
         raise _config_failed(report.lab_name, configuration)
+    status, validation = await _run_config_time(clab, db, lab, skip=skip_config_time)
     return DeployResponse(
-        status="configured", lab_name=deployed.name, nodes=nodes, configuration=configuration
+        status=status,
+        lab_name=deployed.name,
+        nodes=nodes,
+        configuration=configuration,
+        validation=validation,
     )
 
 
@@ -220,34 +399,75 @@ async def deploy_lab(
     runner: RunnerClientDep,
     db: SessionDep,
     user: CurrentUserDep,
+    settings: SettingsDep,
 ) -> DeployResponse:
     name = read_lab_name(request.definition) or _generate_lab_name()
 
     existing = await lab_store.get_lab(db, name)
-    if existing is not None and existing.status == lab_store.STATUS_DEPLOYED:
+    if existing is not None and existing.status in (
+        lab_store.STATUS_DEPLOYED,
+        lab_store.STATUS_DEPLOYING,
+    ):
         raise HTTPException(
             status_code=409,
             detail={"stage": "labs", "message": f"lab '{name}' is already deployed"},
         )
+    # Capture as plain values: the row may be re-fetched across reservation retries.
+    created_new = existing is None
+    existing_subnet = existing.mgmt_subnet if existing is not None else None
 
-    definition = _named_definition(request.definition, name)
+    named_definition = _named_definition(request.definition, name)
+    # Reserve the subnet + row (status `deploying`) before the slow deploy, so
+    # concurrent deploys can't collide on a /24. The definition (mgmt baked in) is
+    # persisted here; configure reuses it.
+    definition, _subnet = await _reserve_deploy(
+        db, name, named_definition, existing_subnet, user.id, settings.mgmt_subnet_pool
+    )
 
     deployed = await _run_deploy(definition, clab, reconfigure=False)
-
-    # Persist the definition now that the lab is up; configure reuses it.
-    await lab_store.save_deployed(db, deployed.name, definition, user.id)
-
-    return await _finish_deploy(deployed, definition, runner, configure=request.configure)
+    if isinstance(deployed, Err):
+        # Deploy failed after the reservation; free it (delete a fresh row, or
+        # revert a re-armed destroyed lab) so its subnet and name don't leak.
+        await lab_store.release_reservation(db, name, created_new=created_new)
+        raise deployed.error
+    _ = await lab_store.mark_deployed(db, name)
+    # Persist any suites supplied with the deploy before the config-time run reads
+    # them; a first deploy+configure can then gate on its own convergence checks.
+    if request.test_suites is not None:
+        _ = await lab_store.update_test_suites(
+            db, name, {n: s.model_dump(mode="json") for n, s in request.test_suites.items()}
+        )
+    lab = await lab_store.get_lab(db, name)
+    if lab is None:  # just deployed and stored; absence would be an internal fault
+        raise HTTPException(
+            status_code=500, detail={"stage": "labs", "message": f"lab '{name}' vanished"}
+        )
+    return await _finish_deploy(
+        deployed.value,
+        definition,
+        runner,
+        clab,
+        db,
+        lab,
+        configure=request.configure,
+        skip_config_time=request.skip_config_time_checks,
+    )
 
 
 @router.put("/{lab_name}", dependencies=[Depends(require(perms.LAB_CREATE))])
 async def update_lab_definition(
-    lab_name: LabName, request: UpdateDefinitionRequest, clab: ClabClientDep, db: SessionDep
+    lab_name: LabName,
+    request: UpdateDefinitionRequest,
+    clab: ClabClientDep,
+    db: SessionDep,
+    settings: SettingsDep,
 ) -> LabDetail:
     # Editing a lab's definition is authoring the topology, so it takes lab:create.
     # The lab's name is fixed by the record and re-pinned here, so the edit can't
-    # rename (and orphan) the lab. The running lab is untouched until a redeploy;
-    # we validate the new definition by generating from it and reject a broken one.
+    # rename (and orphan) the lab; its mgmt subnet is likewise re-pinned so an edit
+    # keeps the same mgmt network (unless the edit names its own). The running lab
+    # is untouched until a redeploy; we validate the new definition by generating
+    # from it and reject a broken one.
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise HTTPException(
@@ -255,12 +475,20 @@ async def update_lab_definition(
         )
 
     definition = _named_definition(request.definition, lab_name)
+    definition, mgmt_subnet = await _resolve_mgmt_subnet(
+        definition, lab_name, lab.mgmt_subnet, db, settings.mgmt_subnet_pool
+    )
     validated = await run_in_threadpool(create_clab_topology, definition)
     if isinstance(validated, Err):
         raise _netlab_failed(validated.error.message, validated.error.stderr)
 
-    updated = await lab_store.update_definition(db, lab_name, definition)
+    updated = await lab_store.update_definition(db, lab_name, definition, mgmt_subnet)
     if isinstance(updated, lab_store.LabStoreError):
+        if updated.reason == "subnet_taken":
+            raise HTTPException(
+                status_code=409,
+                detail={"stage": "labs", "message": f"mgmt subnet {mgmt_subnet} is already in use"},
+            )
         raise HTTPException(
             status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
         )
@@ -284,10 +512,23 @@ async def redeploy_lab(
             status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
         )
 
+    # Redeploy reuses the stored subnet (baked into the definition), so there's no
+    # allocation and no reservation race to guard here.
     deployed = await _run_deploy(lab.definition, clab, reconfigure=True)
-    # Preserve the original owner and definition; only flip status back to deployed.
+    if isinstance(deployed, Err):
+        raise deployed.error
+    # Preserve the original owner, definition, and subnet; only flip status.
     _ = await lab_store.mark_deployed(db, lab_name)
-    return await _finish_deploy(deployed, lab.definition, runner, configure=request.configure)
+    return await _finish_deploy(
+        deployed.value,
+        lab.definition,
+        runner,
+        clab,
+        db,
+        lab,
+        configure=request.configure,
+        skip_config_time=request.skip_config_time_checks,
+    )
 
 
 @router.get("", dependencies=[Depends(require(perms.LAB_READ))])
@@ -312,11 +553,17 @@ async def get_lab(lab_name: LabName, clab: ClabClientDep, db: SessionDep) -> Lab
 
 @router.post("/{lab_name}/configure", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
 async def configure_nodes(
-    lab_name: LabName, runner: RunnerClientDep, db: SessionDep
+    lab_name: LabName,
+    clab: ClabClientDep,
+    runner: RunnerClientDep,
+    db: SessionDep,
+    request: ConfigureRequest | None = None,
 ) -> ConfigureResponse:
     # The definition is the lab's stored source of truth; the caller does not
     # resupply it. Config rendering is deterministic, so it reproduces the
-    # intended per-node config.
+    # intended per-node config. After the push, the lab's config-time suites run
+    # (unless skipped) to gate "config done". The body is optional (a bare
+    # configure keeps the default: run the checks).
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise HTTPException(
@@ -330,7 +577,76 @@ async def configure_nodes(
     configuration = _to_models(report)
     if not report.succeeded:
         raise _config_failed(lab_name, configuration)
-    return ConfigureResponse(status="configured", lab_name=lab_name, configuration=configuration)
+    skip = request.skip_config_time_checks if request is not None else False
+    status, validation = await _run_config_time(clab, db, lab, skip=skip)
+    return ConfigureResponse(
+        status=status, lab_name=lab_name, configuration=configuration, validation=validation
+    )
+
+
+# --- Test suites: declared assertions run against the live lab. Read/author with
+# lab:read / lab:create; run on demand with lab:validate (the automatic config-time
+# run rides lab:configure, inside configure). ---
+
+
+@router.get("/{lab_name}/test-suites", dependencies=[Depends(require(perms.LAB_READ))])
+async def get_test_suites(lab_name: LabName, db: SessionDep) -> TestSuitesResponse:
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise HTTPException(
+            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
+        )
+    return _test_suites_response(lab)
+
+
+@router.put("/{lab_name}/test-suites", dependencies=[Depends(require(perms.LAB_CREATE))])
+async def put_test_suites(
+    lab_name: LabName, request: UpdateTestSuitesRequest, db: SessionDep
+) -> TestSuitesResponse:
+    # Authoring a lab's tests is authoring the lab, so it takes lab:create (like
+    # editing the definition). Suites are stored on the record, not in the netlab
+    # definition, and take effect on the next validation run.
+    stored: dict[str, object] = {
+        name: suite.model_dump(mode="json") for name, suite in request.test_suites.items()
+    }
+    updated = await lab_store.update_test_suites(db, lab_name, stored)
+    if isinstance(updated, lab_store.LabStoreError):
+        raise HTTPException(
+            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
+        )
+    return _test_suites_response(updated)
+
+
+@router.post(
+    "/{lab_name}/test-suites/{suite}/run",
+    dependencies=[Depends(require(perms.LAB_VALIDATE))],
+)
+async def run_test_suite(
+    lab_name: LabName, suite: SuiteName, clab: ClabClientDep, db: SessionDep
+) -> SuiteReport:
+    # Run one suite on demand — any stage; a config-time suite can be re-run here
+    # too. The result is persisted (updating just this suite's last run) but the
+    # config-time gate is left untouched: a manual run isn't a configure.
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise HTTPException(
+            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
+        )
+    target = _load_suites(lab.test_suites).get(suite)
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"stage": "labs", "message": f"lab '{lab_name}' has no suite '{suite}'"},
+        )
+    report = await run_suite(clab, lab_name, suite, target)
+    _ = await lab_store.record_validation(
+        db,
+        lab_name,
+        {suite: report.model_dump(mode="json")},
+        config_time_ok=None,
+        set_config_time=False,
+    )
+    return report
 
 
 @router.delete("/{lab_name}", dependencies=[Depends(require(perms.LAB_DESTROY))])
@@ -351,6 +667,60 @@ async def destroy_lab(lab_name: LabName, clab: ClabClientDep, db: SessionDep) ->
 # --- Runtime control & observability (operate on live clab-api state, not the
 # stored definition). Power control and save mutate the running lab, so they take
 # lab:configure; logs and interfaces are read-only (lab:read). ---
+
+
+# Netem link impairment (POST set/reset mutate → lab:configure; GET show → lab:read).
+# These are keyed by container + interface; the node's container is resolved live.
+# Declared BEFORE the `{action}` node route so the static `netem` segment isn't
+# captured by the NodeAction path param (which would 422 instead of matching here).
+@router.get(
+    "/{lab_name}/nodes/{node_name}/netem",
+    dependencies=[Depends(require(perms.LAB_READ))],
+)
+async def show_node_netem(
+    lab_name: LabName, node_name: NodeName, clab: ClabClientDep
+) -> list[NetemImpairment]:
+    container = await _resolve_container(clab, lab_name, node_name)
+    result = await clab.show_netem(container)
+    if isinstance(result, Err):
+        raise _clab_action_failed(result.error)
+    return [_netem_model(i) for i in result.value]
+
+
+@router.post(
+    "/{lab_name}/nodes/{node_name}/netem",
+    dependencies=[Depends(require(perms.LAB_CONFIGURE))],
+)
+async def set_node_netem(
+    lab_name: LabName, node_name: NodeName, request: NetemSetRequest, clab: ClabClientDep
+) -> LabActionResponse:
+    container = await _resolve_container(clab, lab_name, node_name)
+    result = await clab.set_netem(
+        container,
+        request.interface,
+        delay=request.delay,
+        jitter=request.jitter,
+        loss=request.loss,
+        rate=request.rate,
+        corruption=request.corruption,
+    )
+    if isinstance(result, Err):
+        raise _clab_action_failed(result.error)
+    return LabActionResponse(message=result.value)
+
+
+@router.post(
+    "/{lab_name}/nodes/{node_name}/netem/reset",
+    dependencies=[Depends(require(perms.LAB_CONFIGURE))],
+)
+async def reset_node_netem(
+    lab_name: LabName, node_name: NodeName, request: NetemResetRequest, clab: ClabClientDep
+) -> LabActionResponse:
+    container = await _resolve_container(clab, lab_name, node_name)
+    result = await clab.reset_netem(container, request.interface)
+    if isinstance(result, Err):
+        raise _clab_action_failed(result.error)
+    return LabActionResponse(message=result.value)
 
 
 @router.post(
@@ -410,7 +780,10 @@ async def node_logs(
 ) -> NodeLogsResponse:
     # 200 lines is a sane display default; large enough to be useful, small enough
     # not to ship a whole boot log by accident. Callers widen it via ?tail=.
-    result = await clab.node_logs(lab_name, node_name, tail=str(tail))
+    # clab-api's logs endpoint matches on the container name (not the short node
+    # name the action endpoints accept), so resolve it from live state first.
+    container = await _resolve_container(clab, lab_name, node_name)
+    result = await clab.node_logs(lab_name, container, tail=str(tail))
     if isinstance(result, Err):
         raise _clab_action_failed(result.error)
     return _logs_response(result.value, node_name)
@@ -468,6 +841,15 @@ def _clab_action_failed(error: ClabApiError) -> HTTPException:
     # An unknown lab/node surfaces as 404; anything else is an upstream failure.
     status = 404 if error.status_code == HTTPStatus.NOT_FOUND else 502
     return HTTPException(status_code=status, detail={"stage": "clab-api", "message": error.message})
+
+
+def _mgmt_subnet_failed(error: MgmtSubnetError) -> HTTPException:
+    # A misconfigured pool is a server config error (500); an exhausted pool is a
+    # capacity limit the operator can raise (503) — neither is the caller's fault.
+    status = 500 if error.reason == "invalid_pool" else 503
+    return HTTPException(
+        status_code=status, detail={"stage": "mgmt-subnet", "message": error.message}
+    )
 
 
 def _netlab_failed(message: str, stderr: str) -> HTTPException:

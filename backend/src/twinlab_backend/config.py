@@ -30,6 +30,7 @@ _OPTIONAL_ENV_KEYS = {
     "session_cookie_name": "SESSION_COOKIE_NAME",
     "session_ttl_hours": "SESSION_TTL_HOURS",
     "session_cookie_secure": "SESSION_COOKIE_SECURE",
+    "mgmt_subnet_pool": "MGMT_SUBNET_POOL",
 }
 
 
@@ -56,6 +57,13 @@ class Settings(BaseModel):
     session_cookie_name: str = "twinlab_session"
     session_ttl_hours: int = 8
     session_cookie_secure: bool = True
+
+    # Pool the per-lab management /24s are carved from, so concurrent labs get
+    # distinct mgmt subnets (netlab otherwise defaults every lab to
+    # 192.168.121.0/24 and they collide). Default sits in the roomy 10/8 private
+    # block, deliberately away from the host LAN (usually 192.168.x) and Docker's
+    # 172.16/12 bridges; override per deployment if 10.77/16 clashes with a route.
+    mgmt_subnet_pool: str = "10.77.0.0/16"
 
 
 @dataclass(frozen=True, slots=True)

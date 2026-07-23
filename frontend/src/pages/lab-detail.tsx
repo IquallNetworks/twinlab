@@ -6,8 +6,10 @@ import { toast } from 'sonner'
 import { EditDefinitionDialog } from '@/components/lab/edit-definition-dialog'
 import { LabInterfaces } from '@/components/lab/lab-interfaces'
 import { LabLifecycleControls } from '@/components/lab/lab-lifecycle-controls'
+import { NetemControls } from '@/components/lab/netem-controls'
 import { NodeControls } from '@/components/lab/node-controls'
 import { RedeployDialog } from '@/components/lab/redeploy-dialog'
+import { TestSuites } from '@/components/lab/test-suites'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,12 +36,19 @@ import {
 import { api, ApiError } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { formatDateTime, nodeStateBadgeVariant, statusBadgeVariant } from '@/lib/format'
-import { labQueryOptions, labsQueryOptions, meQueryOptions } from '@/lib/queries'
+import {
+  labQueryOptions,
+  labsQueryOptions,
+  meQueryOptions,
+  testSuitesQueryOptions,
+} from '@/lib/queries'
 
 const PERM_LAB_CREATE = 'lab:create'
 const PERM_LAB_CONFIGURE = 'lab:configure'
 const PERM_LAB_DESTROY = 'lab:destroy'
 const PERM_LAB_READ = 'lab:read'
+const PERM_LAB_TERMINAL = 'lab:terminal'
+const PERM_LAB_VALIDATE = 'lab:validate'
 
 /** Node management address plus a copy-paste `ssh <ip>` command. The command is
  * username-agnostic (device logins vary); it runs from the host, since the lab
@@ -89,8 +98,13 @@ export function LabDetailPage({ name }: { name: string }) {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: labQueryOptions(name).queryKey }),
         queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey }),
+        queryClient.invalidateQueries({ queryKey: testSuitesQueryOptions(name).queryKey }),
       ])
-      toast.success(`Configured ${result.lab_name} (${result.configuration.length} nodes)`)
+      if (result.status === 'validation_failed') {
+        toast.error(`Configured ${result.lab_name}, but config-time validation failed`)
+      } else {
+        toast.success(`Configured ${result.lab_name} (${result.configuration.length} nodes)`)
+      }
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Configure failed'),
   })
@@ -137,6 +151,9 @@ export function LabDetailPage({ name }: { name: string }) {
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold">{lab.name}</h1>
           <Badge variant={statusBadgeVariant(lab.status)}>{lab.status}</Badge>
+          {lab.config_time_ok === false && (
+            <Badge variant="destructive">config-time failed</Badge>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {can(PERM_LAB_CREATE) && <EditDefinitionDialog name={lab.name} definition={lab.definition} />}
@@ -243,8 +260,10 @@ export function LabDetailPage({ name }: { name: string }) {
                       <NodeControls
                         name={lab.name}
                         node={node.name}
+                        running={node.state === 'running'}
                         canConfigure={can(PERM_LAB_CONFIGURE)}
                         canRead={can(PERM_LAB_READ)}
+                        canTerminal={can(PERM_LAB_TERMINAL)}
                       />
                     </TableCell>
                   </TableRow>
@@ -256,6 +275,20 @@ export function LabDetailPage({ name }: { name: string }) {
       </Card>
 
       <LabInterfaces name={lab.name} enabled={isDeployed} />
+
+      <NetemControls
+        name={lab.name}
+        nodes={lab.nodes}
+        enabled={isDeployed}
+        canConfigure={can(PERM_LAB_CONFIGURE)}
+      />
+
+      <TestSuites
+        name={lab.name}
+        enabled={isDeployed}
+        canValidate={can(PERM_LAB_VALIDATE)}
+        canEdit={can(PERM_LAB_CREATE)}
+      />
 
       <Card>
         <CardHeader>

@@ -32,3 +32,15 @@ export const labInterfacesQueryOptions = (name: string) =>
     queryKey: ['labs', name, 'interfaces'],
     queryFn: () => api.labInterfaces(name),
   })
+
+export const nodeNetemQueryOptions = (name: string, node: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'netem', node],
+    queryFn: () => api.nodeNetem(name, node),
+  })
+
+export const testSuitesQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'test-suites'],
+    queryFn: () => api.getTestSuites(name),
+  })

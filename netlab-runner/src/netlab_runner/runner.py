@@ -121,7 +121,11 @@ def _lab_name(workdir: Path) -> str | None:
 
 def _run(argv: list[str], workdir: Path, timeout: int) -> subprocess.CompletedProcess[str] | str:
     """Run a netlab subcommand; return the completed process, or an error string
-    if it could not be launched."""
+    if it could not be launched. HOME is left at the real user home: `netlab
+    initial` drives Ansible, whose `community.docker` connection plugin lives under
+    ~/.ansible — overriding HOME hides it. Concurrent runs are instead prevented by
+    serializing configure at the HTTP layer (see app.py), so netlab's shared
+    ~/.netlab state is never touched by two invocations at once."""
     try:
         return subprocess.run(
             argv, cwd=workdir, capture_output=True, text=True, timeout=timeout, check=False

@@ -4,6 +4,7 @@ import { ChevronLeft, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { CustomConfig } from '@/components/lab/custom-config'
+import { LabAccess } from '@/components/lab/lab-access'
 import { EditDefinitionDialog } from '@/components/lab/edit-definition-dialog'
 import { LabInterfaces } from '@/components/lab/lab-interfaces'
 import { LabLifecycleControls } from '@/components/lab/lab-lifecycle-controls'
@@ -37,19 +38,17 @@ import {
 import { api, ApiError } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { formatDateTime, nodeStateBadgeVariant, statusBadgeVariant } from '@/lib/format'
-import {
-  labQueryOptions,
-  labsQueryOptions,
-  meQueryOptions,
-  testSuitesQueryOptions,
-} from '@/lib/queries'
+import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
 
-const PERM_LAB_CREATE = 'lab:create'
+// Per-lab permissions (from the lab detail payload — see lab.permissions): editing
+// the definition/suites/templates is lab:edit; delegating access is lab:grant.
+const PERM_LAB_EDIT = 'lab:edit'
 const PERM_LAB_CONFIGURE = 'lab:configure'
 const PERM_LAB_DESTROY = 'lab:destroy'
 const PERM_LAB_READ = 'lab:read'
 const PERM_LAB_TERMINAL = 'lab:terminal'
 const PERM_LAB_VALIDATE = 'lab:validate'
+const PERM_LAB_GRANT = 'lab:grant'
 
 /** Node management address plus a copy-paste `ssh <ip>` command. The command is
  * username-agnostic (device logins vary); it runs from the host, since the lab
@@ -90,8 +89,6 @@ export function LabDetailPage({ name }: { name: string }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { data: lab, isPending, isError, error } = useQuery(labQueryOptions(name))
-  const { data: me } = useQuery(meQueryOptions)
-  const can = (perm: string) => me?.permissions.includes(perm) ?? false
 
   const configure = useMutation({
     mutationFn: () => api.configureLab(name),
@@ -153,6 +150,9 @@ export function LabDetailPage({ name }: { name: string }) {
   }
 
   const isDeployed = lab.status === 'deployed'
+  // Gate on the caller's effective permissions *on this lab* (owner-implicit +
+  // global + per-lab grants), carried on the detail payload.
+  const can = (perm: string) => lab.permissions.includes(perm)
 
   return (
     <div className="flex flex-col gap-6">
@@ -167,8 +167,8 @@ export function LabDetailPage({ name }: { name: string }) {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {can(PERM_LAB_CREATE) && <EditDefinitionDialog name={lab.name} definition={lab.definition} />}
-          {can(PERM_LAB_CREATE) && <RedeployDialog name={lab.name} />}
+          {can(PERM_LAB_EDIT) && <EditDefinitionDialog name={lab.name} definition={lab.definition} />}
+          {can(PERM_LAB_EDIT) && <RedeployDialog name={lab.name} />}
           {can(PERM_LAB_CONFIGURE) && (
             <Button variant="outline" onClick={() => configure.mutate()} disabled={configure.isPending}>
               {configure.isPending ? 'Configuring…' : 'Configure'}
@@ -321,10 +321,12 @@ export function LabDetailPage({ name }: { name: string }) {
         name={lab.name}
         enabled={isDeployed}
         canValidate={can(PERM_LAB_VALIDATE)}
-        canEdit={can(PERM_LAB_CREATE)}
+        canEdit={can(PERM_LAB_EDIT)}
       />
 
-      <CustomConfig name={lab.name} canEdit={can(PERM_LAB_CREATE)} />
+      <CustomConfig name={lab.name} canEdit={can(PERM_LAB_EDIT)} />
+
+      {can(PERM_LAB_GRANT) && <LabAccess name={lab.name} owner={lab.owner} />}
 
       <Card>
         <CardHeader>

@@ -28,10 +28,11 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from twinlab_backend.auth import permissions as perms
-from twinlab_backend.auth.service import effective_permissions
+from twinlab_backend.auth.service import effective_permissions_for
 from twinlab_backend.auth.sessions import resolve_session
 from twinlab_backend.config import Settings
 from twinlab_backend.result import Err
+from twinlab_backend.services import lab_store
 from twinlab_backend.services.clab_api import ClabApiClient
 
 router = APIRouter(tags=["terminal"])
@@ -51,9 +52,9 @@ async def _fail(websocket: WebSocket, message: str) -> None:
     await websocket.close(code=_WS_INTERNAL_ERROR, reason=message[:_MAX_REASON_LEN])
 
 
-async def _authorize(websocket: WebSocket, settings: Settings) -> bool:
-    """Resolve the session cookie in a short-lived DB session and check it grants
-    `lab:terminal`. The session is closed before the caller starts the relay so a
+async def _authorize(websocket: WebSocket, settings: Settings, lab_name: str) -> bool:
+    """Resolve the session cookie in a short-lived DB session and check the caller
+    holds `lab:terminal` on *this* lab. The session is closed before the relay so a
     long-lived terminal doesn't hold a DB connection."""
     token = websocket.cookies.get(settings.session_cookie_name)
     if not token:
@@ -62,7 +63,11 @@ async def _authorize(websocket: WebSocket, settings: Settings) -> bool:
         resolved = await resolve_session(session, token)
         if isinstance(resolved, Err):
             return False
-        return perms.LAB_TERMINAL in effective_permissions(resolved.value)
+        lab = await lab_store.get_lab(session, lab_name)
+        if lab is None:
+            return False
+        granted = await effective_permissions_for(session, resolved.value, lab)
+        return perms.LAB_TERMINAL in granted
 
 
 async def _relay(browser: WebSocket, upstream: ClientConnection) -> None:
@@ -109,7 +114,7 @@ async def node_terminal(
     clab: ClabApiClient = websocket.app.state.clab_client
 
     # Auth before accept — a rejected handshake closes with 1008, no socket opened.
-    if not await _authorize(websocket, settings):
+    if not await _authorize(websocket, settings, name):
         await websocket.close(code=_WS_POLICY_VIOLATION)
         return
 

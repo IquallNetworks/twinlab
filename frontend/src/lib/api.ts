@@ -4,12 +4,18 @@ import {
   configureResponseSchema,
   deployResponseSchema,
   destroyResponseSchema,
+  grantSchema,
+  grantListSchema,
+  groupListSchema,
+  groupSummarySchema,
   labActionResponseSchema,
   labDetailSchema,
   labInterfacesSchema,
   labListSchema,
   nodeLogsResponseSchema,
   nodeNetemSchema,
+  principalsResponseSchema,
+  roleListSchema,
   saveConfigResponseSchema,
   suiteReportSchema,
   customConfigResponseSchema,
@@ -84,6 +90,12 @@ export interface CreateUserInput {
   roles: string[]
 }
 
+export interface CreateGrantInput {
+  principal_type: 'user' | 'group'
+  principal_id: string
+  role: string
+}
+
 export const api = {
   me: () => request('/auth/me', userInfoSchema),
   login: (username: string, password: string) =>
@@ -100,6 +112,51 @@ export const api = {
     request(`/users/${userId}/roles`, userSummarySchema, {
       method: 'PUT',
       body: JSON.stringify({ roles }),
+    }),
+
+  // The role catalog (names + scopes + permissions), served from the backend so
+  // role pickers don't hardcode the list. Any authenticated user may read it.
+  listRoles: () => request('/roles', roleListSchema),
+
+  // Minimal user+group directory (id + name) for the grant picker, available to any
+  // authenticated caller (a lab owner may lack the global user/group-manage rights).
+  listPrincipals: () => request('/principals', principalsResponseSchema),
+
+  // Groups (group:manage). A group holds global roles and can be granted lab roles;
+  // members inherit both.
+  listGroups: () => request('/groups', groupListSchema),
+  createGroup: (name: string, description: string) =>
+    request('/groups', groupSummarySchema, {
+      method: 'POST',
+      body: JSON.stringify({ name, description }),
+    }),
+  deleteGroup: (id: string) => requestVoid(`/groups/${id}`, { method: 'DELETE' }),
+  setGroupMembers: (id: string, userIds: string[]) =>
+    request(`/groups/${id}/members`, groupSummarySchema, {
+      method: 'PUT',
+      body: JSON.stringify({ user_ids: userIds }),
+    }),
+  setGroupRoles: (id: string, roles: string[]) =>
+    request(`/groups/${id}/roles`, groupSummarySchema, {
+      method: 'PUT',
+      body: JSON.stringify({ roles }),
+    }),
+
+  // Per-lab grants + ownership (lab:grant on the lab). A grant binds a lab role to a
+  // user or group; transfer reassigns ownership (owner-equivalent callers only).
+  listGrants: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}/grants`, grantListSchema),
+  createGrant: (name: string, input: CreateGrantInput) =>
+    request(`/labs/${encodeURIComponent(name)}/grants`, grantSchema, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteGrant: (name: string, bindingId: string) =>
+    requestVoid(`/labs/${encodeURIComponent(name)}/grants/${bindingId}`, { method: 'DELETE' }),
+  transferOwner: (name: string, userId: string) =>
+    request(`/labs/${encodeURIComponent(name)}/owner`, grantSchema, {
+      method: 'PUT',
+      body: JSON.stringify({ user_id: userId }),
     }),
 
   listLabs: () => request('/labs', labListSchema),

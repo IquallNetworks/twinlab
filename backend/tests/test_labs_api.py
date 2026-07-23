@@ -31,23 +31,24 @@ _NODE = NodeInfo(
 
 def test_summary_counts_live_nodes_and_owner() -> None:
     lab = _lab("tmp1", "deployed", User(username="alice", password_hash="x"))
-    summary = lab_summary(lab, {"tmp1": (_NODE, _NODE)})
+    summary = lab_summary(lab, {"tmp1": (_NODE, _NODE)}, ["lab:read"])
     assert summary.name == "tmp1"
     assert summary.status == "deployed"
     assert summary.owner == "alice"
     assert summary.nodes == 2
+    assert summary.permissions == ["lab:read"]
 
 
 def test_summary_zero_nodes_when_absent_from_live() -> None:
     lab = _lab("tmp1", "destroyed", None)
-    summary = lab_summary(lab, {})
+    summary = lab_summary(lab, {}, [])
     assert summary.owner is None
     assert summary.nodes == 0
 
 
 def test_detail_maps_stored_definition_and_live_nodes() -> None:
     lab = _lab("tmp1", "deployed", User(username="bob", password_hash="x"))
-    detail = lab_detail(lab, (_NODE,))
+    detail = lab_detail(lab, (_NODE,), ["lab:read"])
     assert detail.definition == "name: x\n"
     assert detail.owner == "bob"
     assert len(detail.nodes) == 1
@@ -60,7 +61,7 @@ def test_detail_maps_stored_definition_and_live_nodes() -> None:
 
 def test_detail_empty_nodes_for_destroyed_lab() -> None:
     lab = _lab("tmp1", "destroyed", None)
-    detail = lab_detail(lab, ())
+    detail = lab_detail(lab, (), [])
     assert detail.status == "destroyed"
     assert detail.nodes == []
 

@@ -16,6 +16,29 @@ export const usersQueryOptions = queryOptions({
   queryFn: () => api.listUsers(),
 })
 
+// The role catalog rarely changes within a session; cache it a while.
+export const rolesQueryOptions = queryOptions({
+  queryKey: ['roles'],
+  queryFn: () => api.listRoles(),
+  staleTime: 300_000,
+})
+
+export const groupsQueryOptions = queryOptions({
+  queryKey: ['groups'],
+  queryFn: () => api.listGroups(),
+})
+
+export const principalsQueryOptions = queryOptions({
+  queryKey: ['principals'],
+  queryFn: () => api.listPrincipals(),
+})
+
+export const labGrantsQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'grants'],
+    queryFn: () => api.listGrants(name),
+  })
+
 export const labsQueryOptions = queryOptions({
   queryKey: ['labs'],
   queryFn: () => api.listLabs(),

@@ -1,8 +1,9 @@
 """Idempotent startup seeding: permissions, roles, and the bootstrap admin.
 
-Runs in the app lifespan (after migrations). Keeps the code-defined RBAC in sync
-with the database and guarantees at least one admin exists, so the system is
-never left open-by-default.
+Runs in the app lifespan (after migrations). Keeps the code-defined RBAC catalog in
+sync with the DB introspection tables and guarantees at least one admin exists, so
+the system is never left open-by-default. Authorization itself resolves from the code
+catalog (`auth.permissions`); these tables exist so roles/permissions can be listed.
 """
 
 from sqlalchemy import func, select
@@ -10,12 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.passwords import hash_password
-from twinlab_backend.db.models import Permission, Role, User
+from twinlab_backend.db.models import Permission, Role, RoleBinding, User
 
 
 async def seed_rbac(session: AsyncSession) -> None:
-    """Ensure every code-defined permission and role exists and each role is
-    wired to its permissions. Idempotent."""
+    """Ensure every code-defined permission and role exists and each role is wired to
+    its permissions. Idempotent."""
     by_name = {p.name: p for p in (await session.scalars(select(Permission))).all()}
     for name in perms.ALL_PERMISSIONS:
         if name not in by_name:
@@ -35,16 +36,21 @@ async def seed_rbac(session: AsyncSession) -> None:
 
 
 async def ensure_admin(session: AsyncSession, username: str, password: str) -> None:
-    """Create the bootstrap admin, but only when there are no users yet."""
+    """Create the bootstrap admin (with a global `admin` binding), but only when there
+    are no users yet."""
     user_count = await session.scalar(select(func.count()).select_from(User))
     if user_count:
         return
 
-    admin_role = await session.scalar(select(Role).where(Role.name == perms.ADMIN_ROLE))
-    if admin_role is None:
-        raise RuntimeError("admin role missing; seed_rbac must run before ensure_admin")
-
     admin = User(username=username, password_hash=hash_password(password))
-    admin.roles = [admin_role]
     session.add(admin)
+    await session.flush()  # assign admin.id before the binding references it
+    session.add(
+        RoleBinding(
+            principal_type=perms.PRINCIPAL_USER,
+            principal_id=admin.id,
+            role_name=perms.ADMIN_ROLE,
+            scope_type=perms.SCOPE_GLOBAL,
+        )
+    )
     await session.commit()

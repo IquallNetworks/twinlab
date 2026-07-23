@@ -9,6 +9,7 @@ import { meQueryOptions } from '@/lib/queries'
 import { useLabEvents } from '@/lib/use-lab-events'
 
 const PERM_USER_MANAGE = 'user:manage'
+const PERM_GROUP_MANAGE = 'group:manage'
 
 export function AppShell() {
   const navigate = useNavigate()
@@ -28,6 +29,7 @@ export function AppShell() {
   })
 
   const canManageUsers = me?.permissions.includes(PERM_USER_MANAGE) ?? false
+  const canManageGroups = me?.permissions.includes(PERM_GROUP_MANAGE) ?? false
 
   return (
     <div className="min-h-screen">
@@ -49,6 +51,14 @@ export function AppShell() {
                 className="text-muted-foreground data-[status=active]:text-foreground"
               >
                 Users
+              </Link>
+            )}
+            {canManageGroups && (
+              <Link
+                to="/groups"
+                className="text-muted-foreground data-[status=active]:text-foreground"
+              >
+                Groups
               </Link>
             )}
           </nav>

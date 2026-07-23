@@ -21,7 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from twinlab_backend.auth import permissions as perms
-from twinlab_backend.auth.dependencies import CurrentUserDep, require
+from twinlab_backend.auth.dependencies import CurrentUserDep, require_global, require_lab
+from twinlab_backend.auth.service import effective_permissions_bulk, effective_permissions_for
 from twinlab_backend.db.models import Lab
 from twinlab_backend.deps import (
     BuiltinLibraryDep,
@@ -200,7 +201,9 @@ def _to_node_state(node: NodeInfo) -> LabNodeState:
     )
 
 
-def lab_summary(lab: Lab, live: dict[str, tuple[NodeInfo, ...]]) -> LabSummary:
+def lab_summary(
+    lab: Lab, live: dict[str, tuple[NodeInfo, ...]], permissions: list[str]
+) -> LabSummary:
     return LabSummary(
         name=lab.name,
         status=lab.status,
@@ -209,10 +212,11 @@ def lab_summary(lab: Lab, live: dict[str, tuple[NodeInfo, ...]]) -> LabSummary:
         updated_at=lab.updated_at,
         nodes=len(live.get(lab.name, ())),
         config_time_ok=lab.config_time_ok,
+        permissions=permissions,
     )
 
 
-def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...]) -> LabDetail:
+def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str]) -> LabDetail:
     return LabDetail(
         name=lab.name,
         status=lab.status,
@@ -222,6 +226,7 @@ def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...]) -> LabDetail:
         updated_at=lab.updated_at,
         nodes=[_to_node_state(n) for n in nodes],
         config_time_ok=lab.config_time_ok,
+        permissions=permissions,
     )
 
 
@@ -372,7 +377,7 @@ async def _push_config(
     return Ok(report.value)
 
 
-async def _live_detail(lab: Lab, clab: ClabApiClient) -> LabDetail:
+async def _live_detail(lab: Lab, clab: ClabApiClient, permissions: list[str]) -> LabDetail:
     """Merge a stored lab record with its live node state from clab-api. A lab not
     currently deployed (inspect 404) simply has no live nodes; any other clab-api
     failure is surfaced as 502."""
@@ -385,7 +390,7 @@ async def _live_detail(lab: Lab, clab: ClabApiClient) -> LabDetail:
         raise HTTPException(
             status_code=502, detail={"stage": "clab-api", "message": inspected.error.message}
         )
-    return lab_detail(lab, nodes)
+    return lab_detail(lab, nodes, permissions)
 
 
 async def _run_deploy(
@@ -454,7 +459,7 @@ async def _finish_deploy(
     )
 
 
-@router.post("", status_code=201, dependencies=[Depends(require(perms.LAB_CREATE))])
+@router.post("", status_code=201, dependencies=[Depends(require_global(perms.LAB_CREATE))])
 async def deploy_lab(
     request: DeployRequest,
     clab: ClabClientDep,
@@ -529,7 +534,7 @@ async def deploy_lab(
     )
 
 
-@router.put("/{lab_name}", dependencies=[Depends(require(perms.LAB_CREATE))])
+@router.put("/{lab_name}", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
 async def update_lab_definition(
     lab_name: LabName,
     request: UpdateDefinitionRequest,
@@ -537,6 +542,7 @@ async def update_lab_definition(
     db: SessionDep,
     settings: SettingsDep,
     library: BuiltinLibraryDep,
+    user: CurrentUserDep,
 ) -> LabDetail:
     # Editing a lab's definition is authoring the topology, so it takes lab:create.
     # The lab's name is fixed by the record and re-pinned here, so the edit can't
@@ -576,10 +582,11 @@ async def update_lab_definition(
     # in this async context before rendering, or reading it in lab_detail triggers a
     # sync lazy-load (MissingGreenlet) outside a greenlet.
     await db.refresh(updated, ["updated_at"])
-    return await _live_detail(updated, clab)
+    granted = sorted(await effective_permissions_for(db, user, updated))
+    return await _live_detail(updated, clab, granted)
 
 
-@router.post("/{lab_name}/redeploy", dependencies=[Depends(require(perms.LAB_CREATE))])
+@router.post("/{lab_name}/redeploy", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
 async def redeploy_lab(
     lab_name: LabName,
     request: RedeployRequest,
@@ -618,27 +625,37 @@ async def redeploy_lab(
     )
 
 
-@router.get("", dependencies=[Depends(require(perms.LAB_READ))])
-async def list_labs(clab: ClabClientDep, db: SessionDep) -> list[LabSummary]:
+@router.get("")
+async def list_labs(clab: ClabClientDep, db: SessionDep, user: CurrentUserDep) -> list[LabSummary]:
+    # The catalog is filtered to what the caller may read: a global lab:read sees
+    # everything; otherwise only owned labs and labs granted to them (directly or via
+    # a group). A user with no grants gets an empty list — no blanket read guard.
+    # Per-lab permissions are resolved in one grant load and carried on each row so
+    # the list can gate per-row actions correctly.
     labs = await lab_store.list_labs(db)
+    perms_by_lab = await effective_permissions_bulk(db, user, labs)
+    visible = [lab for lab in labs if perms.LAB_READ in perms_by_lab[lab.id]]
     # Live node state is best-effort enrichment; if clab-api is unreachable the
     # durable catalog still lists, with node counts of 0.
     live_result = await clab.list_labs()
     live = live_result.value if isinstance(live_result, Ok) else {}
-    return [lab_summary(lab, live) for lab in labs]
+    return [lab_summary(lab, live, sorted(perms_by_lab[lab.id])) for lab in visible]
 
 
-@router.get("/{lab_name}", dependencies=[Depends(require(perms.LAB_READ))])
-async def get_lab(lab_name: LabName, clab: ClabClientDep, db: SessionDep) -> LabDetail:
+@router.get("/{lab_name}", dependencies=[Depends(require_lab(perms.LAB_READ))])
+async def get_lab(
+    lab_name: LabName, clab: ClabClientDep, db: SessionDep, user: CurrentUserDep
+) -> LabDetail:
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise HTTPException(
             status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
         )
-    return await _live_detail(lab, clab)
+    granted = sorted(await effective_permissions_for(db, user, lab))
+    return await _live_detail(lab, clab, granted)
 
 
-@router.post("/{lab_name}/configure", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
+@router.post("/{lab_name}/configure", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
 async def configure_nodes(
     lab_name: LabName,
     runner: RunnerClientDep,
@@ -676,7 +693,7 @@ async def configure_nodes(
 # run rides lab:configure, inside configure). ---
 
 
-@router.get("/{lab_name}/test-suites", dependencies=[Depends(require(perms.LAB_READ))])
+@router.get("/{lab_name}/test-suites", dependencies=[Depends(require_lab(perms.LAB_READ))])
 async def get_test_suites(lab_name: LabName, db: SessionDep) -> TestSuitesResponse:
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
@@ -686,7 +703,7 @@ async def get_test_suites(lab_name: LabName, db: SessionDep) -> TestSuitesRespon
     return _test_suites_response(lab)
 
 
-@router.put("/{lab_name}/test-suites", dependencies=[Depends(require(perms.LAB_CREATE))])
+@router.put("/{lab_name}/test-suites", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
 async def put_test_suites(
     lab_name: LabName, request: UpdateTestSuitesRequest, db: SessionDep
 ) -> TestSuitesResponse:
@@ -706,7 +723,7 @@ async def put_test_suites(
 
 @router.post(
     "/{lab_name}/test-suites/{suite}/run",
-    dependencies=[Depends(require(perms.LAB_VALIDATE))],
+    dependencies=[Depends(require_lab(perms.LAB_VALIDATE))],
 )
 async def run_test_suite(
     lab_name: LabName,
@@ -747,7 +764,7 @@ async def run_test_suite(
 # Both tiers ride the config push (built-ins always, user templates when stored). ---
 
 
-@router.get("/{lab_name}/custom-config", dependencies=[Depends(require(perms.LAB_READ))])
+@router.get("/{lab_name}/custom-config", dependencies=[Depends(require_lab(perms.LAB_READ))])
 async def get_custom_config(
     lab_name: LabName, library: BuiltinLibraryDep, db: SessionDep
 ) -> CustomConfigResponse:
@@ -759,7 +776,7 @@ async def get_custom_config(
     return _custom_config_response(library, lab)
 
 
-@router.put("/{lab_name}/custom-config", dependencies=[Depends(require(perms.LAB_CREATE))])
+@router.put("/{lab_name}/custom-config", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
 async def put_custom_config(
     lab_name: LabName,
     request: UpdateCustomConfigRequest,
@@ -781,7 +798,7 @@ async def put_custom_config(
     return _custom_config_response(library, updated)
 
 
-@router.delete("/{lab_name}", dependencies=[Depends(require(perms.LAB_DESTROY))])
+@router.delete("/{lab_name}", dependencies=[Depends(require_lab(perms.LAB_DESTROY))])
 async def destroy_lab(
     lab_name: LabName, clab: ClabClientDep, db: SessionDep, remove: bool = False
 ) -> DestroyResponse:
@@ -829,7 +846,7 @@ async def destroy_lab(
 # captured by the NodeAction path param (which would 422 instead of matching here).
 @router.get(
     "/{lab_name}/nodes/{node_name}/netem",
-    dependencies=[Depends(require(perms.LAB_READ))],
+    dependencies=[Depends(require_lab(perms.LAB_READ))],
 )
 async def show_node_netem(
     lab_name: LabName, node_name: NodeName, clab: ClabClientDep
@@ -843,7 +860,7 @@ async def show_node_netem(
 
 @router.post(
     "/{lab_name}/nodes/{node_name}/netem",
-    dependencies=[Depends(require(perms.LAB_CONFIGURE))],
+    dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))],
 )
 async def set_node_netem(
     lab_name: LabName, node_name: NodeName, request: NetemSetRequest, clab: ClabClientDep
@@ -865,7 +882,7 @@ async def set_node_netem(
 
 @router.post(
     "/{lab_name}/nodes/{node_name}/netem/reset",
-    dependencies=[Depends(require(perms.LAB_CONFIGURE))],
+    dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))],
 )
 async def reset_node_netem(
     lab_name: LabName, node_name: NodeName, request: NetemResetRequest, clab: ClabClientDep
@@ -879,7 +896,7 @@ async def reset_node_netem(
 
 @router.post(
     "/{lab_name}/nodes/{node_name}/{action}",
-    dependencies=[Depends(require(perms.LAB_CONFIGURE))],
+    dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))],
 )
 async def node_lifecycle(
     lab_name: LabName, node_name: NodeName, action: NodeAction, clab: ClabClientDep
@@ -894,33 +911,33 @@ async def node_lifecycle(
 # param) so they sit unambiguously beside the other static POST routes under
 # `/{lab_name}/` — configure, redeploy, save — with no variable segment able to
 # shadow them.
-@router.post("/{lab_name}/start", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
+@router.post("/{lab_name}/start", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
 async def start_lab(lab_name: LabName, clab: ClabClientDep) -> LabActionResponse:
     return await _lab_lifecycle(clab, lab_name, "start")
 
 
-@router.post("/{lab_name}/stop", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
+@router.post("/{lab_name}/stop", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
 async def stop_lab(lab_name: LabName, clab: ClabClientDep) -> LabActionResponse:
     return await _lab_lifecycle(clab, lab_name, "stop")
 
 
-@router.post("/{lab_name}/restart", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
+@router.post("/{lab_name}/restart", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
 async def restart_lab(lab_name: LabName, clab: ClabClientDep) -> LabActionResponse:
     return await _lab_lifecycle(clab, lab_name, "restart")
 
 
 # clab-api has no whole-lab pause, so freeze/unfreeze fan out over the nodes.
-@router.post("/{lab_name}/pause", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
+@router.post("/{lab_name}/pause", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
 async def pause_lab(lab_name: LabName, clab: ClabClientDep) -> LabActionResponse:
     return await _lab_freeze(clab, lab_name, "pause")
 
 
-@router.post("/{lab_name}/unpause", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
+@router.post("/{lab_name}/unpause", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
 async def unpause_lab(lab_name: LabName, clab: ClabClientDep) -> LabActionResponse:
     return await _lab_freeze(clab, lab_name, "unpause")
 
 
-@router.post("/{lab_name}/save", dependencies=[Depends(require(perms.LAB_CONFIGURE))])
+@router.post("/{lab_name}/save", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
 async def save_lab_config(lab_name: LabName, clab: ClabClientDep) -> SaveConfigResponse:
     result = await clab.save_config(lab_name)
     if isinstance(result, Err):
@@ -928,7 +945,9 @@ async def save_lab_config(lab_name: LabName, clab: ClabClientDep) -> SaveConfigR
     return SaveConfigResponse(message=result.value.message, output=result.value.output)
 
 
-@router.get("/{lab_name}/nodes/{node_name}/logs", dependencies=[Depends(require(perms.LAB_READ))])
+@router.get(
+    "/{lab_name}/nodes/{node_name}/logs", dependencies=[Depends(require_lab(perms.LAB_READ))]
+)
 async def node_logs(
     lab_name: LabName, node_name: NodeName, clab: ClabClientDep, tail: int = 200
 ) -> NodeLogsResponse:
@@ -943,7 +962,7 @@ async def node_logs(
     return _logs_response(result.value, node_name)
 
 
-@router.get("/{lab_name}/interfaces", dependencies=[Depends(require(perms.LAB_READ))])
+@router.get("/{lab_name}/interfaces", dependencies=[Depends(require_lab(perms.LAB_READ))])
 async def lab_interfaces(
     lab_name: LabName, clab: ClabClientDep, node: str | None = None
 ) -> list[NodeInterfaces]:

@@ -15,10 +15,54 @@ export const userSummarySchema = z.object({
   id: z.string(),
   username: z.string(),
   is_active: z.boolean(),
-  roles: z.array(z.string()),
+  roles: z.array(z.string()), // global roles
 })
 export type UserSummary = z.infer<typeof userSummarySchema>
 export const userListSchema = z.array(userSummarySchema)
+
+// --- RBAC: roles catalog, groups, and per-lab grants. ---
+
+// A role from the code catalog: which scopes it can be bound at, what it grants.
+export const roleSchema = z.object({
+  name: z.string(),
+  scopes: z.array(z.string()), // subset of "global" | "lab"
+  permissions: z.array(z.string()),
+})
+export type Role = z.infer<typeof roleSchema>
+export const roleListSchema = z.array(roleSchema)
+
+export const groupMemberSchema = z.object({ id: z.string(), username: z.string() })
+export type GroupMember = z.infer<typeof groupMemberSchema>
+
+export const groupSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  members: z.array(groupMemberSchema),
+  roles: z.array(z.string()), // global roles held by the group
+})
+export type GroupSummary = z.infer<typeof groupSummarySchema>
+export const groupListSchema = z.array(groupSummarySchema)
+
+// A pickable principal (user or group) for the grant UI: id + display name only.
+export const principalSchema = z.object({ id: z.string(), name: z.string() })
+export type Principal = z.infer<typeof principalSchema>
+export const principalsResponseSchema = z.object({
+  users: z.array(principalSchema),
+  groups: z.array(principalSchema),
+})
+export type PrincipalsResponse = z.infer<typeof principalsResponseSchema>
+
+// A role grant on a lab: who (user or group) holds which lab role.
+export const grantSchema = z.object({
+  id: z.string(),
+  principal_type: z.string(), // "user" | "group"
+  principal_id: z.string(),
+  principal_name: z.string().nullable(),
+  role: z.string(),
+})
+export type Grant = z.infer<typeof grantSchema>
+export const grantListSchema = z.array(grantSchema)
 
 export const labNodeStateSchema = z.object({
   name: z.string(),
@@ -39,6 +83,7 @@ export const labSummarySchema = z.object({
   updated_at: z.string(),
   nodes: z.number(),
   config_time_ok: z.boolean().nullable(),
+  permissions: z.array(z.string()), // the caller's effective permissions on this lab
 })
 export type LabSummary = z.infer<typeof labSummarySchema>
 export const labListSchema = z.array(labSummarySchema)
@@ -52,6 +97,7 @@ export const labDetailSchema = z.object({
   updated_at: z.string(),
   nodes: z.array(labNodeStateSchema),
   config_time_ok: z.boolean().nullable(),
+  permissions: z.array(z.string()), // the caller's effective permissions on this lab
 })
 export type LabDetail = z.infer<typeof labDetailSchema>
 

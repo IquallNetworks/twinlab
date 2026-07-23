@@ -5,9 +5,11 @@ We distill each to a lean `{lab, node, action, timestamp}` and re-emit it as SSE
 the frontend can invalidate the affected lab's queries instead of polling. One
 upstream clab-api stream per browser connection (simple; the tool is low-scale).
 
-Auth is resolved up front and its DB session released before the stream begins —
-a long-lived SSE connection must not pin a DB connection for its whole lifetime
-(which the usual request-scoped `require` dependency would do).
+Events are filtered to the labs the caller may read: a global `lab:read` sees all;
+otherwise only owned labs and labs granted to the caller (directly or via a group).
+The readable set is resolved at connect and re-resolved on a TTL, since a grant can
+change during a long-lived stream. Auth is resolved up front and its DB session
+released before streaming — a long-lived SSE connection must not pin a DB connection.
 """
 
 import asyncio
@@ -16,10 +18,10 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from twinlab_backend.auth import permissions as perms
-from twinlab_backend.auth.service import effective_permissions
+from twinlab_backend.auth.service import readable_lab_names
 from twinlab_backend.auth.sessions import resolve_session
 from twinlab_backend.config import Settings
+from twinlab_backend.db.models import User
 from twinlab_backend.deps import ClabClientDep, SettingsDep
 from twinlab_backend.models import LabEvent
 from twinlab_backend.result import Err
@@ -31,11 +33,14 @@ router = APIRouter(tags=["events"])
 # Emit an SSE comment this often while idle so intermediaries keep the connection
 # open and a dropped upstream is noticed promptly.
 _KEEPALIVE_SECONDS = 15.0
+# Re-resolve the caller's readable-lab set no more often than this; a grant made
+# mid-stream takes effect within the window (open item in docs/rbac-v2.md).
+_READABLE_TTL_SECONDS = 30.0
 
 
-async def _authorize(request: Request, settings: Settings) -> None:
-    """Check the session cookie grants `lab:read`, using a short-lived session that
-    is closed before streaming begins."""
+async def _authenticate(request: Request, settings: Settings) -> User:
+    """Resolve the session cookie in a short-lived DB session and return the user.
+    Any authenticated user may open the stream; events are filtered per lab."""
     token = request.cookies.get(settings.session_cookie_name)
     if not token:
         raise HTTPException(status_code=401, detail="not authenticated")
@@ -43,14 +48,18 @@ async def _authorize(request: Request, settings: Settings) -> None:
         resolved = await resolve_session(session, token)
         if isinstance(resolved, Err):
             raise HTTPException(status_code=401, detail="invalid or expired session")
-        if perms.LAB_READ not in effective_permissions(resolved.value):
-            raise HTTPException(status_code=403, detail=f"missing permission: {perms.LAB_READ}")
+        return resolved.value
 
 
-async def _sse(clab: ClabApiClient) -> AsyncIterator[str]:
-    """Relay upstream events as SSE, interleaving keepalive comments while idle.
-    A background task feeds a queue so we can time out on it for the keepalive; on
-    client disconnect the generator is closed and the producer cancelled."""
+async def _resolve_readable(request: Request, user: User) -> set[str] | None:
+    async with request.app.state.session_factory() as session:
+        return await readable_lab_names(session, user)
+
+
+async def _sse(request: Request, clab: ClabApiClient, user: User) -> AsyncIterator[str]:
+    """Relay upstream events as SSE, dropping events for labs the caller can't read
+    and interleaving keepalive comments while idle. A background task feeds a queue so
+    we can time out on it for both the keepalive and the readable-set refresh."""
     queue: asyncio.Queue[ClabLabEvent | None] = asyncio.Queue()
 
     async def produce() -> None:
@@ -61,9 +70,14 @@ async def _sse(clab: ClabApiClient) -> AsyncIterator[str]:
             await queue.put(None)  # sentinel: upstream ended
 
     task = asyncio.create_task(produce())
+    readable = await _resolve_readable(request, user)
+    next_refresh = asyncio.get_event_loop().time() + _READABLE_TTL_SECONDS
     try:
         yield ": connected\n\n"  # flush headers so EventSource fires `open`
         while True:
+            if asyncio.get_event_loop().time() >= next_refresh:
+                readable = await _resolve_readable(request, user)
+                next_refresh = asyncio.get_event_loop().time() + _READABLE_TTL_SECONDS
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_SECONDS)
             except TimeoutError:
@@ -71,6 +85,9 @@ async def _sse(clab: ClabApiClient) -> AsyncIterator[str]:
                 continue
             if event is None:
                 break
+            # readable is None => global reader (see everything); else a name set.
+            if readable is not None and event.lab not in readable:
+                continue
             payload = LabEvent(
                 lab=event.lab, node=event.node, action=event.action, timestamp=event.timestamp
             )
@@ -83,9 +100,9 @@ async def _sse(clab: ClabApiClient) -> AsyncIterator[str]:
 async def lab_events(
     request: Request, clab: ClabClientDep, settings: SettingsDep
 ) -> StreamingResponse:
-    await _authorize(request, settings)
+    user = await _authenticate(request, settings)
     return StreamingResponse(
-        _sse(clab),
+        _sse(request, clab, user),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -4,9 +4,10 @@ from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from twinlab_backend.auth.dependencies import CurrentUserDep
-from twinlab_backend.auth.service import authenticate, effective_permissions
+from twinlab_backend.auth.service import authenticate, global_permissions, global_role_names
 from twinlab_backend.auth.sessions import create_session, revoke_session
 from twinlab_backend.config import Settings
 from twinlab_backend.db.models import User
@@ -22,16 +23,20 @@ class LoginRequest(BaseModel):
 
 
 class UserInfo(BaseModel):
+    """The caller's identity and their **global** roles/permissions. Per-lab
+    permissions are not here — they are carried on each lab's detail payload, since
+    they depend on the lab."""
+
     username: str
     roles: list[str]
     permissions: list[str]
 
 
-def _user_info(user: User) -> UserInfo:
+async def _user_info(db: AsyncSession, user: User) -> UserInfo:
     return UserInfo(
         username=user.username,
-        roles=sorted(role.name for role in user.roles),
-        permissions=sorted(effective_permissions(user)),
+        roles=await global_role_names(db, user),
+        permissions=sorted(await global_permissions(db, user)),
     )
 
 
@@ -61,7 +66,7 @@ async def login(
     user = result.value
     token = await create_session(db, user.id, timedelta(hours=settings.session_ttl_hours))
     _set_session_cookie(response, settings, token)
-    return _user_info(user)
+    return await _user_info(db, user)
 
 
 @router.post("/logout", status_code=204)
@@ -78,5 +83,5 @@ async def logout(
 
 
 @router.get("/me")
-async def me(user: CurrentUserDep) -> UserInfo:
-    return _user_info(user)
+async def me(user: CurrentUserDep, db: SessionDep) -> UserInfo:
+    return await _user_info(db, user)

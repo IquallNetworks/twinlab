@@ -1,5 +1,12 @@
-// The backend seeds these roles (twinlab_backend.auth.permissions.ROLE_DEFINITIONS)
-// and validates role assignments against them, but exposes no endpoint to list
-// them. Mirror the seed here for the assignment UI; revisit if a roles endpoint
-// is added.
-export const ASSIGNABLE_ROLES = ['admin', 'operator', 'viewer'] as const
+import type { Role } from '@/lib/schemas'
+
+// The role catalog is served by the backend (GET /roles); these helpers pick the
+// subset assignable at a given scope. Global roles go on users/groups; lab roles are
+// granted per lab.
+export function globalRoles(roles: Role[]): Role[] {
+  return roles.filter((r) => r.scopes.includes('global'))
+}
+
+export function labRoles(roles: Role[]): Role[] {
+  return roles.filter((r) => r.scopes.includes('lab'))
+}

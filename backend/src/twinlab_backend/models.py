@@ -257,10 +257,15 @@ class LabSummary(BaseModel):
     # skipped / no config-time suites), True (passed), False (failed). Surfaced so
     # a lab whose config-time checks failed is unambiguous in a listing.
     config_time_ok: bool | None
+    # The caller's effective permissions on this lab, so the list can gate per-row
+    # actions (e.g. delete) without assuming a global permission.
+    permissions: list[str]
 
 
 class LabDetail(BaseModel):
-    """A single lab: its stored definition plus live node state."""
+    """A single lab: its stored definition plus live node state. `permissions` is the
+    caller's effective permission set *on this lab* (owner-implicit + global + per-lab
+    grants), so the UI can gate actions without recomputing from global permissions."""
 
     name: str
     status: str  # "deployed" | "destroyed"
@@ -270,6 +275,7 @@ class LabDetail(BaseModel):
     updated_at: datetime
     nodes: list[LabNodeState]
     config_time_ok: bool | None
+    permissions: list[str]
 
 
 class LabActionResponse(BaseModel):

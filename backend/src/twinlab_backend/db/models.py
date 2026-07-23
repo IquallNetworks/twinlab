@@ -1,7 +1,10 @@
-"""ORM models for users, RBAC (roles/permissions), and login sessions.
+"""ORM models for users, RBAC (roles/permissions/groups/bindings), and sessions.
 
-Roles and permissions are stored as data (assignable per user at runtime), but
-the set of permission names is defined in code — see `auth.permissions`.
+RBAC v2 is scoped: a **binding** (`role_bindings`) attaches a role to a principal (a
+user or a group) at a scope (global, or one lab). Authorization resolves a role's
+permissions from the code catalog (`auth.permissions`); the `roles`/`permissions`
+tables are seeded from that catalog for introspection. Group membership is a plain
+M2M; a user's effective permissions union their own and their groups' bindings.
 """
 
 import uuid
@@ -9,6 +12,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -16,6 +20,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     Uuid,
     func,
 )
@@ -26,13 +31,6 @@ from twinlab_backend.db.base import Base
 
 # Association tables carry explicit column types (their FK targets' types) so the
 # columns are fully typed rather than Column[Unknown].
-user_roles = Table(
-    "user_roles",
-    Base.metadata,
-    Column("user_id", Uuid(), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
-    Column("role_id", Integer(), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
-)
-
 role_permissions = Table(
     "role_permissions",
     Base.metadata,
@@ -43,6 +41,14 @@ role_permissions = Table(
         ForeignKey("permissions.id", ondelete="CASCADE"),
         primary_key=True,
     ),
+)
+
+# Group membership: users belong to zero or many groups.
+group_members = Table(
+    "group_members",
+    Base.metadata,
+    Column("group_id", Uuid(), ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Uuid(), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
 )
 
 
@@ -56,7 +62,11 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    roles: Mapped[list["Role"]] = relationship(secondary=user_roles, lazy="selectin")
+    # The groups this user belongs to; their bindings also count toward the user's
+    # effective permissions. Eager-loaded so the resolver can gather group ids.
+    groups: Mapped[list["Group"]] = relationship(
+        secondary=group_members, lazy="selectin", back_populates="members"
+    )
 
 
 class Role(Base):
@@ -76,6 +86,64 @@ class Permission(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+
+class Group(Base):
+    """An admin-defined set of users. A binding can target a group, granting its role
+    to every member — so access is managed by curating membership, not re-granting."""
+
+    __tablename__ = "groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    description: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    members: Mapped[list["User"]] = relationship(
+        secondary=group_members, lazy="selectin", back_populates="groups"
+    )
+
+
+class RoleBinding(Base):
+    """The RBAC join: a principal (user or group) holds a role at a scope. `scope_type`
+    is `global` (applies to every lab, incl. future) or `lab` (then `lab_id` names the
+    one lab). `role_name` references the code catalog, not a FK, since roles are
+    code-defined. `principal_id` is a user id or group id per `principal_type` — a
+    polymorphic reference, so it carries no DB-level FK."""
+
+    __tablename__ = "role_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_type",
+            "principal_id",
+            "role_name",
+            "scope_type",
+            "lab_id",
+            name="uq_role_binding",
+        ),
+        CheckConstraint("principal_type IN ('user','group')", name="ck_binding_principal_type"),
+        CheckConstraint("scope_type IN ('global','lab')", name="ck_binding_scope_type"),
+        # A lab binding names a lab; a global binding must not.
+        CheckConstraint(
+            "(scope_type = 'lab') = (lab_id IS NOT NULL)", name="ck_binding_scope_lab_id"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    principal_type: Mapped[str] = mapped_column(String(8), index=True)  # "user" | "group"
+    principal_id: Mapped[uuid.UUID] = mapped_column(Uuid(), index=True)
+    role_name: Mapped[str] = mapped_column(String(64))
+    scope_type: Mapped[str] = mapped_column(String(8))  # "global" | "lab"
+    # SET NULL would violate the scope/lab_id check, so a lab binding is removed with
+    # its lab (hard removal). Soft-deleted labs keep the row (the lab row survives).
+    lab_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("labs.id", ondelete="CASCADE"), default=None, index=True
+    )
+    # Audit: who created the grant (SET NULL so deleting that user keeps the grant).
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Lab(Base):
@@ -121,9 +189,17 @@ class Lab(Base):
     # library on every configure. Built-ins live in code, not here. Never sent to
     # `netlab create`. NULL means the lab has no user templates.
     custom_config: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
-    # The twinlab user who created the lab. SET NULL (not CASCADE): deleting a
-    # user must not erase the durable definition they authored.
+    # The twinlab user who first created the lab — immutable creation audit. SET
+    # NULL (not CASCADE): deleting a user must not erase the durable definition they
+    # authored.
     created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    # The lab's current owner: authoritative for ownership (display + transfer). The
+    # owner implicitly holds the full lab_owner permission set on this lab, so they
+    # can never revoke themselves. Distinct from created_by, which never changes;
+    # owner_id moves on transfer. Backfilled from created_by for pre-v2 rows.
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), default=None
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -137,7 +213,9 @@ class Lab(Base):
     # still-listed lab that can be redeployed).
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
-    owner: Mapped["User | None"] = relationship(lazy="selectin")
+    # Two FKs point at users (created_by + owner_id), so the relationship must name
+    # which one it follows. `owner` tracks owner_id (the authoritative owner).
+    owner: Mapped["User | None"] = relationship(lazy="selectin", foreign_keys=[owner_id])
 
 
 class Session(Base):

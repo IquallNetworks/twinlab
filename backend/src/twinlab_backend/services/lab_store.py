@@ -77,6 +77,7 @@ async def reserve_lab(
             definition=definition,
             status=STATUS_DEPLOYING,
             created_by=owner_id,
+            owner_id=owner_id,
             mgmt_subnet=mgmt_subnet,
         )
         session.add(lab)
@@ -84,6 +85,7 @@ async def reserve_lab(
         lab.definition = definition
         lab.status = STATUS_DEPLOYING
         lab.created_by = owner_id
+        lab.owner_id = owner_id
         lab.mgmt_subnet = mgmt_subnet
         lab.deleted_at = None  # revive a soft-deleted name on redeploy
     try:
@@ -202,6 +204,20 @@ async def record_validation(
     lab.last_validation = merged  # reassign (not in-place) so the JSON column updates
     if set_config_time:
         lab.config_time_ok = config_time_ok
+    await session.commit()
+    return lab
+
+
+async def transfer_owner(
+    session: AsyncSession, name: str, new_owner_id: uuid.UUID
+) -> Lab | LabStoreError:
+    """Reassign a lab's owner. The caller validates the new owner exists and is
+    authorized to transfer; here we only persist. `not_found` when the lab is
+    absent."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.owner_id = new_owner_id
     await session.commit()
     return lab
 

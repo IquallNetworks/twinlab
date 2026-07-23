@@ -431,3 +431,27 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
 `run_suite` issues checks concurrently. **Interacts with** the Phase 1.1
 "Config-push `~/.netlab` race (runner)" note — that `asyncio.Lock` stays, guarding
 `/configure` only.
+
+### RBAC v2 — scoped roles, groups, owner-delegated grants · **done**
+
+11. **Per-lab authorization, user groups, and delegated grants.** RBAC v1 (shipped)
+    is flat and global: a permission is decided without regard to which lab, `owner_id`
+    is never consulted, `GET /labs` returns every lab, and there is no way to delegate
+    access. v2 makes authorization **scoped** (*does this user hold X on this lab?*)
+    via Kubernetes-style **RoleBindings** — *(principal) holds (role) at (scope)*, scope
+    = global or a specific lab. Adds **groups** (users ∈ 0..N), **owner-delegated
+    grants** (a lab owner / `lab:grant` holder binds lab-scoped roles to users or
+    groups on their lab, under an anti-escalation rule), splits `lab:create` into
+    `lab:create` (global, new lab) + `lab:edit` (per-lab), and adds a baseline `user`
+    global role with no permissions (the default for new users).
+
+    **Implemented (2026-07-23).** Full model + as-built notes in `docs/rbac-v2.md`.
+    Shipped: the scoped permission catalog + resolver, `require_global`/`require_lab`
+    guards, per-lab filtering of `GET /labs` and the `/events` stream, per-lab
+    permissions on the lab detail/summary payloads, the grants + groups + roles +
+    `/principals` APIs, per-lab terminal scoping, and the frontend (per-lab action
+    gating, lab Access panel, Groups admin, live role catalog). One migration (`0008`)
+    creates `groups`/`group_members`/`role_bindings`, backfills `owner_id` and
+    `user_roles` → global bindings, and drops `user_roles`. **Migration note:** users on
+    a pre-v2 role (`operator`/`viewer`) resolve to no permissions until re-assigned to a
+    v2 role.

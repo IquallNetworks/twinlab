@@ -268,11 +268,13 @@ function DeleteLabAction({ name }: { name: string }) {
 export function LabsPage() {
   const { data: labs, isPending, isError, error } = useQuery(labsQueryOptions)
   const { data: me } = useQuery(meQueryOptions)
+  // Creating a new lab is a global right; deleting is per-lab (from each row's
+  // permissions), so the Actions column shows when any listed lab is deletable.
   const canCreate = me?.permissions.includes(PERM_LAB_CREATE) ?? false
-  const canDestroy = me?.permissions.includes(PERM_LAB_DESTROY) ?? false
+  const anyDeletable = (labs ?? []).some((lab) => lab.permissions.includes(PERM_LAB_DESTROY))
   // Base columns (name/status/owner/nodes/created) plus the actions column when
-  // the caller can delete — keeps the loading/empty colSpan in step.
-  const colCount = canDestroy ? 6 : 5
+  // any lab is deletable — keeps the loading/empty colSpan in step.
+  const colCount = anyDeletable ? 6 : 5
 
   return (
     <div className="flex flex-col gap-6">
@@ -294,7 +296,7 @@ export function LabsPage() {
               <TableHead>Owner</TableHead>
               <TableHead>Nodes</TableHead>
               <TableHead>Created</TableHead>
-              {canDestroy && <TableHead className="w-0 text-right">Actions</TableHead>}
+              {anyDeletable && <TableHead className="w-0 text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -332,9 +334,11 @@ export function LabsPage() {
                   <TableCell className="text-muted-foreground">
                     {formatDateTime(lab.created_at)}
                   </TableCell>
-                  {canDestroy && (
+                  {anyDeletable && (
                     <TableCell className="text-right">
-                      <DeleteLabAction name={lab.name} />
+                      {lab.permissions.includes(PERM_LAB_DESTROY) && (
+                        <DeleteLabAction name={lab.name} />
+                      )}
                     </TableCell>
                   )}
                 </TableRow>

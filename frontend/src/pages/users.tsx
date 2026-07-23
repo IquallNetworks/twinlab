@@ -30,22 +30,24 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
-import { usersQueryOptions } from '@/lib/queries'
-import { ASSIGNABLE_ROLES } from '@/lib/roles'
+import { rolesQueryOptions, usersQueryOptions } from '@/lib/queries'
+import { globalRoles } from '@/lib/roles'
 import type { UserSummary } from '@/lib/schemas'
 
 function RoleCheckboxes({
+  roles,
   selected,
   onToggle,
   idPrefix,
 }: {
+  roles: string[]
   selected: string[]
   onToggle: (role: string, checked: boolean) => void
   idPrefix: string
 }) {
   return (
     <div className="flex flex-wrap gap-4">
-      {ASSIGNABLE_ROLES.map((role) => {
+      {roles.map((role) => {
         const id = `${idPrefix}-${role}`
         return (
           <div key={role} className="flex items-center gap-2">
@@ -80,6 +82,8 @@ const createUserSchema = z.object({
 function CreateUserDialog() {
   const [open, setOpen] = useState(false)
   const queryClient = useQueryClient()
+  const { data: roleCatalog } = useQuery(rolesQueryOptions)
+  const globalRoleNames = globalRoles(roleCatalog ?? []).map((r) => r.name)
 
   const create = useMutation({
     mutationFn: (value: z.infer<typeof createUserSchema>) => api.createUser(value),
@@ -162,6 +166,7 @@ function CreateUserDialog() {
                   <Label>Roles</Label>
                   <RoleCheckboxes
                     idPrefix="create"
+                    roles={globalRoleNames}
                     selected={field.state.value}
                     onToggle={(role, checked) =>
                       field.handleChange(toggle(field.state.value, role, checked))
@@ -196,6 +201,8 @@ function EditRolesDialog({ user }: { user: UserSummary }) {
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<string[]>(user.roles)
   const queryClient = useQueryClient()
+  const { data: roleCatalog } = useQuery(rolesQueryOptions)
+  const globalRoleNames = globalRoles(roleCatalog ?? []).map((r) => r.name)
 
   const save = useMutation({
     mutationFn: (roles: string[]) => api.setRoles(user.id, roles),
@@ -229,6 +236,7 @@ function EditRolesDialog({ user }: { user: UserSummary }) {
         <div className="py-4">
           <RoleCheckboxes
             idPrefix={`edit-${user.id}`}
+            roles={globalRoleNames}
             selected={selected}
             onToggle={(role, checked) => setSelected((prev) => toggle(prev, role, checked))}
           />

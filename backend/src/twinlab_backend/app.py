@@ -13,9 +13,13 @@ import httpx
 from fastapi import FastAPI
 
 from twinlab_backend.api.auth import router as auth_router
+from twinlab_backend.api.directory import router as directory_router
 from twinlab_backend.api.events import router as events_router
+from twinlab_backend.api.grants import router as grants_router
+from twinlab_backend.api.groups import router as groups_router
 from twinlab_backend.api.health import router as health_router
 from twinlab_backend.api.labs import router as labs_router
+from twinlab_backend.api.roles import router as roles_router
 from twinlab_backend.api.terminal import router as terminal_router
 from twinlab_backend.api.users import router as users_router
 from twinlab_backend.auth.bootstrap import ensure_admin, seed_rbac
@@ -83,7 +87,11 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix=_API_PREFIX)
     app.include_router(auth_router, prefix=_API_PREFIX)
     app.include_router(labs_router, prefix=_API_PREFIX)
+    app.include_router(grants_router, prefix=_API_PREFIX)
     app.include_router(users_router, prefix=_API_PREFIX)
+    app.include_router(groups_router, prefix=_API_PREFIX)
+    app.include_router(roles_router, prefix=_API_PREFIX)
+    app.include_router(directory_router, prefix=_API_PREFIX)
     app.include_router(events_router, prefix=_API_PREFIX)
     app.include_router(terminal_router, prefix=_API_PREFIX)
     return app

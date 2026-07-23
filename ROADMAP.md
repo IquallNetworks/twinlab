@@ -455,3 +455,21 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     `user_roles` → global bindings, and drops `user_roles`. **Migration note:** users on
     a pre-v2 role (`operator`/`viewer`) resolve to no permissions until re-assigned to a
     v2 role.
+
+### Deferred items from the API review (2026-07-23) · **deferred**
+
+Surfaced while freezing the API shape for the Python client / black-box suite /
+backend rework (`docs/twinlab_client_shape.py`); explicitly parked, not planned.
+
+- **Async job model for long lab operations.** Deploy/redeploy/configure are
+  synchronous HTTP calls that run for minutes (IOL boot + Ansible push +
+  validation gate); a dropped connection leaves the caller blind while the
+  operation continues server-side. A job model (202 + job id, progress via
+  polling or the existing `/events` SSE stream) fixes the long-call and
+  reconnect story. Post-v1.0: for v1.0 the client compensates with a generous
+  `action_timeout`.
+- **`GET /principals` enumeration exposure.** The grant-picker directory
+  exposes every user and group name to ANY authenticated caller — including the
+  zero-permission `user` role. Accepted for now (the tool is low-scale and
+  collaborative); revisit if directory enumeration becomes a concern
+  (options: require holding `lab:grant` somewhere, or search-only responses).

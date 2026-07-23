@@ -1,2 +1,5 @@
 # Local compose secrets (committed template lives in .env.example).
 .env
+
+# Python bytecode (e.g. from syntax-checking docs/ sketches).
+__pycache__/

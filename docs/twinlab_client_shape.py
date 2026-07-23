@@ -1,0 +1,1022 @@
+"""Shape sketch of the Twinlab Python client (`TwinlabClient`) — FOR REVIEW.
+
+A contract sketch, not an implementation. The sketch shows the **target
+contract**: approved/agreed proposals are APPLIED to the shapes and methods,
+with the current wire (commit bc89daa) noted inline where it differs — those
+notes are the backend-rework checklist. Markers:
+
+- ``QUIRK:``    — current behavior the client/tests must handle.
+- ``PROPOSAL:`` — a change for the backend rework. ``(APPROVED)`` = agreed and
+  applied here; ``(DISCUSS)`` = agreed in principle, shape drafted for review.
+- ``TODO:``     — reviewer notes, pending decision.
+
+Deltas from today's wire, applied below (= the backend rework checklist):
+
+1. Unified error envelope (`TwinlabApiError`).
+2. Lifecycle split: ``POST /labs`` = create-only record; ``POST
+   /labs/{name}/deploy`` (today's redeploy, renamed) is the only deploy verb,
+   guarded by the deploying-status mutex (409); `LabStatus` gains "created".
+3. Status vocabularies pinned as Literals; container state normalized.
+4. New endpoints: users get/delete/password-reset/activate-toggle, self
+   password change, groups get, API keys (create/list/revoke) + Bearer auth.
+5. DELETE /users refuses removing the last admin (409).
+6. ``GET /labs/{name}/interfaces`` keys nodes by SHORT node name (backend
+   translates from the container name).
+7. Netem: durations are structured ``{value, unit}`` pairs (not "50ms"
+   strings); ``set`` has REPLACE semantics (omitted dimension = cleared, empty
+   call = clear all), subsuming the dropped ``/netem/reset`` endpoint.
+8. ``PUT /labs/{name}/owner`` returns its own ``LabOwner`` model, not a fake
+   Grant.
+9. A config push that ran but failed on >=1 node is a 2xx
+   ``status="config_failed"`` with per-node results — no longer an HTTP 502.
+
+Conventions:
+
+- Base path ``/api/v1``; OpenAPI at ``openapi.json`` (schema-check the real
+  client against it in CI).
+- Auth: opaque HttpOnly session cookie from ``login`` (the client carries a
+  cookie jar), OR an API key passed at construction — the desired client shape;
+  server-side API-key support is PROPOSED (not served yet, see the Auth
+  section). Everything except login/health needs one of the two.
+- Lab-guarded routes: **404** when the caller can't read the lab (existence
+  hidden), **403** when readable but lacking the specific permission.
+- Names (lab/node/suite): ``^[A-Za-z0-9][A-Za-z0-9_.-]*$``, max 64.
+- **Async client**: every method is a coroutine (httpx.AsyncClient +
+  `websockets`); the client is an async context manager.
+- Ids are UUIDs. TODO(ids): target is **UUIDv7** (time-ordered); the backend
+  generates v4 today (`uuid.uuid4`). Stdlib `uuid.uuid7` needs Python 3.14
+  (backend pins >=3.13), so this is a 3.14 bump or an approved dependency —
+  decide during the rework. Applies to every id field below.
+- Unordered unique collections (roles, permissions, scopes) are `set` in the
+  client; the wire is a JSON array either way.
+
+PROPOSAL (APPROVED — shape at `TwinlabApiError`): unify the error envelope.
+Today `detail` has four shapes (labs/grants {stage, message, ...},
+users/groups {reason, detail}, login a bare string, FastAPI's 422 list).
+
+PROPOSAL (APPROVED — shapes in the Auth/Users/Groups sections, marked
+PROPOSED): missing endpoints — get/delete user, admin password reset,
+activate toggle, self password change, get group, API keys.
+"""
+
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+# --------------------------------------------------------------------------- #
+# Errors
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class TwinlabApiError(Exception):
+    """Any non-2xx response.
+
+    PROPOSED SHAPE (APPROVED): the rework serves ONE envelope for every error,
+    via a single exception handler:
+
+        {"code": "<machine slug>", "message": "<human>", "extras": {...}}
+
+    - `code`: stable slug for programmatic matching — e.g. "lab_not_found",
+      "netlab_invalid", "config_push_failed", "username_taken",
+      "mgmt_subnet_exhausted", "upstream_error", "not_authenticated",
+      "permission_denied", "validation_error".
+    - `extras`: endpoint-specific payload (netlab `stderr`, per-node config
+      results, FastAPI field errors under "errors", ...).
+
+    Until the backend lands it, the client fills these fields best-effort from
+    the four current shapes (`code` from `stage`/`reason` when present, else
+    "unknown"; raw body kept in `extras["raw"]`).
+    """
+
+    status_code: int
+    code: str
+    message: str
+    extras: dict[str, object]
+
+
+# --------------------------------------------------------------------------- #
+# Auth / identity shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class UserInfo:
+    """`GET /auth/me` / login response. GLOBAL roles/permissions only —
+    per-lab permissions ride on each lab payload."""
+
+    username: str
+    roles: set[str]
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class UserSummary:
+    """One user (`/users`). `roles` = global roles."""
+
+    id: UUID
+    username: str
+    is_active: bool
+    roles: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class GroupMember:
+    id: UUID
+    username: str
+
+
+@dataclass(frozen=True, slots=True)
+class GroupSummary:
+    """Admin-defined user group; members inherit its global roles and lab grants."""
+
+    id: UUID
+    name: str
+    description: str
+    members: list[GroupMember]
+    roles: set[str]  # global roles bound to the group
+
+
+@dataclass(frozen=True, slots=True)
+class Role:
+    """One catalog role (`GET /roles`) — never hardcode the role list."""
+
+    name: str
+    scopes: set[Literal["global", "lab"]]
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKey:
+    """PROPOSED (APPROVED, not served yet): one API key, as listings show
+    it — never the secret."""
+
+    id: UUID
+    name: str  # caller-chosen label, e.g. "ci"
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyCreated:
+    """PROPOSED (APPROVED): create response — the only time the secret is returned."""
+
+    key: str  # the bearer secret, e.g. "tl_<random>"; shown once, stored hashed
+    info: ApiKey
+
+
+@dataclass(frozen=True, slots=True)
+class Principal:
+    id: UUID
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class LabOwner:
+    """`PUT /labs/{name}/owner` response (APPROVED — wire today reuses the
+    grant shape with the LAB's UUID as `id` and the non-catalog role "owner")."""
+
+    lab: str
+    owner: Principal
+
+
+@dataclass(frozen=True, slots=True)
+class Principals:
+    """`GET /principals`: id+name of all users/groups, for grantors lacking
+    user:manage / group:manage."""
+
+    users: list[Principal]
+    groups: list[Principal]
+
+
+@dataclass(frozen=True, slots=True)
+class Grant:
+    """One lab-scoped role binding. `principal_name` is None if the principal
+    no longer exists.
+
+    (answered: "why does it survive?") It isn't a designed lifecycle: deleting
+    a GROUP does cascade its bindings, and users can't be deleted through the
+    API at all today — so a dangling principal only occurs via out-of-band DB
+    edits, and the None branch is defensive. Once `delete_user` (PROPOSED
+    below) lands with binding cascade, `principal_name` can become required.
+    """
+
+    id: UUID
+    principal_type: Literal["user", "group"]
+    principal_id: UUID
+    principal_name: str | None
+    role: str
+
+
+# --------------------------------------------------------------------------- #
+# Health shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class Liveness:
+    status: Literal["ok"]
+
+
+@dataclass(frozen=True, slots=True)
+class Readiness:
+    """`GET /health/ready` — same body on 200 and 503 (degraded is data)."""
+
+    status: Literal["ready", "degraded"]
+    # Value is "ok" or the failure message — `Literal["ok"] | str` collapses to
+    # `str`, so the union isn't expressible as a type. PROPOSAL: per-check
+    # {ok: bool, detail: str} so health is typed, not sentinel-string.
+    checks: dict[str, str]
+
+
+# --------------------------------------------------------------------------- #
+# Lab shapes
+# --------------------------------------------------------------------------- #
+
+# PROPOSAL (APPROVED): pin these as Literals in the backend response models so
+# OpenAPI carries them. "created" is new with the lifecycle split (a record
+# that has never been deployed); the rest exist on the wire today.
+LabStatus = Literal["created", "deploying", "deployed", "destroyed"]
+DeployStatus = Literal["deployed", "configured", "config_failed", "validation_failed"]
+ConfigureStatus = Literal["configured", "config_failed", "validation_failed"]
+# APPROVED (replaces `config_time_ok: bool | None` on the wire). No "skipped"
+# state on purpose: a skipped gate RETAINS the previous result (skipping a
+# configure must not erase a known-red gate); "no config-time suites" = "not_run".
+ConfigTimeStatus = Literal["not_run", "passed", "failed"]
+
+# Configure failure layers (APPROVED — layer 2 changes from today's wire):
+#   1. The push could not run at all (runner down, definition rejected)
+#      -> HTTP 422/502, no per-node data. An HTTP error: nothing ran.
+#   2. The push ran but >=1 node failed its Ansible play -> 2xx
+#      status="config_failed" with `configuration` carrying the per-node
+#      results (validation is None — the gate doesn't run on a failed push).
+#      Wire today: HTTP 502 with the results buried in the error detail.
+#   3. The push succeeded everywhere but the config-time gate failed -> 2xx
+#      status="validation_failed".
+# Rule of thumb: HTTP errors mean "could not run"; if it ran, the outcome —
+# good or bad — is data.
+
+# TODO(state) -> PROPOSAL: pin to docker-engine's vocabulary. Today the value
+# is a clab-api passthrough, so the backend must normalize/validate it as part
+# of the same rework; until then the client should tolerate unknown strings.
+ContainerState = Literal[
+    "created", "running", "paused", "restarting", "removing", "exited", "dead"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class LabNodeState:
+    """Live per-node state from clab-api (best-effort)."""
+
+    name: str  # short node name, e.g. "r1"
+    container: str  # "clab-<lab>-<node>"
+    image: str
+    state: ContainerState  # requires the backend pin above
+    mgmt_ip: str  # bare IP (CIDR stripped); "" when none
+
+
+# TODO (deferred, reviewer): revisit LabSummary/LabDetail later — split "real
+# useful API" vs "frontend needs" (e.g. move `nodes`/`config_time_ok` to a
+# separate request), and collapse the Summary/Detail overlap (Detail = Summary
+# + extra fields?).
+@dataclass(frozen=True, slots=True)
+class LabSummary:
+    """One row of `GET /labs`. `status` is the durable record; `nodes` is the
+    live count (0 when down or clab-api unreachable). `permissions` = caller's
+    effective set on THIS lab (global ∪ grants ∪ owner-implicit)."""
+
+    name: str
+    status: LabStatus
+    owner: Principal | None  # APPROVED — wire today: bare username string
+    created_at: datetime
+    updated_at: datetime
+    nodes: int
+    config_time_status: (
+        ConfigTimeStatus  # APPROVED — wire today: config_time_ok: bool | None
+    )
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class LabDetail:  # TODO (deferred, reviewer): see LabSummary — heavy overlap.
+    """`GET /labs/{name}`: stored record + live nodes. `definition` is the
+    lab's source of truth — None until authored (a "created" lab)."""
+
+    name: str
+    status: LabStatus
+    definition: str | None  # None only while status="created" (lifecycle split)
+    owner: Principal | None  # APPROVED — wire today: bare username string
+    created_at: datetime
+    updated_at: datetime
+    nodes: list[LabNodeState]
+    config_time_status: ConfigTimeStatus  # APPROVED — wire today: config_time_ok
+    permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeConfigResult:
+    """Per-node outcome of a config push (from Ansible's PLAY RECAP)."""
+
+    node: str
+    status: Literal["configured", "failed"]  # PROPOSAL (APPROVED): pinned
+    changed: int
+    failed: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeployResponse:
+    """`POST /labs/{name}/deploy` (lifecycle split — wire today: one-shot
+    `POST /labs` 201 and `POST /labs/{name}/redeploy`).
+
+    - bare deploy:               status="deployed", configuration/validation None
+    - +configure, gate ok:       status="configured" (validation None if skipped
+      or no config-time suites)
+    - +configure, push failed:   status="config_failed" — configuration carries
+      the per-node results, validation None (gate not run)
+    - +configure, gate failed:   status="validation_failed"
+    All four are 2xx: HTTP errors mean the operation could not run at all.
+    """
+
+    status: DeployStatus
+    lab_name: str
+    nodes: list[str]  # short node names
+    configuration: list[NodeConfigResult] | None
+    validation: list["SuiteReport"] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureResponse:
+    """`POST /labs/{name}/configure`. Like DeployResponse, but `configuration`
+    is always present (a push that couldn't run raises 422/502 instead)."""
+
+    status: ConfigureStatus
+    lab_name: str
+    configuration: list[NodeConfigResult]
+    validation: list["SuiteReport"] | None
+
+
+@dataclass(frozen=True, slots=True)
+class DestroyResponse:
+    """`DELETE /labs/{name}`. "destroyed" = record kept, redeployable;
+    "deleted" = remove=true, record soft-deleted."""
+
+    status: Literal["destroyed", "deleted"]  # PROPOSAL (APPROVED): pinned
+    detail: str  # containerlab teardown output, or "lab was not running"
+
+
+@dataclass(frozen=True, slots=True)
+class LabActionResponse:
+    """Power/netem action result: clab-api's message, verbatim. A 2xx IS the
+    outcome; the message is decoration."""
+
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class SaveConfigResponse:
+    message: str
+    output: str  # per-node save output from containerlab
+
+
+@dataclass(frozen=True, slots=True)
+class NodeLogsResponse:
+    node: str  # short node name (echoed from the path)
+    container: str
+    logs: str
+
+
+@dataclass(frozen=True, slots=True)
+class NodeInterface:
+    name: str
+    alias: str
+    ifindex: int
+    mac: str
+    mtu: int
+    state: str
+    kind: str  # clab-api's interface `type`
+
+
+@dataclass(frozen=True, slots=True)
+class NodeInterfaces:
+    """One node's interface inventory.
+
+    APPROVED: `node` is the SHORT node name (backend translates) — wire today:
+    the container name ("clab-<lab>-<node>"), a clab-api passthrough."""
+
+    node: str
+    interfaces: list[NodeInterface]
+
+
+@dataclass(frozen=True, slots=True)
+class Duration:
+    """A netem duration as a structured {value, unit} pair (APPROVED — wire
+    today: strings like "50ms"). The author's unit choice is preserved."""
+
+    value: float
+    unit: Literal["us", "ms", "s"]
+
+
+@dataclass(frozen=True, slots=True)
+class NetemImpairment:
+    """Current netem shaping on one interface. None / 0 = that dimension
+    unshaped."""
+
+    interface: str
+    delay: Duration | None
+    jitter: Duration | None
+    loss: float  # percent
+    rate: int  # kbit/s
+    corruption: float  # percent
+
+
+@dataclass(frozen=True, slots=True)
+class LabEvent:
+    """One SSE payload from `GET /events`."""
+
+    lab: str
+    node: str | None
+    action: str  # "create" | "start" | "stop" | "kill" | "die" | "destroy" | ...
+    timestamp: str
+
+
+# --------------------------------------------------------------------------- #
+# Test-suite shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class TestExpectation:
+    """Exactly ONE of contains/not_contains/matches/json_path (server-checked);
+    `equals` required with — and only with — json_path. No expression eval."""
+
+    contains: str | None = None
+    not_contains: str | None = None
+    matches: str | None = None  # regex, re.search on stdout
+    json_path: str | None = None  # dotted path into JSON-parsed stdout
+    equals: str | int | float | bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationTest:
+    """Run `command` on each node; check stdout. `wait` (0-600 s) polls until
+    the expectation holds — the convergence knob."""
+
+    nodes: list[str]
+    command: str
+    expect: TestExpectation
+    wait: int = 0
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TestSuite:
+    """Named test group. `stage` controls only *automatic* runs: config-time
+    suites run after every configure and gate "config done". Any suite can be
+    run manually."""
+
+    tests: dict[str, ValidationTest]
+    stage: Literal["config-time", "runtime"] = "runtime"
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class TestResult:
+    """One (test, node) outcome. "fail" = expectation never held (after
+    `wait`); "error" = command couldn't run; "skip" reserved, unused."""
+
+    test: str
+    node: str
+    status: Literal["pass", "fail", "skip", "error"]
+    command: str
+    output: str
+    detail: str
+    elapsed_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class SuiteReport:
+    suite: str
+    stage: str
+    passed: int
+    failed: int
+    skipped: int
+    errored: int
+    ran_at: datetime
+    results: list[TestResult]
+
+
+@dataclass(frozen=True, slots=True)
+class TestSuitesResponse:
+    """Declared suites + last run per suite (empty if never run) + the
+    config-time gate from the most recent configure."""
+
+    test_suites: dict[str, TestSuite]
+    last_validation: dict[str, SuiteReport]
+    config_time_status: ConfigTimeStatus  # APPROVED — wire today: config_time_ok
+
+
+# --------------------------------------------------------------------------- #
+# Custom-config shapes
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinTemplate:
+    """Shipped read-only template: `config:` name, description, per-device
+    files ({relpath: jinja source})."""
+
+    name: str
+    description: str
+    files: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomConfigResponse:
+    """Built-in library (identical for every lab) + this lab's user fileset.
+    Relpaths match `^[A-Za-z0-9][A-Za-z0-9_./-]*\\.j2$`, max 128."""
+
+    builtin: list[BuiltinTemplate]
+    custom_config: dict[str, str]
+
+
+# --------------------------------------------------------------------------- #
+# Action vocabularies
+# --------------------------------------------------------------------------- #
+
+LabPowerAction = Literal["start", "stop", "restart", "pause", "unpause"]
+NodePowerAction = Literal["start", "stop", "restart", "pause", "unpause"]
+# QUIRK: lab pause/unpause fan out per node (clab-api has no lab pause);
+# non-atomic — partial failure = 502 listing failed nodes; 409 if none running.
+
+
+# --------------------------------------------------------------------------- #
+# Terminal
+# --------------------------------------------------------------------------- #
+
+
+class TerminalSession(AbstractAsyncContextManager["TerminalSession"]):
+    """Node terminal: ``WS /api/v1/labs/{name}/nodes/{node}/terminal``
+    (lab:terminal). Auth from the handshake cookie BEFORE accept; rejection
+    closes 1008 with no reason. Upstream failure after accept closes 1011.
+
+    Frames (clab-api's protocol, relayed verbatim):
+      client -> {"type": "input"|"resize"|"close", ...}
+      server -> {"type": "ready"} | {"type": "output", "data": <base64>}
+              | {"type": "exit", ...}
+    The client library owns the base64 decode and exposes bytes.
+
+    QUIRK: path params are `name`/`node` vs `lab_name`/`node_name` elsewhere
+    (OpenAPI-visible). PROPOSAL: rename during the rework.
+    """
+
+    async def send(self, data: bytes) -> None:
+        raise NotImplementedError
+
+    async def recv(self, timeout: float | None = None) -> bytes:
+        """Decoded output. Raises on exit/close."""
+        raise NotImplementedError
+
+    async def resize(self, cols: int, rows: int) -> None:
+        raise NotImplementedError
+
+    async def close(self) -> None:
+        raise NotImplementedError
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.close()
+
+
+# --------------------------------------------------------------------------- #
+# The client
+# --------------------------------------------------------------------------- #
+
+
+class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
+    """Async Twinlab API client. One instance = one session (cookie jar on the
+    instance); use as ``async with TwinlabClient(...) as client``. Non-2xx
+    raises ``TwinlabApiError``.
+
+    Deploy/configure are synchronous long calls server-side (minutes on IOL)
+    — hence the separate ``action_timeout``.
+
+    PROPOSAL (recorded in ROADMAP): an async job model (202 + job polling or
+    the SSE stream) would fix the long-call and dropped-connection story; for
+    v1.0, generous timeouts suffice.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        subpath: str = "/api/v1",
+        api_key: str | None = None,
+        timeout: float = 30.0,
+        action_timeout: float = 1800.0,
+        verify_tls: bool = True,
+    ) -> None:
+        """`base_url` = backend origin (e.g. "http://localhost:8000");
+        `subpath` is appended to it. `api_key` authenticates every request as
+        `Authorization: Bearer <key>` instead of a login session (PROPOSED —
+        no backend support yet; `login` still works on a keyed client but is
+        pointless). `action_timeout` covers deploy/configure/destroy and
+        suite runs."""
+        raise NotImplementedError
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client (also done by `async with`)."""
+        raise NotImplementedError
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+    # ------------------------------------------------------------------ #
+    # Health (unauthenticated)
+    # ------------------------------------------------------------------ #
+
+    async def health(self) -> Liveness:
+        """GET /health — dependency-free liveness."""
+        raise NotImplementedError
+
+    async def ready(self) -> Readiness:
+        """GET /health/ready — parses both 200 and 503 (degraded is data, not
+        an error). Gate the black-box suite on this."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Auth
+    # ------------------------------------------------------------------ #
+
+    async def login(self, username: str, password: str) -> UserInfo:
+        """POST /auth/login — sets the session cookie. 401 "invalid
+        credentials" for both unknown-user and wrong-password (deliberately
+        opaque)."""
+        raise NotImplementedError
+
+    async def logout(self) -> None:
+        """POST /auth/logout — 204; idempotent."""
+        raise NotImplementedError
+
+    async def me(self) -> UserInfo:
+        """GET /auth/me — identity + GLOBAL roles/permissions."""
+        raise NotImplementedError
+
+    async def change_password(self, current: str, new: str) -> None:
+        """PROPOSED (APPROVED, not served yet) PUT /auth/password —
+        self-service change, requires the current password. 204; revokes the
+        user's OTHER sessions, keeps this one."""
+        raise NotImplementedError
+
+    # API keys — PROPOSED (no backend support yet): self-service long-lived
+    # credentials for automation (CI, the black-box suite), sent as
+    # `Authorization: Bearer <key>`. A key acts as its creating user with that
+    # user's permissions (no separate key scoping in v1); stored hashed;
+    # deleting/deactivating the user kills its keys.
+
+    async def create_api_key(self, name: str) -> ApiKeyCreated:
+        """PROPOSED POST /auth/api-keys — 201. The secret is returned only
+        here. 409 name_taken (per user)."""
+        raise NotImplementedError
+
+    async def list_api_keys(self) -> list[ApiKey]:
+        """PROPOSED GET /auth/api-keys — the caller's own keys, no secrets."""
+        raise NotImplementedError
+
+    async def revoke_api_key(self, key_id: UUID) -> None:
+        """PROPOSED DELETE /auth/api-keys/{key_id} — 204, immediate."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Users (global user:manage)
+    # ------------------------------------------------------------------ #
+    # PROPOSED endpoints below (approved) are marked in their docstrings.
+
+    async def create_user(
+        self, username: str, password: str, roles: set[str] | None = None
+    ) -> UserSummary:
+        """POST /users — 201. `roles` = GLOBAL roles. 409 username_taken;
+        422 unknown_roles; password min 8."""
+        raise NotImplementedError
+
+    async def list_users(self) -> list[UserSummary]:
+        """GET /users. No pagination anywhere (explicit v1.0 decision)."""
+        raise NotImplementedError
+
+    async def get_user(self, user_id: UUID) -> UserSummary:
+        """PROPOSED (APPROVED, not served yet) GET /users/{user_id} — 404
+        user_not_found."""
+        raise NotImplementedError
+
+    async def set_user_roles(self, user_id: UUID, roles: set[str]) -> UserSummary:
+        """PUT /users/{user_id}/roles — full replace of global roles.
+        404 user_not_found; 422 unknown/non-global role."""
+        raise NotImplementedError
+
+    async def set_user_password(self, user_id: UUID, password: str) -> None:
+        """PROPOSED (APPROVED, not served yet) PUT /users/{user_id}/password —
+        admin reset. 204; revokes ALL the user's sessions."""
+        raise NotImplementedError
+
+    async def set_user_active(self, user_id: UUID, is_active: bool) -> UserSummary:
+        """PROPOSED (APPROVED, not served yet) PUT /users/{user_id}/active —
+        deactivate/reactivate. Deactivation revokes the user's sessions and
+        stops their API keys; record, bindings, and owned labs are untouched —
+        the reversible soft alternative to delete_user. Refuses deactivating
+        the last active admin (409, same rule as delete)."""
+        raise NotImplementedError
+
+    async def delete_user(self, user_id: UUID) -> None:
+        """PROPOSED (APPROVED, not served yet) DELETE /users/{user_id} — 204.
+
+        Semantics to pin: revoke the user's sessions; delete role bindings
+        they RECEIVED (cascade); keep rows where they were the actor — owned
+        labs -> owner NULL (FK is already SET NULL), grants they MADE keep
+        granted_by NULL. Refusing to delete the last admin (409) — APPROVED."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Groups (global group:manage)
+    # ------------------------------------------------------------------ #
+
+    async def create_group(self, name: str, description: str = "") -> GroupSummary:
+        """POST /groups — 201. 409 name_taken."""
+        raise NotImplementedError
+
+    async def list_groups(self) -> list[GroupSummary]:
+        """GET /groups."""
+        raise NotImplementedError
+
+    async def get_group(self, group_id: UUID) -> GroupSummary:
+        """PROPOSED (APPROVED, not served yet) GET /groups/{group_id} — 404
+        group_not_found."""
+        raise NotImplementedError
+
+    async def delete_group(self, group_id: UUID) -> None:
+        """DELETE /groups/{group_id} — 204. Also deletes the group's bindings;
+        members untouched."""
+        raise NotImplementedError
+
+    async def set_group_members(
+        self, group_id: UUID, user_ids: list[UUID]
+    ) -> GroupSummary:
+        """PUT /groups/{group_id}/members — full replace. 404 group_not_found;
+        422 user_not_found."""
+        raise NotImplementedError
+
+    async def set_group_roles(self, group_id: UUID, roles: set[str]) -> GroupSummary:
+        """PUT /groups/{group_id}/roles — full replace of GLOBAL roles (lab
+        grants go through create_grant). 422 non-global-bindable role."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Catalog / directory (any authenticated user)
+    # ------------------------------------------------------------------ #
+
+    async def list_roles(self) -> list[Role]:
+        """GET /roles — the code-defined role catalog."""
+        raise NotImplementedError
+
+    async def list_principals(self) -> Principals:
+        """GET /principals. QUIRK (recorded in ROADMAP): exposes all
+        user/group names to any authenticated user — accepted for now; revisit
+        if enumeration becomes a concern."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Labs — lifecycle
+    # ------------------------------------------------------------------ #
+
+    # Lifecycle split (APPROVED, applied — wire today: one-shot POST /labs
+    # carrying name+definition+suites+templates, and a separate /redeploy):
+    # create (record only) -> author (the PUTs) -> deploy (from the stored
+    # record). The mgmt-subnet reservation moves to the cheap create call,
+    # killing the reserve/retry race machinery around the slow deploy.
+
+    async def create_lab(self, name: str) -> LabDetail:
+        """POST /labs {name} — 201. GLOBAL lab:create; caller becomes owner.
+
+        Record only: allocates the lab's mgmt /24, status "created" — no
+        definition yet, nothing deployed. `name` is the lab's durable identity.
+        409 name taken; 503 subnet pool exhausted."""
+        raise NotImplementedError
+
+    async def list_labs(self) -> list[LabSummary]:
+        """GET /labs — filtered to labs with lab:read (owned, granted, group,
+        global). No access = [] — never 403."""
+        raise NotImplementedError
+
+    async def get_lab(self, name: str) -> LabDetail:
+        """GET /labs/{name} — lab:read. 404 if absent OR unreadable; 502 on
+        clab-api failure other than lab-not-deployed."""
+        raise NotImplementedError
+
+    async def update_definition(self, name: str, definition: str) -> LabDetail:
+        """PUT /labs/{name} — lab:edit. Replaces the STORED definition only
+        (applies on next deploy). The definition must name each node's `device`
+        and the `provider`; any `name:` in it is overridden by the record, and
+        the mgmt subnet is re-pinned (explicit `addressing.mgmt.ipv4` wins).
+        Validated by a dry `netlab create` (422). 409 subnet clash."""
+        raise NotImplementedError
+
+    async def deploy_lab(
+        self,
+        name: str,
+        *,
+        configure: bool = False,
+        skip_config_time_checks: bool = False,
+    ) -> DeployResponse:
+        """POST /labs/{name}/deploy — lab:edit (wire today: this verb is
+        /redeploy; the split renames it and makes it the ONLY deploy). Deploys
+        from the stored definition + suites + custom config: fresh if
+        "created"/"destroyed", overwrite-in-place if running. Long call —
+        waits for NOS readiness even without `configure`.
+
+        Errors: 409 no stored definition yet; 409 a deploy of this lab is
+        already in flight (the deploying-status mutex — APPROVED, closes
+        today's unguarded concurrent-redeploy race); 422 netlab rejects the
+        stored definition; 502 clab-api/runner failure or per-node push
+        failure. status="validation_failed" is a 2xx."""
+        raise NotImplementedError
+
+    # (create_and_deploy convenience removed per review: a client-side
+    # composition cannot be atomic — a partway failure would strand a
+    # "created" record — and the bar was "remove unless atomic". Callers
+    # compose create_lab + PUTs + deploy_lab explicitly.)
+
+    async def configure_lab(
+        self, name: str, *, skip_config_time_checks: bool = False
+    ) -> ConfigureResponse:
+        """POST /labs/{name}/configure — lab:configure. Pushes config from the
+        stored definition, then runs config-time suites unless skipped (the
+        automatic run rides lab:configure, not lab:validate — deliberate).
+        422 bad definition; 502 runner/push failure."""
+        raise NotImplementedError
+
+    async def destroy_lab(self, name: str, *, remove: bool = False) -> DestroyResponse:
+        """DELETE /labs/{name} — lab:destroy.
+
+        remove=False: tear down; record -> "destroyed" (redeployable). QUIRK (APPROVED):
+        requires the lab to be RUNNING — 404 if already down.
+        remove=True: also soft-delete the record; teardown best-effort, so a
+        down lab is fine. Pin the asymmetry in tests."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Labs — test suites
+    # ------------------------------------------------------------------ #
+
+    async def get_test_suites(self, name: str) -> TestSuitesResponse:
+        """GET /labs/{name}/test-suites — lab:read."""
+        raise NotImplementedError
+
+    async def put_test_suites(
+        self, name: str, suites: dict[str, TestSuite]
+    ) -> TestSuitesResponse:
+        """PUT /labs/{name}/test-suites — lab:edit. Full replace; takes effect
+        on the next run."""
+        raise NotImplementedError
+
+    async def run_test_suite(self, name: str, suite: str) -> SuiteReport:
+        """POST /labs/{name}/test-suites/{suite}/run — lab:validate. Runs one
+        suite (any stage); persists as its last run but NEVER moves the
+        config-time gate. 404 unknown suite. Long call (per-test `wait`)."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Labs — custom config
+    # ------------------------------------------------------------------ #
+
+    async def get_custom_config(self, name: str) -> CustomConfigResponse:
+        """GET /labs/{name}/custom-config — lab:read."""
+        raise NotImplementedError
+
+    async def put_custom_config(
+        self, name: str, fileset: dict[str, str]
+    ) -> CustomConfigResponse:
+        """PUT /labs/{name}/custom-config — lab:edit. Full replace of the USER
+        fileset. 409 if a path shadows a built-in. Applies on the next
+        configure/deploy."""
+        raise NotImplementedError
+
+    # stopped here
+
+    # ------------------------------------------------------------------ #
+    # Labs — runtime control & observability (live clab-api state)
+    # ------------------------------------------------------------------ #
+
+    async def lab_power(self, name: str, action: LabPowerAction) -> LabActionResponse:
+        """POST /labs/{name}/{action} — lab:configure. pause/unpause fan out
+        per node (see LabPowerAction QUIRK)."""
+        raise NotImplementedError
+
+    async def node_power(
+        self, name: str, node: str, action: NodePowerAction
+    ) -> LabActionResponse:
+        """POST /labs/{name}/nodes/{node}/{action} — lab:configure."""
+        raise NotImplementedError
+
+    async def save_config(self, name: str) -> SaveConfigResponse:
+        """POST /labs/{name}/save — lab:configure. containerlab save."""
+        raise NotImplementedError
+
+    async def node_logs(
+        self, name: str, node: str, *, tail: int = 200
+    ) -> NodeLogsResponse:
+        """GET /labs/{name}/nodes/{node}/logs?tail= — lab:read. Container
+        logs, not NOS syslog."""
+        raise NotImplementedError
+
+    async def interfaces(
+        self, name: str, *, node: str | None = None
+    ) -> list[NodeInterfaces]:
+        """GET /labs/{name}/interfaces[?node=] — lab:read. See NodeInterfaces
+        QUIRK (container-name keys)."""
+        raise NotImplementedError
+
+    async def show_netem(self, name: str, node: str) -> list[NetemImpairment]:
+        """GET /labs/{name}/nodes/{node}/netem — lab:read."""
+        raise NotImplementedError
+
+    async def set_netem(
+        self,
+        name: str,
+        node: str,
+        interface: str,
+        *,
+        delay: Duration | None = None,
+        jitter: Duration | None = None,
+        loss: float | None = None,
+        rate: int | None = None,
+        corruption: float | None = None,
+    ) -> LabActionResponse:
+        """POST /labs/{name}/nodes/{node}/netem — lab:configure. REPLACE
+        semantics (APPROVED): the call states the interface's COMPLETE desired
+        impairment — an omitted/None dimension is cleared, and a call with no
+        impairments clears everything (subsuming the removed /netem/reset
+        endpoint). jitter requires delay; loss/corruption 0-100 %, rate kbit/s.
+
+        Wire today: "50ms"-style duration strings, omitted = unchanged, an
+        at-least-one-impairment rule, and a separate POST .../netem/reset."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Labs — grants & ownership (lab:grant on the lab)
+    # ------------------------------------------------------------------ #
+
+    async def list_grants(self, name: str) -> list[Grant]:
+        """GET /labs/{name}/grants."""
+        raise NotImplementedError
+
+    async def create_grant(
+        self,
+        name: str,
+        principal_type: Literal["user", "group"],
+        principal_id: UUID,
+        role: str,
+    ) -> Grant:
+        """POST /labs/{name}/grants — 201. 422 unless the role is lab-bindable;
+        403 anti-escalation (role's permissions must be ⊆ the caller's on this
+        lab). Duplicates are idempotent."""
+        raise NotImplementedError
+
+    async def delete_grant(self, name: str, binding_id: UUID) -> None:
+        """DELETE /labs/{name}/grants/{binding_id} — 204. 404 if absent or on
+        another lab."""
+        raise NotImplementedError
+
+    async def transfer_owner(self, name: str, user_id: UUID) -> LabOwner:
+        """PUT /labs/{name}/owner. Requires owner-EQUIVALENCE (the full owner
+        permission set on the lab), else 403. 404 unknown user.
+
+        Returns `LabOwner` (APPROVED — wire today: a fake grant shape with the
+        lab's UUID as `id` and the non-catalog role "owner")."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Streams
+    # ------------------------------------------------------------------ #
+
+    def events(self) -> AsyncIterator[LabEvent]:
+        """GET /events (SSE) — any authenticated user; filtered to readable
+        labs (set refreshes ~30 s, so a mid-stream grant lags up to that).
+        Iterate with `async for`; keepalives are consumed, not yielded. Useful
+        for awaiting deploy/destroy side effects instead of polling."""
+        raise NotImplementedError
+
+    def terminal(
+        self,
+        name: str,
+        node: str,
+        *,
+        protocol: Literal["ssh", "shell"] = "ssh",
+        cols: int = 80,
+        rows: int = 24,
+        ssh_username: str | None = None,
+    ) -> AbstractAsyncContextManager[TerminalSession]:
+        """Open the node terminal WS (lab:terminal; see TerminalSession) —
+        `async with client.terminal(...) as term`. `ssh_username`: clab-api
+        defaults to "admin" (wrong for e.g. VyOS); ignored for
+        protocol="shell"."""
+        raise NotImplementedError

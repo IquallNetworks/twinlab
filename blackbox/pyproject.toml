@@ -1,0 +1,48 @@
+[project]
+name = "twinlab-blackbox"
+version = "0.1.0"
+description = "Black-box test suite for the Twinlab API — pins the v1.0 contract against a live stack."
+requires-python = ">=3.13"
+dependencies = [
+    "twinlab-client",
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.9",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.22",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+twinlab-client = { path = "../client", editable = true }
+
+[tool.ruff]
+line-length = 100
+src = ["tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+# pytest's rootdir import mode puts tests/ itself on sys.path (no package),
+# so sibling test modules (_config) import bare; mirror that for the checker.
+extraPaths = ["tests"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Same rationale as the backend/client: Test* domain models (TestSuite, ...)
+# are not test cases.
+python_classes = ["*Tests"]
+markers = [
+    "deploy: deploys real labs through containerlab (slow; needs the node image on the host)",
+]

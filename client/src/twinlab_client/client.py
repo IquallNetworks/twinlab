@@ -227,7 +227,8 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def create_user(
         self, username: str, password: str, roles: set[str] | None = None
     ) -> UserSummary:
-        """POST /users — 201. `roles` = GLOBAL roles. 409 username_taken;
+        """POST /users — 201. `roles` = GLOBAL roles; omitted/empty = the
+        baseline "user" role (authenticated, no access). 409 username_taken;
         422 unknown_roles; password min 8."""
         body: dict[str, object] = {"username": username, "password": password}
         if roles is not None:

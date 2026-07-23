@@ -6,7 +6,10 @@ from typing import cast
 import httpx
 
 
-@dataclass(frozen=True, slots=True)
+# Deliberately NOT frozen: re-raising through a context manager assigns
+# `exc.__traceback__` at Python level (contextlib), which a frozen dataclass's
+# __setattr__ rejects. Exceptions must stay mutable.
+@dataclass(slots=True)
 class TwinlabApiError(Exception):
     """Any non-2xx response.
 

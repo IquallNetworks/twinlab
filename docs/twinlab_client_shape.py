@@ -71,7 +71,10 @@ from uuid import UUID
 # --------------------------------------------------------------------------- #
 
 
-@dataclass(frozen=True, slots=True)
+# Not frozen (implementation finding): re-raising through a context manager
+# assigns `exc.__traceback__` at Python level (contextlib), which a frozen
+# dataclass's __setattr__ rejects — exceptions must stay mutable.
+@dataclass(slots=True)
 class TwinlabApiError(Exception):
     """Any non-2xx response.
 
@@ -696,7 +699,8 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def create_user(
         self, username: str, password: str, roles: set[str] | None = None
     ) -> UserSummary:
-        """POST /users — 201. `roles` = GLOBAL roles. 409 username_taken;
+        """POST /users — 201. `roles` = GLOBAL roles; omitted/empty = the
+        baseline "user" role (authenticated, no access). 409 username_taken;
         422 unknown_roles; password min 8."""
         raise NotImplementedError
 

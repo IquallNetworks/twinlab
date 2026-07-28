@@ -11,6 +11,7 @@ translated here into typed results; nothing propagates as an exception.
 
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Literal
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -42,7 +43,7 @@ class NodeConfig:
     failed: int
 
     @property
-    def status(self) -> str:
+    def status(self) -> Literal["configured", "failed"]:
         return "failed" if self.failed else "configured"
 
 

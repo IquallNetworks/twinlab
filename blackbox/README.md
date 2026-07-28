@@ -59,7 +59,7 @@ it unset until the guard is implemented.
 | `test_grants.py`       | delegation, anti-escalation, group grants, ownership transfer |
 | `test_labs_deploy.py`  | (`deploy`) real deploys: lifecycle, mutex, netem, power, terminal, events |
 
-Against the pre-rework backend (bc89daa wire), the health/auth/users/groups/catalog slices run
-green except where an approved endpoint is missing; everything lab-record-based is red because the
-create/author/deploy lifecycle split is not served yet. That red set *is* the backend-rework
-checklist.
+The backend implements the full v1.0 contract, and the suite is **entirely green** (83/83 with the
+`deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is the contract's enforcement: run it
+after backend changes; a new red means either a regression or a contract change that must go
+through review.

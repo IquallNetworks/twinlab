@@ -11,16 +11,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from twinlab_backend.db.models import Lab
 
-# Status values a lab row can hold. "deploying" is a transient reservation state
-# held while a deploy is in flight (so its mgmt subnet is claimed atomically
-# before the slow deploy runs). "stored" (saved but never deployed) is reserved
-# for a future save-only flow.
+# Status values a lab row can hold (the lifecycle split). "created" is a bare
+# record (no definition yet); "deploying" is the in-flight deploy mutex.
+STATUS_CREATED = "created"
 STATUS_DEPLOYING = "deploying"
 STATUS_DEPLOYED = "deployed"
 STATUS_DESTROYED = "destroyed"
@@ -28,7 +27,7 @@ STATUS_DESTROYED = "destroyed"
 
 @dataclass(frozen=True, slots=True)
 class LabStoreError:
-    reason: str  # "not_found" | "subnet_taken" | "name_taken"
+    reason: str  # "not_found" | "subnet_taken" | "name_taken" | "deploying"
     detail: str = ""
 
 
@@ -54,40 +53,45 @@ async def list_labs(session: AsyncSession) -> list[Lab]:
 
 async def used_mgmt_subnets(session: AsyncSession) -> set[str]:
     """Every management subnet currently assigned to a lab record, any status.
-    Records are never hard-deleted, so this is the full set to avoid when
-    allocating a new lab's subnet."""
+    Soft-deleted rows released theirs (set NULL on delete), so no filter is
+    needed here."""
     rows = await session.scalars(select(Lab.mgmt_subnet).where(Lab.mgmt_subnet.is_not(None)))
     return {subnet for subnet in rows.all() if subnet is not None}
 
 
-async def reserve_lab(
-    session: AsyncSession, name: str, definition: str, mgmt_subnet: str, owner_id: uuid.UUID
+async def create_lab(
+    session: AsyncSession, name: str, mgmt_subnet: str, owner_id: uuid.UUID
 ) -> Lab | LabStoreError:
-    """Claim a lab's row and mgmt subnet BEFORE the (slow) deploy, so two
-    concurrent deploys can't grab the same /24. Creates the row (`deploying`) or
-    re-arms a previously destroyed one. `subnet_taken` when another lab already
-    holds this subnet (the unique index rejects the commit); `name_taken` when the
-    name was claimed concurrently — the caller re-allocates or 409s accordingly.
-    A previously soft-deleted name is revived here (the row is reused and its
-    delete marker cleared), so a deleted lab's name is free to redeploy."""
-    lab = await get_lab(session, name, include_deleted=True)
-    if lab is None:
+    """Create a bare lab record (the lifecycle split's cheap create): status
+    `created`, no definition, mgmt subnet claimed atomically by the unique
+    index. A previously soft-deleted name is revived as a FRESH record (its old
+    definition/suites/templates cleared — deletion freed the name). `name_taken`
+    when an active lab holds the name; `subnet_taken` when another lab holds
+    this subnet (the caller re-allocates and retries)."""
+    existing = await get_lab(session, name, include_deleted=True)
+    if existing is not None and existing.deleted_at is None:
+        return LabStoreError("name_taken", name)
+    if existing is None:
         lab = Lab(
             name=name,
-            definition=definition,
-            status=STATUS_DEPLOYING,
+            status=STATUS_CREATED,
             created_by=owner_id,
             owner_id=owner_id,
             mgmt_subnet=mgmt_subnet,
         )
         session.add(lab)
     else:
-        lab.definition = definition
-        lab.status = STATUS_DEPLOYING
+        lab = existing
+        lab.definition = None
+        lab.status = STATUS_CREATED
         lab.created_by = owner_id
         lab.owner_id = owner_id
         lab.mgmt_subnet = mgmt_subnet
-        lab.deleted_at = None  # revive a soft-deleted name on redeploy
+        lab.test_suites = None
+        lab.last_validation = None
+        lab.config_time_ok = None
+        lab.custom_config = None
+        lab.deleted_at = None
     try:
         await session.commit()
     except IntegrityError:
@@ -103,18 +107,37 @@ async def reserve_lab(
     return lab
 
 
-async def release_reservation(session: AsyncSession, name: str, *, created_new: bool) -> None:
-    """Undo a reservation after a failed deploy. A freshly-created reservation is
-    deleted (freeing the name and its subnet); a re-armed destroyed lab reverts to
-    `destroyed`, keeping its record."""
+async def begin_deploy(session: AsyncSession, name: str) -> str | LabStoreError:
+    """Atomically claim the deploy mutex: flip the lab to `deploying` only if no
+    deploy is already in flight, returning the PREVIOUS status so a failed
+    deploy can restore it. The compare-and-swap UPDATE (WHERE status unchanged)
+    makes two concurrent deploys serialize — the loser gets `deploying`."""
     lab = await get_lab(session, name)
     if lab is None:
-        return
-    if created_new:
-        await session.delete(lab)
-    else:
-        lab.status = STATUS_DESTROYED
+        return LabStoreError("not_found", name)
+    previous = lab.status
+    if previous == STATUS_DEPLOYING:
+        return LabStoreError("deploying", name)
+    claimed = await session.execute(
+        update(Lab).where(Lab.id == lab.id, Lab.status == previous).values(status=STATUS_DEPLOYING)
+    )
     await session.commit()
+    # An UPDATE's execute() is a CursorResult; rowcount says whether OUR
+    # compare-and-swap matched (0 = another deploy claimed it between the read
+    # and the update).
+    if not isinstance(claimed, CursorResult) or claimed.rowcount != 1:
+        return LabStoreError("deploying", name)
+    return previous
+
+
+async def set_status(session: AsyncSession, name: str, status: str) -> Lab | LabStoreError:
+    """Restore a lab's status (a failed deploy reverts the `deploying` claim)."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.status = status
+    await session.commit()
+    return lab
 
 
 async def mark_destroyed(session: AsyncSession, name: str) -> Lab | LabStoreError:
@@ -129,15 +152,17 @@ async def mark_destroyed(session: AsyncSession, name: str) -> Lab | LabStoreErro
 
 
 async def soft_delete(session: AsyncSession, name: str) -> Lab | LabStoreError:
-    """Mark a lab deleted: hidden from list/detail and inoperable, but the row is
-    kept (definition retained, mgmt subnet stays reserved). Idempotent guard —
-    `not_found` when the lab is absent or already deleted, since `get_lab` hides
-    soft-deleted rows. Redeploying the name later revives the row (see
-    `reserve_lab`)."""
+    """Mark a lab deleted: hidden from list/detail and inoperable, the row kept
+    for audit. RELEASES the mgmt subnet (contract delta 11) — a deleted record
+    can't be redeployed through the API, so holding its /24 would only walk the
+    pool toward exhaustion. `not_found` when the lab is absent or already
+    deleted. Creating the same name later revives the row as a fresh record
+    (see `create_lab`)."""
     lab = await get_lab(session, name)
     if lab is None:
         return LabStoreError("not_found", name)
     lab.deleted_at = datetime.now(UTC)
+    lab.mgmt_subnet = None
     await session.commit()
     return lab
 

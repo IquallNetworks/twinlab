@@ -15,16 +15,16 @@ released before streaming — a long-lived SSE connection must not pin a DB conn
 import asyncio
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from twinlab_backend.api_errors import ApiError
+from twinlab_backend.auth.dependencies import resolve_credentials
 from twinlab_backend.auth.service import readable_lab_names
-from twinlab_backend.auth.sessions import resolve_session
 from twinlab_backend.config import Settings
 from twinlab_backend.db.models import User
 from twinlab_backend.deps import ClabClientDep, SettingsDep
 from twinlab_backend.models import LabEvent
-from twinlab_backend.result import Err
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.clab_api import LabEvent as ClabLabEvent
 
@@ -39,16 +39,19 @@ _READABLE_TTL_SECONDS = 30.0
 
 
 async def _authenticate(request: Request, settings: Settings) -> User:
-    """Resolve the session cookie in a short-lived DB session and return the user.
-    Any authenticated user may open the stream; events are filtered per lab."""
-    token = request.cookies.get(settings.session_cookie_name)
-    if not token:
-        raise HTTPException(status_code=401, detail="not authenticated")
+    """Resolve the caller (Bearer key or session cookie) in a short-lived DB
+    session. Any authenticated user may open the stream; events are filtered
+    per lab."""
     async with request.app.state.session_factory() as session:
-        resolved = await resolve_session(session, token)
-        if isinstance(resolved, Err):
-            raise HTTPException(status_code=401, detail="invalid or expired session")
-        return resolved.value
+        user = await resolve_credentials(
+            session,
+            settings,
+            authorization=request.headers.get("Authorization"),
+            cookie_token=request.cookies.get(settings.session_cookie_name),
+        )
+    if user is None:
+        raise ApiError(401, "not_authenticated", "not authenticated")
+    return user
 
 
 async def _resolve_readable(request: Request, user: User) -> set[str] | None:

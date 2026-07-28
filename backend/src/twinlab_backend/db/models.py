@@ -55,7 +55,7 @@ group_members = Table(
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     email: Mapped[str | None] = mapped_column(String(320), default=None)
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -64,7 +64,7 @@ class User(Base):
 
     # The groups this user belongs to; their bindings also count toward the user's
     # effective permissions. Eager-loaded so the resolver can gather group ids.
-    groups: Mapped[list["Group"]] = relationship(
+    groups: Mapped[list[Group]] = relationship(
         secondary=group_members, lazy="selectin", back_populates="members"
     )
 
@@ -76,7 +76,7 @@ class Role(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     description: Mapped[str] = mapped_column(String(255), default="")
 
-    permissions: Mapped[list["Permission"]] = relationship(
+    permissions: Mapped[list[Permission]] = relationship(
         secondary=role_permissions, lazy="selectin"
     )
 
@@ -94,12 +94,12 @@ class Group(Base):
 
     __tablename__ = "groups"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     description: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    members: Mapped[list["User"]] = relationship(
+    members: Mapped[list[User]] = relationship(
         secondary=group_members, lazy="selectin", back_populates="groups"
     )
 
@@ -129,7 +129,7 @@ class RoleBinding(Base):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
     principal_type: Mapped[str] = mapped_column(String(8), index=True)  # "user" | "group"
     principal_id: Mapped[uuid.UUID] = mapped_column(Uuid(), index=True)
     role_name: Mapped[str] = mapped_column(String(64))
@@ -155,15 +155,16 @@ class Lab(Base):
 
     __tablename__ = "labs"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
     # The stable lab name injected into the definition; shared identity across
     # create/deploy/configure/destroy. Charset is clab-safe (see the API layer).
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    # The named netlab definition the lab was deployed from — stored so configure
-    # can re-render deterministically without the caller resupplying it.
-    definition: Mapped[str] = mapped_column(Text())
-    # "deployed" | "destroyed". "stored" (saved but never deployed) is reserved
-    # for a future save-only flow; today's flows only produce the first two.
+    # The named netlab definition the lab deploys from — stored so deploy and
+    # configure re-render deterministically without the caller resupplying it.
+    # NULL only while the lab is a bare "created" record (not yet authored).
+    definition: Mapped[str | None] = mapped_column(Text(), default=None)
+    # "created" (record only) | "deploying" (in-flight mutex) | "deployed" |
+    # "destroyed" (torn down, redeployable).
     status: Mapped[str] = mapped_column(String(16))
     # The management /24 assigned to this lab (e.g. "10.77.3.0/24"), baked into
     # the stored definition. Kept per-record so allocation avoids it for the
@@ -208,20 +209,43 @@ class Lab(Base):
     )
     # Soft-delete marker. NULL means active; a timestamp means the lab was deleted
     # from the catalog (torn down and hidden from list/detail) but the row is kept
-    # — the definition is retained for audit, and the mgmt subnet stays reserved so
-    # it isn't handed to a new lab. Distinct from `destroyed` (a lifecycle status: a
-    # still-listed lab that can be redeployed).
+    # for audit. Deletion RELEASES the mgmt subnet (set NULL, contract delta 11);
+    # a plain `destroyed` lab keeps its subnet so a redeploy reproduces the same
+    # environment.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     # Two FKs point at users (created_by + owner_id), so the relationship must name
     # which one it follows. `owner` tracks owner_id (the authoritative owner).
-    owner: Mapped["User | None"] = relationship(lazy="selectin", foreign_keys=[owner_id])
+    owner: Mapped[User | None] = relationship(lazy="selectin", foreign_keys=[owner_id])
+
+
+class ApiKey(Base):
+    """A long-lived Bearer credential acting as its creating user (automation:
+    CI, the black-box suite). Only the sha256 of the secret is stored; the raw
+    key is shown once at creation. Revocation deletes the row; a deactivated or
+    deleted user's keys stop working (is_active check on resolve + CASCADE)."""
+
+    __tablename__ = "api_keys"
+    # Names are per-user labels ("ci"); two users may both have a "ci" key.
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_api_key_user_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(64))
+    # sha256 hex of the raw key; deterministic so the Bearer lookup is by hash.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    user: Mapped[User] = relationship(lazy="selectin")
 
 
 class Session(Base):
     __tablename__ = "sessions"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -231,4 +255,4 @@ class Session(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    user: Mapped["User"] = relationship(lazy="selectin")
+    user: Mapped[User] = relationship(lazy="selectin")

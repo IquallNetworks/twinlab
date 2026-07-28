@@ -952,7 +952,10 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         raise NotImplementedError
 
     async def show_netem(self, name: str, node: str) -> list[NetemImpairment]:
-        """GET /labs/{name}/nodes/{node}/netem — lab:read."""
+        """GET /labs/{name}/nodes/{node}/netem — lab:read. Lists only the
+        interfaces with ACTIVE impairment (implementation finding: tc/clab
+        omit unshaped interfaces) — a cleared interface is absent, not
+        zeroed."""
         raise NotImplementedError
 
     async def set_netem(

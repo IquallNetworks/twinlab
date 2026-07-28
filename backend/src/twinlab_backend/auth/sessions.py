@@ -45,7 +45,7 @@ async def create_session(session: AsyncSession, user_id: uuid.UUID, ttl: timedel
 
 async def resolve_session(session: AsyncSession, raw_token: str) -> Result[User, SessionError]:
     row = await session.scalar(select(Session).where(Session.token_hash == _hash_token(raw_token)))
-    if row is None or row.revoked_at is not None:
+    if row is None or row.revoked_at is not None or not row.user.is_active:
         return Err(SessionError("invalid"))
     if row.expires_at <= datetime.now(UTC):
         return Err(SessionError("expired"))
@@ -57,3 +57,21 @@ async def revoke_session(session: AsyncSession, raw_token: str) -> None:
     if row is not None and row.revoked_at is None:
         row.revoked_at = datetime.now(UTC)
         await session.commit()
+
+
+async def revoke_all_for_user(
+    session: AsyncSession, user_id: uuid.UUID, *, keep_raw_token: str | None = None
+) -> None:
+    """Revoke every live session of a user — password reset, deactivation,
+    deletion. `keep_raw_token` spares one session: a self-service password
+    change keeps the session that made it."""
+    keep_hash = _hash_token(keep_raw_token) if keep_raw_token is not None else None
+    rows = await session.scalars(
+        select(Session).where(Session.user_id == user_id, Session.revoked_at.is_(None))
+    )
+    now = datetime.now(UTC)
+    for row in rows.all():
+        if keep_hash is not None and row.token_hash == keep_hash:
+            continue
+        row.revoked_at = now
+    await session.commit()

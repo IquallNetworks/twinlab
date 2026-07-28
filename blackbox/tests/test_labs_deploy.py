@@ -123,12 +123,11 @@ async def test_netem_set_show_clear(admin: TwinlabClient, make_lab: LabFactory) 
     assert impairment.loss == 1.0
     assert impairment.jitter is None
 
-    # REPLACE semantics: a call with no impairments clears the interface.
+    # REPLACE semantics: a call with no impairments clears the interface —
+    # and show lists only ACTIVELY impaired interfaces, so it disappears.
     _ = await admin.set_netem(detail.name, "n1", interface)
     cleared = {imp.interface: imp for imp in await admin.show_netem(detail.name, "n1")}
-    impairment = cleared[interface]
-    assert impairment.delay is None
-    assert impairment.loss == 0.0
+    assert interface not in cleared
 
 
 async def test_node_power_cycle(admin: TwinlabClient, make_lab: LabFactory) -> None:

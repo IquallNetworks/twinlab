@@ -22,6 +22,7 @@ from twinlab_backend.api.labs import router as labs_router
 from twinlab_backend.api.roles import router as roles_router
 from twinlab_backend.api.terminal import router as terminal_router
 from twinlab_backend.api.users import router as users_router
+from twinlab_backend.api_errors import register_error_handlers
 from twinlab_backend.auth.bootstrap import ensure_admin, seed_rbac
 from twinlab_backend.config import load_settings
 from twinlab_backend.db.base import create_engine, make_session_factory
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Twinlab backend", version="0.1.0", lifespan=lifespan)
+    register_error_handlers(app)
     app.include_router(health_router, prefix=_API_PREFIX)
     app.include_router(auth_router, prefix=_API_PREFIX)
     app.include_router(labs_router, prefix=_API_PREFIX)

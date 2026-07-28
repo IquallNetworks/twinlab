@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Galileo Cappella", email = "galileocapp@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
@@ -42,7 +42,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.basedpyright]
 typeCheckingMode = "strict"
-pythonVersion = "3.13"
+pythonVersion = "3.14"
 venvPath = "."
 venv = ".venv"
 

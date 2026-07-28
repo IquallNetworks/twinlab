@@ -8,5 +8,5 @@ def test_terminal_websocket_route_is_mounted_under_api_prefix() -> None:
     # isn't registered. The auth-before-accept gate and the relay are exercised by
     # the live integration test (real DB + clab-api).
     app = create_app()
-    path = app.url_path_for("node_terminal", name="lab1", node="r1")
+    path = app.url_path_for("node_terminal", lab_name="lab1", node_name="r1")
     assert path == "/api/v1/labs/lab1/nodes/r1/terminal"

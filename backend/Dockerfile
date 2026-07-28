@@ -2,7 +2,7 @@
 
 # uv-managed build. The venv (including the netlab CLI, a runtime dependency the
 # backend shells out to) is materialised from the lockfile for reproducibility.
-FROM python:3.13-slim AS base
+FROM python:3.14-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \

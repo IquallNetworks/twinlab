@@ -8,11 +8,12 @@ bindings, so access is curated by membership rather than re-granted per user.
 import uuid
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from twinlab_backend.api_errors import ApiError
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import require_global
 from twinlab_backend.db.models import Group
@@ -56,7 +57,7 @@ def _raise(error: rbac_store.RbacStoreError) -> NoReturn:
     status = {"name_taken": 409, "group_not_found": 404, "user_not_found": 422}.get(
         error.reason, 422
     )
-    raise HTTPException(status_code=status, detail={"reason": error.reason, "detail": error.detail})
+    raise ApiError(status, error.reason, error.detail)
 
 
 async def _summary(db: SessionDep, group_id: uuid.UUID) -> GroupSummary:
@@ -67,7 +68,7 @@ async def _summary(db: SessionDep, group_id: uuid.UUID) -> GroupSummary:
         select(Group).options(selectinload(Group.members)).where(Group.id == group_id)
     )
     if group is None:  # the group was just created/verified; absence is an internal fault
-        raise HTTPException(status_code=404, detail={"reason": "group_not_found", "detail": ""})
+        raise ApiError(404, "group_not_found", "group not found")
     roles = await rbac_store.global_role_names_for(db, perms.PRINCIPAL_GROUP, group.id)
     return GroupSummary(
         id=group.id,
@@ -83,10 +84,7 @@ def _validate_global_roles(role_names: list[str]) -> None:
         name for name in set(role_names) if not perms.role_bindable_at(name, perms.SCOPE_GLOBAL)
     )
     if bad:
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "unknown_roles", "detail": ", ".join(bad)},
-        )
+        raise ApiError(422, "unknown_roles", ", ".join(bad))
 
 
 @router.post("", status_code=201)
@@ -100,6 +98,14 @@ async def create(body: CreateGroupRequest, db: SessionDep) -> GroupSummary:
 @router.get("")
 async def list_all(db: SessionDep) -> list[GroupSummary]:
     return [await _summary(db, group.id) for group in await rbac_store.list_groups(db)]
+
+
+@router.get("/{group_id}")
+async def get_one(group_id: uuid.UUID, db: SessionDep) -> GroupSummary:
+    group = await rbac_store.get_group(db, group_id)
+    if group is None:
+        _raise(rbac_store.RbacStoreError("group_not_found"))
+    return await _summary(db, group_id)
 
 
 @router.delete("/{group_id}", status_code=204)

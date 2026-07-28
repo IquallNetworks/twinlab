@@ -28,8 +28,8 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from twinlab_backend.auth import permissions as perms
+from twinlab_backend.auth.dependencies import resolve_credentials
 from twinlab_backend.auth.service import effective_permissions_for
-from twinlab_backend.auth.sessions import resolve_session
 from twinlab_backend.config import Settings
 from twinlab_backend.result import Err
 from twinlab_backend.services import lab_store
@@ -53,20 +53,23 @@ async def _fail(websocket: WebSocket, message: str) -> None:
 
 
 async def _authorize(websocket: WebSocket, settings: Settings, lab_name: str) -> bool:
-    """Resolve the session cookie in a short-lived DB session and check the caller
-    holds `lab:terminal` on *this* lab. The session is closed before the relay so a
-    long-lived terminal doesn't hold a DB connection."""
-    token = websocket.cookies.get(settings.session_cookie_name)
-    if not token:
-        return False
+    """Resolve the handshake credentials (Bearer key or session cookie) in a
+    short-lived DB session and check the caller holds `lab:terminal` on *this*
+    lab. The session is closed before the relay so a long-lived terminal
+    doesn't hold a DB connection."""
     async with websocket.app.state.session_factory() as session:
-        resolved = await resolve_session(session, token)
-        if isinstance(resolved, Err):
+        user = await resolve_credentials(
+            session,
+            settings,
+            authorization=websocket.headers.get("Authorization"),
+            cookie_token=websocket.cookies.get(settings.session_cookie_name),
+        )
+        if user is None:
             return False
         lab = await lab_store.get_lab(session, lab_name)
         if lab is None:
             return False
-        granted = await effective_permissions_for(session, resolved.value, lab)
+        granted = await effective_permissions_for(session, user, lab)
         return perms.LAB_TERMINAL in granted
 
 
@@ -78,7 +81,7 @@ async def _relay(browser: WebSocket, upstream: ClientConnection) -> None:
         try:
             while True:
                 await upstream.send(await browser.receive_text())
-        except (WebSocketDisconnect, ConnectionClosed):
+        except WebSocketDisconnect, ConnectionClosed:
             return
 
     async def upstream_to_browser() -> None:
@@ -86,7 +89,7 @@ async def _relay(browser: WebSocket, upstream: ClientConnection) -> None:
             async for frame in upstream:
                 text = frame.decode() if isinstance(frame, bytes) else frame
                 await browser.send_text(text)
-        except (WebSocketDisconnect, ConnectionClosed):
+        except WebSocketDisconnect, ConnectionClosed:
             return
 
     tasks = {asyncio.create_task(browser_to_upstream()), asyncio.create_task(upstream_to_browser())}
@@ -98,11 +101,11 @@ async def _relay(browser: WebSocket, upstream: ClientConnection) -> None:
             await task
 
 
-@router.websocket("/labs/{name}/nodes/{node}/terminal")
+@router.websocket("/labs/{lab_name}/nodes/{node_name}/terminal")
 async def node_terminal(
     websocket: WebSocket,
-    name: str,
-    node: str,
+    lab_name: str,
+    node_name: str,
     protocol: Literal["ssh", "shell"] = "ssh",
     cols: Annotated[int, Query(ge=1, le=1000)] = 80,
     rows: Annotated[int, Query(ge=1, le=1000)] = 24,
@@ -114,14 +117,14 @@ async def node_terminal(
     clab: ClabApiClient = websocket.app.state.clab_client
 
     # Auth before accept — a rejected handshake closes with 1008, no socket opened.
-    if not await _authorize(websocket, settings, name):
+    if not await _authorize(websocket, settings, lab_name):
         await websocket.close(code=_WS_POLICY_VIOLATION)
         return
 
     await websocket.accept()
 
     created = await clab.create_terminal_session(
-        name, node, protocol=protocol, cols=cols, rows=rows, ssh_username=ssh_username
+        lab_name, node_name, protocol=protocol, cols=cols, rows=rows, ssh_username=ssh_username
     )
     if isinstance(created, Err):
         await _fail(websocket, created.error.message)

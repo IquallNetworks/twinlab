@@ -15,8 +15,8 @@ to production networks.
 
 The declarative input is a netlab definition — netlab syntax (`provider`, `defaults.device`,
 `module`, `nodes`, `links`). A worked example lives at `examples/mpls-l3vpn.yml` (a VyOS MPLS
-L3VPN core: OSPF + LDP + MP-BGP VPNv4). The lab's name is not taken from the definition — it is a
-required field on the deploy request (see `DeployRequest.name`).
+L3VPN core: OSPF + LDP + MP-BGP VPNv4). The lab's name is not taken from the definition — it is
+the lab's durable identity, chosen at create (`CreateLabRequest.name`).
 
 **Twinlab is fully open source.** Everything we distribute must be open source too: every
 dependency, bundled tool, and reference platform we ship or require must carry an OSI-approved
@@ -35,9 +35,18 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 
 ## Current State
 
+The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
+backend now implements in full. Two non-compose projects sit beside the services: **`client/`**
+(`twinlab-client`, the distributable async Python client — PyPI-ready, published at v1.0) and
+**`blackbox/`** (the black-box test suite: 83 tests exercising a live stack through the client
+only; all green, README documents env config and the `deploy` marker). The suite is the contract's
+enforcement — backend changes are verified against it, and contract changes go through review.
+
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of five services:
 
-- **`frontend/`** — Vite + React + TypeScript (pnpm). Its dev server proxies `/api/v1` to the
+- **`frontend/`** — Vite + React + TypeScript (pnpm). **Currently targets the PRE-rework wire and
+  is partially broken against the v1.0 backend** (accepted: no end users; its own rework to the
+  v1.0 contract is the next step). Its dev server proxies `/api/v1` to the
   backend (`VITE_PROXY_TARGET`, default `http://localhost:8000`). UI stack: **shadcn/ui** (radix
   base) on Tailwind v4, the **TanStack** family (Query for data, Router in code-based mode for
   routing, Form for forms) and **zod** for validation. It covers the current backend scope —
@@ -55,62 +64,75 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   (mounted in `AppShell`) subscribes to the `/events` SSE stream and invalidates the `['labs']`
   query tree on each event, so lab state refreshes without polling. API access goes through a typed,
   zod-parsed fetch client (`src/lib/api.ts`). Gates: `pnpm typecheck` + `pnpm build`.
-- **`backend/`** — FastAPI (uv). Turns a declarative netlab definition into a running lab: runs
-  `netlab create` to generate a containerlab topology, then deploys it through the clab-api server
-  (piped inline as `topologyContent`). Config push is delegated to the netlab-runner. A stable lab
-  name is injected into the definition (`set_lab_name`) so create/deploy/configure share one
-  identity; the name is a **required field on the deploy request** (`DeployRequest.name`), not
-  read from the definition — any `name:` in the definition is overridden. A distinct management
-  `/24` is also
-  pinned per lab (`set_mgmt_subnet` + a `_network`), allocated from `MGMT_SUBNET_POOL` and stored on
-  the record so concurrent labs don't collide on netlab's default `192.168.121.0/24`; an explicit
-  `addressing.mgmt.ipv4` in the definition is honored instead. A lab is a **durable record**: its
-  definition is persisted on deploy (a `labs` table) and *reused* on configure — the caller never
-  resupplies it — and the record survives destroy (status flips to `destroyed`, definition retained).
-  Config is env-sourced through a typed `load_settings(env) -> Result` loader (not pydantic-settings).
-  Endpoints under `/api/v1`: `health`, `health/ready`, `auth/*`, `users/*`, `POST /labs` (opt-in
-  `configure` flag), `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort live
-  node state from clab-api), `PUT /labs/{name}` (replace the stored definition — validated by a dry
-  `netlab create`, name re-pinned so an edit can't rename the lab; applied only on the next
-  (re)deploy), `POST /labs/{name}/redeploy` (rebuild from the stored definition via clab deploy
-  `reconfigure=true`, opt-in `configure`), `POST /labs/{name}/configure` (reuses the stored
-  definition), `DELETE /labs/{name}`. **Test suites** (Twinlab's own validation, not `netlab
+- **`backend/`** — FastAPI (uv, **Python 3.14**, ids are stdlib **UUIDv7**). Turns a declarative
+  netlab definition into a running lab: runs `netlab create` to generate a containerlab topology,
+  then deploys it through the clab-api server (piped inline as `topologyContent`). Config push is
+  delegated to the netlab-runner. **Every non-2xx wears one error envelope** `{code, message,
+  extras}` (`api_errors.py`: ApiError + handlers covering FastAPI validation and framework errors;
+  stable code slugs like `lab_not_found`, `permission_denied`, `netlab_invalid`). **Lab lifecycle
+  is split** (create → author → deploy): `POST /labs {name}` creates a bare record (status
+  `created`, no definition) and allocates the lab's management `/24` from `MGMT_SUBNET_POOL` up
+  front; `PUT /labs/{name}` authors/replaces the stored definition (validated by a dry `netlab
+  create`; the record's name and subnet are re-pinned into it — `set_lab_name`/`set_mgmt_subnet`,
+  an explicit `addressing.mgmt.ipv4` wins); `POST /labs/{name}/deploy` is the ONLY deploy verb —
+  from the stored definition, fresh or overwrite-in-place, guarded by an atomic compare-and-swap
+  `deploying` mutex (409), opt-in `configure`; 409 `no_definition` on an unauthored record. A lab is
+  a **durable record** (a `labs` table): definition/suites/templates are reused by deploy and
+  configure — the caller never resupplies them — and the record survives destroy (status
+  `destroyed`, redeployable, subnet kept). `DELETE /labs/{name}` requires a RUNNING lab (409
+  `lab_not_running` otherwise — 404 stays existence-hiding); `?remove=true` soft-deletes the record
+  and RELEASES its subnet. Config is env-sourced through a typed `load_settings(env) -> Result`
+  loader (not pydantic-settings).
+  Other endpoints under `/api/v1`: `health`, `health/ready`, `auth/*` (login/logout/me, `PUT
+  /auth/password` self-change that keeps the calling session, and **API keys** — `POST/GET/DELETE
+  /auth/api-keys`, sha256-stored Bearer secrets shown once, dead when their user is deactivated or
+  deleted), `users/*` (list/create/get/roles/password-reset/activate-toggle/delete, with a
+  **last-admin guard**: 409 on deactivating or deleting the only active admin), `groups/*`,
+  `roles`, `principals`, `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
+  live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
+  `permissions` MASKED to the lab-scoped set). **Test suites** (Twinlab's own validation, not `netlab
   validate` — see ROADMAP Phase 5): declarative assertions stored on the lab record (never sent to
   `netlab create`), each running a command over clab-api `exec` and matching stdout with a safe
   primitive (contains/not_contains/matches/json_path; no expression eval), polled until they pass or
   a per-test `wait` elapses. `GET/PUT /labs/{name}/test-suites` (read/author), `POST
   /labs/{name}/test-suites/{suite}/run` (run one on demand). A suite's `stage` (`config-time` |
   `runtime`) controls only *automatic* execution: `config-time` suites run at the end of a configure
-  (deploy/redeploy/configure, gated by `skip_config_time_checks`) and gate "config done" — a failure
-  leaves the lab deployed but sets `config_time_ok=false` and returns status `validation_failed`, so
-  a failed config is unambiguous (surfaced in list/detail + a UI badge). The runner + pure matcher
+  (deploy/configure, gated by `skip_config_time_checks` — a skip RETAINS the previous gate) and gate
+  "config done" — a failure leaves the lab deployed with `config_time_status="failed"` and returns
+  status `validation_failed`, so a failed config is unambiguous. **HTTP errors mean "could not
+  run"**: a config push that ran but failed on ≥1 node is a 2xx `status="config_failed"` with
+  per-node results. The runner + pure matcher
   live in `services/validation.py`; results persist per-suite in `last_validation`.
   **Runtime control/observability** over live clab-api state (not
   the definition): `POST /labs/{name}/nodes/{node}/{start|stop|restart|pause|unpause}` and
   `POST /labs/{name}/{start|stop|restart}` (power control), `POST /labs/{name}/{pause|unpause}`
   (whole-lab freeze — clab-api has no lab-level pause, so this fans out over the nodes, non-atomic),
   `POST /labs/{name}/save` (persist running config), `GET /labs/{name}/nodes/{node}/logs` (container
-  logs, `?tail=`), `GET /labs/{name}/interfaces` (per-node interface inventory), and **netem link
-  impairment** keyed by node+interface (`GET/POST /labs/{name}/nodes/{node}/netem` show/set delay/
-  jitter/loss/rate/corruption, `POST .../netem/reset` clear — the node's container is resolved from
+  logs, `?tail=`), `GET /labs/{name}/interfaces` (per-node inventory keyed by SHORT node name;
+  `?node=` filters by it), and **netem link impairment** keyed by node+interface (`GET/POST
+  /labs/{name}/nodes/{node}/netem` — durations are structured `{value, unit}` pairs; set has
+  REPLACE semantics: the body is the complete desired impairment, omitted = cleared, empty body =
+  clear all; show lists only ACTIVELY impaired interfaces — the node's container is resolved from
   live state, and these routes precede the `{action}` node route so `netem` isn't captured by the
-  action path param). Node state carries
+  action path param). Node state carries a docker-vocabulary `state` (unknown upstream values 502
+  loudly) and
   the management IP (`mgmt_ip`, from clab's `ipv4_address`) for a copy-paste `ssh` command. A
   **Server-Sent Events** stream at `GET /events` (`lab:read`) relays clab-api's live lab events
   (distilled to `{lab, node, action, timestamp}`), auth resolved up front so the long-lived
   connection doesn't pin a DB session, so the frontend refreshes without polling. A **web terminal**
-  WebSocket at `WS /labs/{name}/nodes/{node}/terminal?protocol=ssh|shell` (`lab:terminal`) proxies
-  clab-api's terminal-session stream: it authorizes off the handshake cookie *before* accept and
-  releases the DB session before the relay (same rule as `/events`), creates a clab-api terminal
-  session, and relays its JSON frames transparently in both directions (the browser does its own
-  base64 decode), deleting the session on close. clab-api's terminal stream is a client WebSocket, so
-  it uses the `websockets` library (httpx can't); terminal-sessions accepts the short node name, so no
-  container resolution is needed. DB-backed auth + RBAC guard them (opaque
-  session cookies; `lab:read` for reads/logs/interfaces/events/netem-show/test-suite-read, `lab:create`
-  for deploy/edit/redeploy/test-suite-author, `lab:configure` for configure/power-control/save/netem-set
-  (the automatic config-time run rides it), `lab:validate` for running a suite on demand, `lab:terminal`
-  for the node console, `lab:destroy`,
-  `user:manage`). The clab-api
+  WebSocket at `WS /labs/{lab_name}/nodes/{node_name}/terminal?protocol=ssh|shell` (`lab:terminal`)
+  proxies clab-api's terminal-session stream: it authorizes off the handshake credentials *before*
+  accept and releases the DB session before the relay (same rule as `/events`), creates a clab-api
+  terminal session, and relays its JSON frames transparently in both directions (the browser does
+  its own base64 decode), deleting the session on close. clab-api's terminal stream is a client
+  WebSocket, so it uses the `websockets` library (httpx can't); terminal-sessions accepts the short
+  node name, so no container resolution is needed. DB-backed auth + RBAC guard everything — **two
+  credentials**: opaque session cookies OR `Authorization: Bearer <api-key>` (shared resolver used
+  by HTTP routes, `/events`, and the terminal handshake). Scoped RBAC (`docs/rbac-v2.md` + the
+  contract's catalog appendix): `lab:read` for reads/events/netem-show/suite-read, `lab:edit` for
+  edit/deploy/suite-and-template-author, `lab:configure` for configure/power/save/netem-set (the
+  automatic config-time run rides it), `lab:validate` for on-demand suite runs, `lab:terminal`,
+  `lab:destroy`, `lab:grant`; global-only `lab:create`, `user:manage`, `group:manage`. The clab-api
   client (`services/clab_api.py`) routes every authenticated call through one `_authed` helper.
   Errors-as-values throughout; `try`/`except` only at the subprocess/httpx/pydantic boundaries.
 - **`netlab-runner/`** — FastAPI (uv) config-push sidecar. `POST /configure {definition}` runs
@@ -128,11 +150,12 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
 Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner quality gates: `ruff format` + `ruff
 check`, basedpyright (strict), pytest.
 
-**End-to-end deploy + config push is proven:** `POST /api/v1/labs` with `configure: true` → 201 with
-two vyos nodes deployed *and* configured (OSPF adjacency reaches Full) via clab-api deploy + the
-netlab-runner; `POST /labs/{name}/configure` re-pushes to a running lab. Needs a host user in the
-`clab_api` group, node images pulled, and clab-api running. Config push works for any platform netlab
-supports; **VyOS** is verified today. Keep this section current as the project evolves.
+**End-to-end deploy + config push is proven:** create → `PUT` the definition → `POST
+/labs/{name}/deploy` with `configure: true` → nodes deployed *and* configured via clab-api deploy +
+the netlab-runner, config-time gate green — exercised continuously by the black-box suite's
+`deploy`-marked tests (linux nodes) and previously verified on VyOS (OSPF adjacency reaches Full)
+and cisco IOL. Needs a host user in the `clab_api` group, node images pulled, and clab-api running.
+Keep this section current as the project evolves.
 
 A previous, complete iteration lives in the sibling directory **`../bak.0`** (a four-layer Python
 package with an HTTP backend / CLI client / privileged lab-runner split, plus a full `docs/` design

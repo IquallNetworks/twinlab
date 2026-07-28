@@ -500,7 +500,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         return [_wire.parse_node_interfaces(v) for v in _wire.as_list(payload, "NodeInterfaces[]")]
 
     async def show_netem(self, name: str, node: str) -> list[NetemImpairment]:
-        """GET /labs/{name}/nodes/{node}/netem — lab:read."""
+        """GET /labs/{name}/nodes/{node}/netem — lab:read. Lists only the
+        interfaces with ACTIVE impairment; a cleared interface is absent, not
+        zeroed."""
         payload = await self._send_json("GET", f"/labs/{name}/nodes/{node}/netem")
         return [
             _wire.parse_netem_impairment(v) for v in _wire.as_list(payload, "NetemImpairment[]")

@@ -12,14 +12,15 @@ that stored record with live node state read from clab-api. This HTTP boundary
 maps typed errors to status codes.
 """
 
-import uuid
+import re
 from http import HTTPStatus
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from twinlab_backend.api_errors import ApiError
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import CurrentUserDep, require_global, require_lab
 from twinlab_backend.auth.service import effective_permissions_bulk, effective_permissions_for
@@ -33,24 +34,28 @@ from twinlab_backend.deps import (
 )
 from twinlab_backend.models import (
     BuiltinTemplateOut,
+    ConfigTimeStatus,
     ConfigureRequest,
     ConfigureResponse,
+    ContainerState,
+    CreateLabRequest,
     CustomConfigResponse,
-    DeployRequest,
+    DeployLabRequest,
     DeployResponse,
     DestroyResponse,
+    Duration,
     LabActionResponse,
     LabDetail,
     LabNodeState,
+    LabStatus,
     LabSummary,
     NetemImpairment,
-    NetemResetRequest,
     NetemSetRequest,
     NodeConfigResult,
     NodeInterface,
     NodeInterfaces,
     NodeLogsResponse,
-    RedeployRequest,
+    Principal,
     SaveConfigResponse,
     SuiteReport,
     TestSuite,
@@ -105,15 +110,13 @@ FreezeAction = Literal["pause", "unpause"]
 def _named_definition(definition: str, name: str) -> str:
     named = set_lab_name(definition, name)
     if isinstance(named, Err):
-        raise HTTPException(
-            status_code=422, detail={"stage": "netlab", "message": named.error.message}
-        )
+        raise ApiError(422, "netlab_invalid", named.error.message)
     return named.value
 
 
-# Bounded retries when an auto-allocated subnet is raced by a concurrent deploy;
+# Bounded retries when an auto-allocated subnet is raced by a concurrent create;
 # each retry excludes the winner (now committed), so a handful always converges.
-_RESERVE_ATTEMPTS = 8
+_ALLOCATE_ATTEMPTS = 8
 
 
 async def _resolve_mgmt_subnet(
@@ -142,43 +145,21 @@ async def _resolve_mgmt_subnet(
     return injected.value, subnet
 
 
-async def _reserve_deploy(
-    db: AsyncSession,
-    name: str,
-    named_definition: str,
-    existing_subnet: str | None,
-    owner_id: uuid.UUID,
-    pool: str,
-) -> tuple[str, str]:
-    """Resolve a mgmt subnet and reserve the lab row (`deploying`) BEFORE the slow
-    deploy, so two concurrent deploys can't claim the same /24. Returns
-    `(definition_with_mgmt, subnet)`. An auto-allocated subnet raced by another
-    deploy is retried; a fixed subnet (explicit in the definition, or the record's
-    own) can't be reallocated, so a clash 409s. A concurrent claim on the same
-    name also 409s."""
-    fixed = read_mgmt_subnet(named_definition) is not None or existing_subnet is not None
-    for _ in range(_RESERVE_ATTEMPTS):
-        definition, subnet = await _resolve_mgmt_subnet(
-            named_definition, name, existing_subnet, db, pool
-        )
-        reserved = await lab_store.reserve_lab(db, name, definition, subnet, owner_id)
-        if isinstance(reserved, Lab):
-            return definition, subnet
-        if reserved.reason == "name_taken":
-            raise HTTPException(
-                status_code=409,
-                detail={"stage": "labs", "message": f"lab '{name}' is being deployed"},
-            )
-        if fixed:  # subnet_taken on a subnet we can't reallocate
-            raise HTTPException(
-                status_code=409,
-                detail={"stage": "labs", "message": f"mgmt subnet {subnet} is already in use"},
-            )
-        # subnet_taken on an auto-allocated /24: retry — the winner is now excluded.
-    raise HTTPException(
-        status_code=503,
-        detail={"stage": "mgmt-subnet", "message": "could not reserve a free mgmt subnet"},
-    )
+def _config_time_status(config_time_ok: bool | None) -> ConfigTimeStatus:
+    # DB representation is bool|None; the wire vocabulary is the tri-state.
+    if config_time_ok is None:
+        return "not_run"
+    return "passed" if config_time_ok else "failed"
+
+
+def _owner_principal(lab: Lab) -> Principal | None:
+    return None if lab.owner is None else Principal(id=lab.owner.id, name=lab.owner.username)
+
+
+def _lab_scoped(permissions: list[str]) -> list[str]:
+    # Contract delta 10: per-lab permissions are masked to the lab-scoped set;
+    # global-only perms ride on /auth/me.
+    return [p for p in permissions if p in perms.LAB_SCOPED_PERMISSIONS]
 
 
 def _to_models(report: ConfigureReport) -> list[NodeConfigResult]:
@@ -186,6 +167,21 @@ def _to_models(report: ConfigureReport) -> list[NodeConfigResult]:
         NodeConfigResult(node=n.node, status=n.status, changed=n.changed, failed=n.failed)
         for n in report.nodes
     ]
+
+
+def _container_state(node: NodeInfo) -> ContainerState:
+    # clab-api passes docker's state through; validate against docker's
+    # vocabulary (contract delta 3). An unknown state means our model of
+    # clab-api is wrong — surface it loudly rather than mapping best-effort.
+    match node.state:
+        case "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead":
+            return node.state
+        case _:
+            raise ApiError(
+                502,
+                "upstream_error",
+                f"unexpected container state {node.state!r} for '{node.container_name}'",
+            )
 
 
 def _to_node_state(node: NodeInfo) -> LabNodeState:
@@ -196,9 +192,19 @@ def _to_node_state(node: NodeInfo) -> LabNodeState:
         name=node.node_name,
         container=node.container_name,
         image=node.image,
-        state=node.state,
+        state=_container_state(node),
         mgmt_ip=mgmt_ip,
     )
+
+
+def _lab_status(lab: Lab) -> LabStatus:
+    match lab.status:
+        case "created" | "deploying" | "deployed" | "destroyed":
+            return lab.status
+        case _:
+            raise ApiError(
+                500, "internal_error", f"lab '{lab.name}' has invalid status {lab.status!r}"
+            )
 
 
 def lab_summary(
@@ -206,27 +212,27 @@ def lab_summary(
 ) -> LabSummary:
     return LabSummary(
         name=lab.name,
-        status=lab.status,
-        owner=lab.owner.username if lab.owner is not None else None,
+        status=_lab_status(lab),
+        owner=_owner_principal(lab),
         created_at=lab.created_at,
         updated_at=lab.updated_at,
         nodes=len(live.get(lab.name, ())),
-        config_time_ok=lab.config_time_ok,
-        permissions=permissions,
+        config_time_status=_config_time_status(lab.config_time_ok),
+        permissions=_lab_scoped(permissions),
     )
 
 
 def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str]) -> LabDetail:
     return LabDetail(
         name=lab.name,
-        status=lab.status,
+        status=_lab_status(lab),
         definition=lab.definition,
-        owner=lab.owner.username if lab.owner is not None else None,
+        owner=_owner_principal(lab),
         created_at=lab.created_at,
         updated_at=lab.updated_at,
         nodes=[_to_node_state(n) for n in nodes],
-        config_time_ok=lab.config_time_ok,
-        permissions=permissions,
+        config_time_status=_config_time_status(lab.config_time_ok),
+        permissions=_lab_scoped(permissions),
     )
 
 
@@ -244,7 +250,7 @@ def _test_suites_response(lab: Lab) -> TestSuitesResponse:
     return TestSuitesResponse(
         test_suites=_load_suites(lab.test_suites),
         last_validation={name: SuiteReport.model_validate(rep) for name, rep in last.items()},
-        config_time_ok=lab.config_time_ok,
+        config_time_status=_config_time_status(lab.config_time_ok),
     )
 
 
@@ -268,8 +274,14 @@ def _runner_executor(
 
 
 async def _run_config_time(
-    runner: RunnerClient, db: AsyncSession, lab: Lab, library: BuiltinLibrary, *, skip: bool
-) -> tuple[str, list[SuiteReport] | None]:
+    runner: RunnerClient,
+    db: AsyncSession,
+    lab: Lab,
+    definition: str,
+    library: BuiltinLibrary,
+    *,
+    skip: bool,
+) -> tuple[Literal["configured", "validation_failed"], list[SuiteReport] | None]:
     """Run the lab's config-time suites after a successful config push. Returns
     `(status, reports)`: `configured` when they pass — or are skipped, or none
     exist — and `validation_failed` when any fails. On a real run it persists the
@@ -278,7 +290,7 @@ async def _run_config_time(
     suites = _load_suites(lab.test_suites)
     if skip or not any(s.stage == "config-time" for s in suites.values()):
         return "configured", None
-    executor = _runner_executor(runner, lab.definition, _config_fileset(library, lab))
+    executor = _runner_executor(runner, definition, _config_fileset(library, lab))
     reports = await run_config_time_suites(executor, suites)
     ok = all(r.ok for r in reports)
     stored: dict[str, object] = {r.suite: r.model_dump(mode="json") for r in reports}
@@ -292,10 +304,21 @@ def _logs_response(logs: ClabNodeLogs, node_name: str) -> NodeLogsResponse:
     return NodeLogsResponse(node=node_name, container=logs.container_name, logs=logs.logs)
 
 
-def _interfaces_response(nodes: tuple[ClabNodeInterfaces, ...]) -> list[NodeInterfaces]:
+def _short_node_name(container: str, lab_name: str) -> str:
+    # clab-api keys interfaces by container name; the API exposes SHORT node
+    # names (contract delta 6). Containerlab names containers clab-<lab>-<node>.
+    prefix = f"clab-{lab_name}-"
+    if not container.startswith(prefix):
+        raise ApiError(502, "upstream_error", f"unexpected container name '{container}'")
+    return container.removeprefix(prefix)
+
+
+def _interfaces_response(
+    nodes: tuple[ClabNodeInterfaces, ...], lab_name: str
+) -> list[NodeInterfaces]:
     return [
         NodeInterfaces(
-            node=n.node_name,
+            node=_short_node_name(n.node_name, lab_name),
             interfaces=[
                 NodeInterface(
                     name=i.name,
@@ -313,11 +336,38 @@ def _interfaces_response(nodes: tuple[ClabNodeInterfaces, ...]) -> list[NodeInte
     ]
 
 
+_DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(us|ms|s)$")
+
+
+def _parse_duration(raw: str, *, interface: str) -> Duration | None:
+    """clab-api reports netem durations as tc strings ("50ms"; empty or zero =
+    unshaped). Translate to the structured {value, unit} pair (contract delta
+    7); an unrecognized format is a loud upstream error."""
+    if raw == "":
+        return None
+    matched = _DURATION_RE.match(raw)
+    if matched is None:
+        raise ApiError(502, "upstream_error", f"unexpected netem duration {raw!r} on '{interface}'")
+    value = float(matched.group(1))
+    if value == 0:
+        return None
+    match matched.group(2):
+        case "us" | "ms" | "s" as unit:
+            return Duration(value=value, unit=unit)
+        case _:  # unreachable: the regex only admits the three units
+            raise ApiError(502, "upstream_error", f"unexpected netem unit in {raw!r}")
+
+
+def _duration_string(duration: Duration | None) -> str | None:
+    # clab-api's wire wants tc strings; :g drops a trailing .0 ("50ms", "0.5ms").
+    return None if duration is None else f"{duration.value:g}{duration.unit}"
+
+
 def _netem_model(impairment: ClabNetemImpairment) -> NetemImpairment:
     return NetemImpairment(
         interface=impairment.interface,
-        delay=impairment.delay,
-        jitter=impairment.jitter,
+        delay=_parse_duration(impairment.delay, interface=impairment.interface),
+        jitter=_parse_duration(impairment.jitter, interface=impairment.interface),
         loss=impairment.loss,
         rate=impairment.rate,
         corruption=impairment.corruption,
@@ -334,13 +384,7 @@ async def _resolve_container(clab: ClabApiClient, lab_name: str, node_name: str)
     for node in inspected.value:
         if node.node_name == node_name:
             return node.container_name
-    raise HTTPException(
-        status_code=404,
-        detail={
-            "stage": "clab-api",
-            "message": f"node '{node_name}' not found in lab '{lab_name}'",
-        },
-    )
+    raise ApiError(404, "node_not_found", f"node '{node_name}' not found in lab '{lab_name}'")
 
 
 def _user_fileset(lab: Lab) -> dict[str, str]:
@@ -370,7 +414,7 @@ def _custom_config_response(library: BuiltinLibrary, lab: Lab) -> CustomConfigRe
 
 async def _push_config(
     runner: RunnerClient, definition: str, templates: dict[str, str]
-) -> Result[ConfigureReport, HTTPException]:
+) -> Result[ConfigureReport, ApiError]:
     report = await runner.configure(definition, templates)
     if isinstance(report, Err):
         return Err(_runner_failed(report.error))
@@ -387,20 +431,18 @@ async def _live_detail(lab: Lab, clab: ClabApiClient, permissions: list[str]) ->
     elif inspected.error.status_code == HTTPStatus.NOT_FOUND:
         nodes = ()
     else:
-        raise HTTPException(
-            status_code=502, detail={"stage": "clab-api", "message": inspected.error.message}
-        )
+        raise ApiError(502, "upstream_error", inspected.error.message)
     return lab_detail(lab, nodes, permissions)
 
 
 async def _run_deploy(
     definition: str, clab: ClabApiClient, templates: dict[str, str], *, reconfigure: bool
-) -> Result[DeployedLab, HTTPException]:
+) -> Result[DeployedLab, ApiError]:
     """Generate the containerlab topology from a netlab definition and deploy it.
     `reconfigure` overwrites a lab of the same name (redeploy). `templates` is the
     custom-config fileset the definition may reference — `netlab create` validates
     those exist, so they must be present even though config push happens later.
-    Returns the mapped HTTPException as an error value so the caller can release a
+    Returns the mapped ApiError as an error value so the caller can release a
     reservation before re-raising, rather than unwinding through an exception."""
     # netlab create is blocking subprocess work; keep it off the event loop.
     topology = await run_in_threadpool(create_clab_topology, definition, templates)
@@ -448,8 +490,18 @@ async def _finish_deploy(
     report = pushed.value
     configuration = _to_models(report)
     if not report.succeeded:
-        raise _config_failed(report.lab_name, configuration)
-    status, validation = await _run_config_time(runner, db, lab, library, skip=skip_config_time)
+        # The push RAN; a per-node failure is data, not an HTTP error (contract
+        # delta 9). The gate doesn't run on a failed push.
+        return DeployResponse(
+            status="config_failed",
+            lab_name=deployed.name,
+            nodes=nodes,
+            configuration=configuration,
+            validation=None,
+        )
+    status, validation = await _run_config_time(
+        runner, db, lab, definition, library, skip=skip_config_time
+    )
     return DeployResponse(
         status=status,
         lab_name=deployed.name,
@@ -460,78 +512,32 @@ async def _finish_deploy(
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_global(perms.LAB_CREATE))])
-async def deploy_lab(
-    request: DeployRequest,
-    clab: ClabClientDep,
-    runner: RunnerClientDep,
+async def create_lab(
+    request: CreateLabRequest,
     db: SessionDep,
     user: CurrentUserDep,
     settings: SettingsDep,
-    library: BuiltinLibraryDep,
-) -> DeployResponse:
-    name = request.name
-
-    existing = await lab_store.get_lab(db, name)
-    if existing is not None and existing.status in (
-        lab_store.STATUS_DEPLOYED,
-        lab_store.STATUS_DEPLOYING,
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail={"stage": "labs", "message": f"lab '{name}' is already deployed"},
+) -> LabDetail:
+    # The lifecycle split's cheap create: a bare record (status `created`, no
+    # definition, nothing deployed) with the lab's mgmt /24 allocated up front —
+    # so the slow deploy path carries no reservation machinery. The caller
+    # becomes the owner. Authoring (PUT definition/suites/templates) and deploy
+    # are separate verbs.
+    for _ in range(_ALLOCATE_ATTEMPTS):
+        allocated = allocate_subnet(
+            settings.mgmt_subnet_pool, await lab_store.used_mgmt_subnets(db)
         )
-    # Reject a user template that shadows a built-in before any side effects.
-    if request.custom_config is not None:
-        collision = library.collision(dict(request.custom_config))
-        if collision is not None:
-            raise _builtin_collision(collision)
-    # Capture as plain values: the row may be re-fetched across reservation retries.
-    created_new = existing is None
-    existing_subnet = existing.mgmt_subnet if existing is not None else None
-
-    named_definition = _named_definition(request.definition, name)
-    # Reserve the subnet + row (status `deploying`) before the slow deploy, so
-    # concurrent deploys can't collide on a /24. The definition (mgmt baked in) is
-    # persisted here; configure reuses it.
-    definition, _subnet = await _reserve_deploy(
-        db, name, named_definition, existing_subnet, user.id, settings.mgmt_subnet_pool
-    )
-
-    # netlab create validates the definition's `config:` templates, so ship the
-    # built-in library plus the incoming user templates (collision-checked above).
-    deploy_templates = library.fileset | dict(request.custom_config or {})
-    deployed = await _run_deploy(definition, clab, deploy_templates, reconfigure=False)
-    if isinstance(deployed, Err):
-        # Deploy failed after the reservation; free it (delete a fresh row, or
-        # revert a re-armed destroyed lab) so its subnet and name don't leak.
-        await lab_store.release_reservation(db, name, created_new=created_new)
-        raise deployed.error
-    _ = await lab_store.mark_deployed(db, name)
-    # Persist any suites supplied with the deploy before the config-time run reads
-    # them; a first deploy+configure can then gate on its own convergence checks.
-    if request.test_suites is not None:
-        _ = await lab_store.update_test_suites(
-            db, name, {n: s.model_dump(mode="json") for n, s in request.test_suites.items()}
-        )
-    # Store user templates on the record so configure/redeploy reuse them (the
-    # caller never resupplies them, like the definition and suites).
-    if request.custom_config is not None:
-        _ = await lab_store.update_custom_config(db, name, dict(request.custom_config))
-    lab = await lab_store.get_lab(db, name)
-    if lab is None:  # just deployed and stored; absence would be an internal fault
-        raise HTTPException(
-            status_code=500, detail={"stage": "labs", "message": f"lab '{name}' vanished"}
-        )
-    return await _finish_deploy(
-        deployed.value,
-        definition,
-        runner,
-        db,
-        lab,
-        library,
-        configure=request.configure,
-        skip_config_time=request.skip_config_time_checks,
-    )
+        if isinstance(allocated, Err):
+            raise _mgmt_subnet_failed(allocated.error)
+        created = await lab_store.create_lab(db, request.name, allocated.value, user.id)
+        if isinstance(created, Lab):
+            granted = sorted(await effective_permissions_for(db, user, created))
+            return lab_detail(created, (), granted)
+        if created.reason == "name_taken":
+            raise ApiError(409, "lab_exists", f"lab '{request.name}' already exists")
+        # subnet_taken: raced by a concurrent create — the winner is excluded
+        # from the next allocation round.
+    raise ApiError(503, "mgmt_subnet_exhausted", "could not reserve a free mgmt subnet")
 
 
 @router.put("/{lab_name}", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
@@ -552,9 +558,7 @@ async def update_lab_definition(
     # from it and reject a broken one.
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
 
     definition = _named_definition(request.definition, lab_name)
     definition, mgmt_subnet = await _resolve_mgmt_subnet(
@@ -571,13 +575,8 @@ async def update_lab_definition(
     updated = await lab_store.update_definition(db, lab_name, definition, mgmt_subnet)
     if isinstance(updated, lab_store.LabStoreError):
         if updated.reason == "subnet_taken":
-            raise HTTPException(
-                status_code=409,
-                detail={"stage": "labs", "message": f"mgmt subnet {mgmt_subnet} is already in use"},
-            )
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+            raise ApiError(409, "mgmt_subnet_taken", f"mgmt subnet {mgmt_subnet} is already in use")
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     # `updated_at` has a server-side onupdate, so the UPDATE expires it; refresh it
     # in this async context before rendering, or reading it in lab_detail triggers a
     # sync lazy-load (MissingGreenlet) outside a greenlet.
@@ -586,42 +585,49 @@ async def update_lab_definition(
     return await _live_detail(updated, clab, granted)
 
 
-@router.post("/{lab_name}/redeploy", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
-async def redeploy_lab(
+@router.post("/{lab_name}/deploy", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
+async def deploy_lab(
     lab_name: LabName,
-    request: RedeployRequest,
     clab: ClabClientDep,
     runner: RunnerClientDep,
     db: SessionDep,
     library: BuiltinLibraryDep,
+    request: DeployLabRequest | None = None,
 ) -> DeployResponse:
-    # Rebuild a lab from its stored definition (as-is, or after a PUT edit). The
-    # caller never resupplies it. reconfigure=true overwrites the running lab if
-    # present; on a destroyed lab it deploys fresh.
+    # THE deploy verb (lifecycle split): build the lab from its stored
+    # definition + suites + custom config — fresh if created/destroyed,
+    # overwrite-in-place if running (clab reconfigure). The caller never
+    # resupplies the definition; the stored subnet is baked into it, so there
+    # is no allocation here. The body is optional (a bare deploy).
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    definition = lab.definition
+    if definition is None:
+        raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
 
-    # Redeploy reuses the stored subnet (baked into the definition), so there's no
-    # allocation and no reservation race to guard here.
-    deployed = await _run_deploy(
-        lab.definition, clab, _config_fileset(library, lab), reconfigure=True
-    )
+    # The deploying-status mutex: claim atomically, restore on failure.
+    previous = await lab_store.begin_deploy(db, lab_name)
+    if isinstance(previous, lab_store.LabStoreError):
+        raise ApiError(409, "lab_deploying", f"a deploy of '{lab_name}' is already in flight")
+
+    deployed = await _run_deploy(definition, clab, _config_fileset(library, lab), reconfigure=True)
     if isinstance(deployed, Err):
+        _ = await lab_store.set_status(db, lab_name, previous)
         raise deployed.error
-    # Preserve the original owner, definition, and subnet; only flip status.
+    # Preserve the owner, definition, and subnet; only flip status. Failures
+    # past this point (readiness, config push) leave the lab deployed.
     _ = await lab_store.mark_deployed(db, lab_name)
+    body = request if request is not None else DeployLabRequest()
     return await _finish_deploy(
         deployed.value,
-        lab.definition,
+        definition,
         runner,
         db,
         lab,
         library,
-        configure=request.configure,
-        skip_config_time=request.skip_config_time_checks,
+        configure=body.configure,
+        skip_config_time=body.skip_config_time_checks,
     )
 
 
@@ -648,9 +654,7 @@ async def get_lab(
 ) -> LabDetail:
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     granted = sorted(await effective_permissions_for(db, user, lab))
     return await _live_detail(lab, clab, granted)
 
@@ -670,19 +674,23 @@ async def configure_nodes(
     # configure keeps the default: run the checks).
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    definition = lab.definition
+    if definition is None:
+        raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
 
-    pushed = await _push_config(runner, lab.definition, _config_fileset(library, lab))
+    pushed = await _push_config(runner, definition, _config_fileset(library, lab))
     if isinstance(pushed, Err):
         raise pushed.error
     report = pushed.value
     configuration = _to_models(report)
     if not report.succeeded:
-        raise _config_failed(lab_name, configuration)
+        # The push RAN; per-node failure is data (contract delta 9).
+        return ConfigureResponse(
+            status="config_failed", lab_name=lab_name, configuration=configuration, validation=None
+        )
     skip = request.skip_config_time_checks if request is not None else False
-    status, validation = await _run_config_time(runner, db, lab, library, skip=skip)
+    status, validation = await _run_config_time(runner, db, lab, definition, library, skip=skip)
     return ConfigureResponse(
         status=status, lab_name=lab_name, configuration=configuration, validation=validation
     )
@@ -697,9 +705,7 @@ async def configure_nodes(
 async def get_test_suites(lab_name: LabName, db: SessionDep) -> TestSuitesResponse:
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _test_suites_response(lab)
 
 
@@ -715,9 +721,7 @@ async def put_test_suites(
     }
     updated = await lab_store.update_test_suites(db, lab_name, stored)
     if isinstance(updated, lab_store.LabStoreError):
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _test_suites_response(updated)
 
 
@@ -737,16 +741,14 @@ async def run_test_suite(
     # config-time gate is left untouched: a manual run isn't a configure.
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     target = _load_suites(lab.test_suites).get(suite)
     if target is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"stage": "labs", "message": f"lab '{lab_name}' has no suite '{suite}'"},
-        )
-    executor = _runner_executor(runner, lab.definition, _config_fileset(library, lab))
+        raise ApiError(404, "suite_not_found", f"lab '{lab_name}' has no suite '{suite}'")
+    definition = lab.definition
+    if definition is None:  # the runner needs the inventory to exec anywhere
+        raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
+    executor = _runner_executor(runner, definition, _config_fileset(library, lab))
     report = await run_suite(executor, suite, target)
     _ = await lab_store.record_validation(
         db,
@@ -770,9 +772,7 @@ async def get_custom_config(
 ) -> CustomConfigResponse:
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _custom_config_response(library, lab)
 
 
@@ -792,9 +792,7 @@ async def put_custom_config(
         raise _builtin_collision(collision)
     updated = await lab_store.update_custom_config(db, lab_name, dict(fileset))
     if isinstance(updated, lab_store.LabStoreError):
-        raise HTTPException(
-            status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-        )
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _custom_config_response(library, updated)
 
 
@@ -813,10 +811,12 @@ async def destroy_lab(
         # A not-running lab is fatal for a plain destroy, but expected when
         # deleting one that's already down. Any other upstream failure is a 502.
         if not remove or not not_found:
-            raise HTTPException(
-                status_code=404 if not_found else 502,
-                detail={"stage": "clab-api", "message": result.error.message},
-            )
+            if not_found:
+                # The record exists (require_lab resolved it) but nothing is
+                # running: 409, not 404 — 404 stays reserved for
+                # existence-hiding (contract delta 11).
+                raise ApiError(409, "lab_not_running", f"lab '{lab_name}' is not running")
+            raise ApiError(502, "upstream_error", result.error.message)
         teardown_detail = "lab was not running"
     else:
         teardown_detail = result.value
@@ -825,9 +825,7 @@ async def destroy_lab(
         deleted = await lab_store.soft_delete(db, lab_name)
         if isinstance(deleted, lab_store.LabStoreError):
             # Absent or already deleted — nothing to remove from the catalog.
-            raise HTTPException(
-                status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-            )
+            raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
         return DestroyResponse(status="deleted", detail=teardown_detail)
 
     # Retain the definition, flip status. not_found (deployed out-of-band) is fine.
@@ -865,30 +863,26 @@ async def show_node_netem(
 async def set_node_netem(
     lab_name: LabName, node_name: NodeName, request: NetemSetRequest, clab: ClabClientDep
 ) -> LabActionResponse:
+    # REPLACE semantics (contract delta 7): clear the interface first, then
+    # apply exactly what the body states — the result is the complete desired
+    # impairment regardless of prior shaping, and a body with no impairments
+    # is a plain clear (subsuming the removed /netem/reset endpoint).
     container = await _resolve_container(clab, lab_name, node_name)
+    cleared = await clab.reset_netem(container, request.interface)
+    if isinstance(cleared, Err):
+        raise _clab_action_failed(cleared.error)
+    impairments = (request.delay, request.jitter, request.loss, request.rate, request.corruption)
+    if all(value is None for value in impairments):
+        return LabActionResponse(message=cleared.value)
     result = await clab.set_netem(
         container,
         request.interface,
-        delay=request.delay,
-        jitter=request.jitter,
+        delay=_duration_string(request.delay),
+        jitter=_duration_string(request.jitter),
         loss=request.loss,
         rate=request.rate,
         corruption=request.corruption,
     )
-    if isinstance(result, Err):
-        raise _clab_action_failed(result.error)
-    return LabActionResponse(message=result.value)
-
-
-@router.post(
-    "/{lab_name}/nodes/{node_name}/netem/reset",
-    dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))],
-)
-async def reset_node_netem(
-    lab_name: LabName, node_name: NodeName, request: NetemResetRequest, clab: ClabClientDep
-) -> LabActionResponse:
-    container = await _resolve_container(clab, lab_name, node_name)
-    result = await clab.reset_netem(container, request.interface)
     if isinstance(result, Err):
         raise _clab_action_failed(result.error)
     return LabActionResponse(message=result.value)
@@ -966,10 +960,16 @@ async def node_logs(
 async def lab_interfaces(
     lab_name: LabName, clab: ClabClientDep, node: str | None = None
 ) -> list[NodeInterfaces]:
-    result = await clab.interfaces(lab_name, node=node)
+    # The `node` filter takes the SHORT name, like the response keys (contract
+    # delta 6); filtered here rather than upstream so we don't depend on
+    # clab-api's filter matching semantics.
+    result = await clab.interfaces(lab_name)
     if isinstance(result, Err):
         raise _clab_action_failed(result.error)
-    return _interfaces_response(result.value)
+    inventory = _interfaces_response(result.value, lab_name)
+    if node is None:
+        return inventory
+    return [entry for entry in inventory if entry.node == node]
 
 
 async def _lab_lifecycle(
@@ -992,90 +992,61 @@ async def _lab_freeze(
         raise _clab_action_failed(inspected.error)
     nodes = inspected.value
     if not nodes:
-        raise HTTPException(
-            status_code=409,
-            detail={"stage": "clab-api", "message": f"lab '{lab_name}' has no running nodes"},
-        )
+        raise ApiError(409, "lab_not_running", f"lab '{lab_name}' has no running nodes")
     failed = [
         node.node_name
         for node in nodes
         if isinstance(await clab.node_action(lab_name, node.node_name, action), Err)
     ]
     if failed:
-        raise HTTPException(
-            status_code=502,
-            detail={"stage": "clab-api", "message": f"{action} failed on: {', '.join(failed)}"},
+        raise ApiError(
+            502, "upstream_error", f"{action} failed on: {', '.join(failed)}", {"nodes": failed}
         )
     verb = "paused" if action == "pause" else "unpaused"
     return LabActionResponse(message=f"{verb} {len(nodes)} node(s)")
 
 
-def _clab_action_failed(error: ClabApiError) -> HTTPException:
+def _clab_action_failed(error: ClabApiError) -> ApiError:
     # An unknown lab/node surfaces as 404; anything else is an upstream failure.
-    status = 404 if error.status_code == HTTPStatus.NOT_FOUND else 502
-    return HTTPException(status_code=status, detail={"stage": "clab-api", "message": error.message})
+    if error.status_code == HTTPStatus.NOT_FOUND:
+        return ApiError(404, "clab_not_found", error.message)
+    return ApiError(502, "upstream_error", error.message)
 
 
-def _mgmt_subnet_failed(error: MgmtSubnetError) -> HTTPException:
+def _mgmt_subnet_failed(error: MgmtSubnetError) -> ApiError:
     # A misconfigured pool is a server config error (500); an exhausted pool is a
     # capacity limit the operator can raise (503) — neither is the caller's fault.
-    status = 500 if error.reason == "invalid_pool" else 503
-    return HTTPException(
-        status_code=status, detail={"stage": "mgmt-subnet", "message": error.message}
-    )
+    if error.reason == "invalid_pool":
+        return ApiError(500, "mgmt_pool_invalid", error.message)
+    return ApiError(503, "mgmt_subnet_exhausted", error.message)
 
 
-def _builtin_collision(relpath: str) -> HTTPException:
+def _builtin_collision(relpath: str) -> ApiError:
     # A user template path uses a built-in's reserved namespace; a built-in is
     # non-deletable and cannot be shadowed. 409 so the caller renames its template.
-    return HTTPException(
-        status_code=409,
-        detail={
-            "stage": "labs",
-            "message": f"template path '{relpath}' shadows a built-in template",
-        },
+    return ApiError(
+        409, "builtin_template_shadowed", f"template path '{relpath}' shadows a built-in template"
     )
 
 
-def _netlab_failed(message: str, stderr: str) -> HTTPException:
-    return HTTPException(
-        status_code=422, detail={"stage": "netlab", "message": message, "stderr": stderr}
-    )
+def _netlab_failed(message: str, stderr: str) -> ApiError:
+    return ApiError(422, "netlab_invalid", message, {"stderr": stderr})
 
 
-def _deploy_failed(message: str) -> HTTPException:
-    return HTTPException(status_code=502, detail={"stage": "clab-api", "message": message})
+def _deploy_failed(message: str) -> ApiError:
+    return ApiError(502, "upstream_error", message)
 
 
-def _ready_failed(error: RunnerError) -> HTTPException:
+def _ready_failed(error: RunnerError) -> ApiError:
     # A bad definition is the caller's fault (422); otherwise the nodes didn't come
     # up in time — the lab is deployed but not usable yet (502, retry the deploy).
-    status = 422 if error.reason == "bad_definition" else 502
-    return HTTPException(
-        status_code=status,
-        detail={"stage": "ready", "reason": error.reason, "message": error.message},
-    )
+    if error.reason == "bad_definition":
+        return ApiError(422, "netlab_invalid", error.message)
+    return ApiError(502, "nodes_not_ready", error.message)
 
 
-def _runner_failed(error: RunnerError) -> HTTPException:
+def _runner_failed(error: RunnerError) -> ApiError:
     # A bad definition is the caller's fault; anything else is an upstream failure.
-    status = 422 if error.reason == "bad_definition" else 502
-    return HTTPException(
-        status_code=status,
-        detail={"stage": "configure", "reason": error.reason, "message": error.message},
-    )
-
-
-def _config_failed(lab_name: str, results: list[NodeConfigResult]) -> HTTPException:
-    # The push ran but at least one node failed; surface which, and that the lab is
-    # deployed (so the caller can retry configure or destroy it).
-    failed = [r.node for r in results if r.status == "failed"]
-    return HTTPException(
-        status_code=502,
-        detail={
-            "stage": "configure",
-            "message": f"config push failed on: {', '.join(failed)}",
-            "lab_name": lab_name,
-            "nodes": [r.model_dump() for r in results],
-        },
-    )
+    if error.reason == "bad_definition":
+        return ApiError(422, "netlab_invalid", error.message)
+    return ApiError(502, "config_push_failed", error.message)

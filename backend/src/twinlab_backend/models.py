@@ -1,10 +1,24 @@
 """Request/response schemas for the HTTP API."""
 
 import re
+import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StringConstraints, model_validator
+
+# Status vocabularies, pinned as Literals so OpenAPI carries them (contract
+# delta 3). "created" is the lifecycle split's record-only state.
+type LabStatus = Literal["created", "deploying", "deployed", "destroyed"]
+type ConfigTimeStatus = Literal["not_run", "passed", "failed"]
+type DeployStatus = Literal["deployed", "configured", "config_failed", "validation_failed"]
+type ConfigureStatus = Literal["configured", "config_failed", "validation_failed"]
+type DestroyStatus = Literal["destroyed", "deleted"]
+# Docker engine's container-state vocabulary; clab-api's passthrough is
+# validated against it at the read boundary (an unknown state is a loud 502).
+type ContainerState = Literal[
+    "created", "running", "paused", "restarting", "removing", "exited", "dead"
+]
 
 # Suite / test / node identifiers: the same tight, path-safe charset the lab and
 # node path params use, so a suite name is a safe URL segment.
@@ -39,7 +53,7 @@ class TestExpectation(BaseModel):
     equals: JsonScalar | None = None  # required with json_path
 
     @model_validator(mode="after")
-    def _exactly_one_matcher(self) -> "TestExpectation":
+    def _exactly_one_matcher(self) -> TestExpectation:
         matchers = {
             "contains": self.contains,
             "not_contains": self.not_contains,
@@ -127,7 +141,7 @@ class TestSuitesResponse(BaseModel):
 
     test_suites: dict[str, TestSuite]
     last_validation: dict[str, SuiteReport]
-    config_time_ok: bool | None
+    config_time_status: ConfigTimeStatus
 
 
 class BuiltinTemplateOut(BaseModel):
@@ -154,44 +168,31 @@ class CustomConfigResponse(BaseModel):
     custom_config: dict[str, str]
 
 
-class DeployRequest(BaseModel):
-    # The lab's stable identity, chosen by the caller and required — it keys the
-    # durable record and every `/labs/{name}` route, and is pinned into the
-    # definition so create/deploy/configure share one name. Any `name:` in the
-    # definition is overridden by this.
+class CreateLabRequest(BaseModel):
+    # The lab's stable, durable identity, chosen by the caller — it keys the
+    # record and every `/labs/{name}` route, and is later pinned into the
+    # authored definition. Create is record-only (lifecycle split): it
+    # allocates the mgmt subnet and stores nothing else; the definition is
+    # authored via PUT and deployed via POST /labs/{name}/deploy.
     name: _Name
-    # A netlab definition (YAML). It must name each node's `device` and the
-    # `provider`; Twinlab does not default them.
-    definition: str = Field(min_length=1)
-    # Opt-in config push after deploy. Default False because a bare deploy (nodes
-    # up but unconfigured) is a legitimate intent and configuring adds minutes;
-    # callers ask for it explicitly.
-    configure: bool = False
-    # Suites to store on the lab as it is created, so a first deploy+configure can
-    # also run its config-time checks. Omitted leaves the lab with no suites.
-    test_suites: dict[_Name, TestSuite] | None = None
-    # User-defined custom-config templates to store on the lab (a {relpath: source}
-    # fileset), referenced from the definition's `config:` attribute. Omitted leaves
-    # the lab with no user templates; built-ins are always available. A path may not
-    # shadow a built-in (rejected at deploy).
-    custom_config: CustomConfigFileset | None = None
-    # Skip the automatic config-time suites at the end of a configure. Default
-    # False: convergence gating is on unless the caller opts out.
-    skip_config_time_checks: bool = False
 
 
 class UpdateDefinitionRequest(BaseModel):
-    # A replacement netlab definition for an existing lab. The lab's identity
-    # (its name) is fixed by the record and re-pinned into this definition, so a
-    # `name:` here is ignored. Takes effect on the next deploy/redeploy.
+    # A replacement netlab definition for a lab (also the FIRST authoring step
+    # after create). The lab's identity (its name) is fixed by the record and
+    # re-pinned into this definition, so a `name:` here is ignored. Takes
+    # effect on the next deploy.
     definition: str = Field(min_length=1)
 
 
-class RedeployRequest(BaseModel):
-    # Opt-in config push after the redeploy, mirroring DeployRequest.configure.
+class DeployLabRequest(BaseModel):
+    # Opt-in config push after the deploy. Default False because a bare deploy
+    # (nodes up but unconfigured) is a legitimate intent and configuring adds
+    # minutes; callers ask for it explicitly.
     configure: bool = False
-    # Skip the automatic config-time suites at the end of a configure (see
-    # DeployRequest). Redeploy reuses the lab's stored suites.
+    # Skip the automatic config-time suites at the end of a configure. Default
+    # False: convergence gating is on unless the caller opts out. Deploy reuses
+    # the lab's stored suites and custom config.
     skip_config_time_checks: bool = False
 
 
@@ -203,7 +204,7 @@ class ConfigureRequest(BaseModel):
 
 class NodeConfigResult(BaseModel):
     node: str
-    status: str  # "configured" | "failed"
+    status: Literal["configured", "failed"]
     changed: int
     failed: int
 
@@ -211,7 +212,7 @@ class NodeConfigResult(BaseModel):
 class DeployResponse(BaseModel):
     # "validation_failed": config push succeeded but a config-time suite failed —
     # the lab stays deployed, the failure is explicit here and on the record.
-    status: str  # "deployed" | "configured" | "config_failed" | "validation_failed"
+    status: DeployStatus
     lab_name: str
     nodes: list[str]
     # Present only when config push ran (deploy with `configure: true`).
@@ -221,15 +222,30 @@ class DeployResponse(BaseModel):
 
 
 class ConfigureResponse(BaseModel):
-    status: str  # "configured" | "config_failed" | "validation_failed"
+    status: ConfigureStatus
     lab_name: str
     configuration: list[NodeConfigResult]
     validation: list[SuiteReport] | None = None
 
 
 class DestroyResponse(BaseModel):
-    status: str
+    status: DestroyStatus
     detail: str
+
+
+class Principal(BaseModel):
+    """A user or group as referenced in responses: id + display name."""
+
+    id: uuid.UUID
+    name: str
+
+
+class LabOwnerOut(BaseModel):
+    """`PUT /labs/{name}/owner` response (contract delta 8 — its own shape,
+    not a repurposed grant)."""
+
+    lab: str
+    owner: Principal
 
 
 class LabNodeState(BaseModel):
@@ -238,7 +254,7 @@ class LabNodeState(BaseModel):
     name: str  # short node name, e.g. r1
     container: str  # clab-<lab>-<node>
     image: str
-    state: str
+    state: ContainerState
     mgmt_ip: str  # bare management IP (CIDR stripped); "" when the node has none
 
 
@@ -248,33 +264,34 @@ class LabSummary(BaseModel):
     clab-api couldn't be reached)."""
 
     name: str
-    status: str  # "deployed" | "destroyed"
-    owner: str | None
+    status: LabStatus
+    owner: Principal | None
     created_at: datetime
     updated_at: datetime
     nodes: int
-    # Config-time validation gate from the most recent configure: None (not run /
-    # skipped / no config-time suites), True (passed), False (failed). Surfaced so
-    # a lab whose config-time checks failed is unambiguous in a listing.
-    config_time_ok: bool | None
-    # The caller's effective permissions on this lab, so the list can gate per-row
-    # actions (e.g. delete) without assuming a global permission.
+    # Config-time validation gate from the most recent configure. A skipped
+    # gate RETAINS the previous result; "no config-time suites" = "not_run".
+    config_time_status: ConfigTimeStatus
+    # The caller's effective permissions on this lab, MASKED to the lab-scoped
+    # set (contract delta 10) — global-only perms ride on /auth/me. Lets the
+    # list gate per-row actions without assuming a global permission.
     permissions: list[str]
 
 
 class LabDetail(BaseModel):
-    """A single lab: its stored definition plus live node state. `permissions` is the
-    caller's effective permission set *on this lab* (owner-implicit + global + per-lab
-    grants), so the UI can gate actions without recomputing from global permissions."""
+    """A single lab: its stored record plus live node state. `definition` is
+    None only while status is "created" (not yet authored). `permissions` is
+    the caller's effective set *on this lab* (owner-implicit + global + per-lab
+    grants), masked to the lab-scoped permissions (contract delta 10)."""
 
     name: str
-    status: str  # "deployed" | "destroyed"
-    definition: str
-    owner: str | None
+    status: LabStatus
+    definition: str | None
+    owner: Principal | None
     created_at: datetime
     updated_at: datetime
     nodes: list[LabNodeState]
-    config_time_ok: bool | None
+    config_time_status: ConfigTimeStatus
     permissions: list[str]
 
 
@@ -302,8 +319,8 @@ class NodeInterface(BaseModel):
 
 
 class NodeInterfaces(BaseModel):
-    # clab-api keys the interface inventory by container name (`clab-<lab>-<node>`),
-    # not the short node name the rest of the API uses; passed through verbatim.
+    # Keyed by the SHORT node name (contract delta 6) — the backend translates
+    # from clab-api's container-name keys.
     node: str
     interfaces: list[NodeInterface]
 
@@ -313,44 +330,43 @@ class SaveConfigResponse(BaseModel):
     output: str  # per-node save output from containerlab
 
 
+class Duration(BaseModel):
+    """A netem duration as a structured {value, unit} pair (contract delta 7);
+    the author's unit choice is preserved."""
+
+    value: float = Field(ge=0)
+    unit: Literal["us", "ms", "s"]
+
+
 class NetemSetRequest(BaseModel):
-    """Netem link impairment to apply to one node interface. The node is taken from
-    the path; the container it maps to is resolved server-side. Every impairment is
-    optional and independent — an omitted field is left unchanged, but at least one
-    must be present (an empty set is a no-op we reject). `delay`/`jitter` are netem
-    duration strings (e.g. "50ms"); `loss`/`corruption` are percentages; `rate` is
-    kbit/s. `jitter` is meaningful only alongside `delay`."""
+    """Netem link impairment for one node interface (the node comes from the
+    path; its container is resolved server-side). REPLACE semantics (contract
+    delta 7): the body states the interface's COMPLETE desired impairment — an
+    omitted/None dimension is cleared, and a body with no impairments clears
+    everything (subsuming the old /netem/reset). `loss`/`corruption` are
+    percentages; `rate` is kbit/s; `jitter` is meaningful only with `delay`."""
 
     interface: str = Field(min_length=1)
-    delay: str | None = None
-    jitter: str | None = None
+    delay: Duration | None = None
+    jitter: Duration | None = None
     loss: float | None = Field(default=None, ge=0, le=100)
     rate: int | None = Field(default=None, ge=0)  # kbit/s
     corruption: float | None = Field(default=None, ge=0, le=100)
 
     @model_validator(mode="after")
-    def _require_meaningful_impairment(self) -> "NetemSetRequest":
-        if all(v is None for v in (self.delay, self.jitter, self.loss, self.rate, self.corruption)):
-            raise ValueError(
-                "at least one impairment (delay/jitter/loss/rate/corruption) is required"
-            )
+    def _jitter_requires_delay(self) -> NetemSetRequest:
         if self.jitter is not None and self.delay is None:
             raise ValueError("jitter requires delay")
         return self
 
 
-class NetemResetRequest(BaseModel):
-    # Clear all impairment from one node interface (the node comes from the path).
-    interface: str = Field(min_length=1)
-
-
 class NetemImpairment(BaseModel):
-    """Current netem impairment on one node interface, read from clab-api. Empty
-    duration / 0 means that dimension is unshaped."""
+    """Current netem impairment on one node interface, read from clab-api.
+    None / 0 means that dimension is unshaped."""
 
     interface: str
-    delay: str
-    jitter: str
+    delay: Duration | None
+    jitter: Duration | None
     loss: float  # packet loss, percent
     rate: int  # kbit/s
     corruption: float  # percent

@@ -13,25 +13,59 @@ Two guard families, matching the two kinds of permission:
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Path, Request
+from fastapi import Depends, Path, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from twinlab_backend.api_errors import ApiError
+from twinlab_backend.auth import api_keys
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.service import effective_permissions_for, global_permissions
 from twinlab_backend.auth.sessions import resolve_session
+from twinlab_backend.config import Settings
 from twinlab_backend.db.models import User
 from twinlab_backend.deps import SessionDep, SettingsDep
 from twinlab_backend.result import Err
 from twinlab_backend.services import lab_store
 
 
+def _bearer_token(authorization: str | None) -> str | None:
+    if authorization is None:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    return token if scheme.lower() == "bearer" and token else None
+
+
+async def resolve_credentials(
+    db: AsyncSession,
+    settings: Settings,
+    *,
+    authorization: str | None,
+    cookie_token: str | None,
+) -> User | None:
+    """Authenticate a request from either credential: an `Authorization:
+    Bearer <api-key>` header (which wins when present — sending it states
+    intent), else the session cookie. None = not authenticated. Shared by the
+    HTTP dependency, the SSE stream, and the terminal WS handshake."""
+    bearer = _bearer_token(authorization)
+    if bearer is not None:
+        resolved_key = await api_keys.resolve_key(db, bearer)
+        return None if isinstance(resolved_key, Err) else resolved_key.value
+    if not cookie_token:
+        return None
+    resolved = await resolve_session(db, cookie_token)
+    return None if isinstance(resolved, Err) else resolved.value
+
+
 async def current_user(request: Request, db: SessionDep, settings: SettingsDep) -> User:
-    token = request.cookies.get(settings.session_cookie_name)
-    if not token:
-        raise HTTPException(status_code=401, detail="not authenticated")
-    resolved = await resolve_session(db, token)
-    if isinstance(resolved, Err):
-        raise HTTPException(status_code=401, detail="invalid or expired session")
-    return resolved.value
+    user = await resolve_credentials(
+        db,
+        settings,
+        authorization=request.headers.get("Authorization"),
+        cookie_token=request.cookies.get(settings.session_cookie_name),
+    )
+    if user is None:
+        raise ApiError(401, "not_authenticated", "not authenticated")
+    return user
 
 
 CurrentUserDep = Annotated[User, Depends(current_user)]
@@ -41,10 +75,8 @@ CurrentUserDep = Annotated[User, Depends(current_user)]
 _LabNamePath = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
 
 
-def _unknown_lab(lab_name: str) -> HTTPException:
-    return HTTPException(
-        status_code=404, detail={"stage": "labs", "message": f"unknown lab '{lab_name}'"}
-    )
+def _unknown_lab(lab_name: str) -> ApiError:
+    return ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
 
 
 def require_global(permission: str) -> Callable[..., Awaitable[User]]:
@@ -52,7 +84,7 @@ def require_global(permission: str) -> Callable[..., Awaitable[User]]:
 
     async def dependency(user: CurrentUserDep, db: SessionDep) -> User:
         if permission not in await global_permissions(db, user):
-            raise HTTPException(status_code=403, detail=f"missing permission: {permission}")
+            raise ApiError(403, "permission_denied", f"missing permission: {permission}")
         return user
 
     return dependency
@@ -71,7 +103,7 @@ def require_lab(permission: str) -> Callable[..., Awaitable[User]]:
         if perms.LAB_READ not in granted:
             raise _unknown_lab(lab_name)
         if permission not in granted:
-            raise HTTPException(status_code=403, detail=f"missing permission: {permission}")
+            raise ApiError(403, "permission_denied", f"missing permission: {permission}")
         return user
 
     return dependency

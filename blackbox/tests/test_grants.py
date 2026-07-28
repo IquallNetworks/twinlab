@@ -148,7 +148,7 @@ async def test_transfer_owner(
 
     detail = await new_owner.get_lab(lab.name)
     assert detail.owner == Principal(id=summary.id, name=summary.username)
-    assert detail.permissions >= LAB_SCOPED_PERMISSIONS  # owner-implicit
+    assert detail.permissions == LAB_SCOPED_PERMISSIONS  # owner-implicit, masked
 
     # The admin still reads it through global permissions.
     _ = await admin.get_lab(lab.name)

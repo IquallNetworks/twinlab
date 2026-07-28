@@ -88,6 +88,8 @@ async def test_builtin_templates_listed(admin: TwinlabClient, make_lab: LabFacto
     response = await admin.get_custom_config(lab.name)
     assert response.custom_config == {}
 
+    # Pinned in the contract's shipped-catalogs appendix: renaming a builtin
+    # is a contract + suite change.
     builtin = {template.name: template for template in response.builtin}
     assert {"mpls_te", "ip_sla"} <= set(builtin)
     for template in builtin.values():

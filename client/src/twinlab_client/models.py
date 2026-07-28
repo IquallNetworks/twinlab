@@ -230,7 +230,8 @@ class LabNodeState:
 class LabSummary:
     """One row of `GET /labs`. `status` is the durable record; `nodes` is the
     live count (0 when down or clab-api unreachable). `permissions` = caller's
-    effective set on THIS lab (global + grants + owner-implicit)."""
+    effective set on THIS lab (global + grants + owner-implicit), masked to
+    the lab-scoped permission set — global-only perms ride on /auth/me."""
 
     name: str
     status: LabStatus

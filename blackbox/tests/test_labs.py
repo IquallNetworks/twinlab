@@ -27,8 +27,8 @@ async def test_create_lab_is_record_only(config: SuiteConfig, make_lab: LabFacto
     assert lab.nodes == []
     assert lab.config_time_status == "not_run"
     assert lab.owner is not None and lab.owner.name == config.admin_username
-    # Owner-implicit permissions at minimum (the admin also holds them globally).
-    assert lab.permissions >= LAB_SCOPED_PERMISSIONS
+    # Masked to lab-scoped perms (contract delta 10); the owner holds all seven.
+    assert lab.permissions == LAB_SCOPED_PERMISSIONS
 
 
 async def test_create_duplicate_name_is_409(admin: TwinlabClient, make_lab: LabFactory) -> None:
@@ -94,12 +94,13 @@ async def test_deploy_without_definition_is_409(admin: TwinlabClient, make_lab: 
 async def test_destroy_without_remove_requires_running(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:
-    # Pinned QUIRK: remove=False tears down a RUNNING lab; a lab that is not
-    # running (here: never deployed) is a 404.
+    # remove=False tears down a RUNNING lab; a lab that is not running (here:
+    # never deployed) is a 409 — 404 stays reserved for existence-hiding
+    # (contract delta 11, supersedes the old 404 QUIRK).
     lab = await make_lab(None)
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await admin.destroy_lab(lab.name)
-    assert excinfo.value.status_code == 404
+    assert excinfo.value.status_code == 409
 
 
 async def test_destroy_with_remove_deletes_the_record(
@@ -124,6 +125,46 @@ async def test_lab_hidden_without_read(
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await outsider.get_lab(lab.name)
     assert excinfo.value.status_code == 404
+
+
+async def test_mutating_routes_also_hide_existence(
+    make_lab: LabFactory, make_user_client: UserClientFactory
+) -> None:
+    # The 404-not-403 rule must hold on WRITE routes too, or an outsider can
+    # confirm a lab exists by probing them.
+    lab = await make_lab(None)
+    _, outsider = await make_user_client(None)
+
+    with pytest.raises(TwinlabApiError) as edit:
+        _ = await outsider.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    assert edit.value.status_code == 404
+
+    with pytest.raises(TwinlabApiError) as deploy:
+        _ = await outsider.deploy_lab(lab.name)
+    assert deploy.value.status_code == 404
+
+    with pytest.raises(TwinlabApiError) as destroy:
+        _ = await outsider.destroy_lab(lab.name, remove=True)
+    assert destroy.value.status_code == 404
+
+    with pytest.raises(TwinlabApiError) as grants:
+        _ = await outsider.list_grants(lab.name)
+    assert grants.value.status_code == 404
+
+
+async def test_terminal_handshake_refused_without_permission(
+    make_lab: LabFactory, make_user_client: UserClientFactory
+) -> None:
+    # Auth is resolved BEFORE the WebSocket is accepted; a caller without
+    # lab:terminal is refused at the handshake (surfaced as TwinlabApiError on
+    # `async with` entry), whether or not the lab is deployed.
+    lab = await make_lab(None)
+    _, outsider = await make_user_client(None)
+
+    with pytest.raises(TwinlabApiError) as excinfo:
+        async with outsider.terminal(lab.name, "n1", protocol="shell") as term:
+            _ = await term.recv(timeout=5)
+    assert excinfo.value.status_code == 403
 
 
 async def test_global_viewer_reads_but_cannot_edit(
@@ -158,6 +199,6 @@ async def test_creator_becomes_owner(
     summary, creator = await make_user_client({"creator"})
     lab = await make_lab(creator)
     assert lab.owner is not None and lab.owner.name == summary.username
-    # The creator role grants nothing on the lab itself; everything they hold
-    # here is the owner-implicit set.
+    # The creator role grants nothing lab-scoped; everything they hold here is
+    # the owner-implicit set (and delta 10 masks out their global lab:create).
     assert lab.permissions == LAB_SCOPED_PERMISSIONS

@@ -29,6 +29,14 @@ Deltas from today's wire, applied below (= the backend rework checklist):
    Grant.
 9. A config push that ran but failed on >=1 node is a 2xx
    ``status="config_failed"`` with per-node results — no longer an HTTP 502.
+10. Per-lab ``permissions`` (LabSummary/LabDetail) is MASKED to the seven
+    lab-scoped permissions — global-only perms (lab:create, user:manage,
+    group:manage) never appear there (they ride on ``/auth/me``).
+11. ``DELETE /labs/{name}`` with remove=false on a not-running lab is a 409
+    (wire today: 404) — 404 stays reserved for existence-hiding; and
+    remove=true RELEASES the lab's mgmt-subnet reservation (a plain
+    "destroyed" record keeps its subnet, so a redeploy reproduces the same
+    environment).
 
 Conventions:
 
@@ -43,10 +51,9 @@ Conventions:
 - Names (lab/node/suite): ``^[A-Za-z0-9][A-Za-z0-9_.-]*$``, max 64.
 - **Async client**: every method is a coroutine (httpx.AsyncClient +
   `websockets`); the client is an async context manager.
-- Ids are UUIDs. TODO(ids): target is **UUIDv7** (time-ordered); the backend
-  generates v4 today (`uuid.uuid4`). Stdlib `uuid.uuid7` needs Python 3.14
-  (backend pins >=3.13), so this is a 3.14 bump or an approved dependency —
-  decide during the rework. Applies to every id field below.
+- Ids are UUIDs — **UUIDv7** (decided 2026-07-28: the backend bumps to
+  Python 3.14 and uses stdlib `uuid.uuid7`; wire today: v4). Applies to every
+  id field below.
 - Unordered unique collections (roles, permissions, scopes) are `set` in the
   client; the wire is a JSON array either way.
 
@@ -59,7 +66,7 @@ PROPOSED): missing endpoints — get/delete user, admin password reset,
 activate toggle, self password change, get group, API keys.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime
@@ -281,15 +288,16 @@ class LabNodeState:
     mgmt_ip: str  # bare IP (CIDR stripped); "" when none
 
 
-# TODO (deferred, reviewer): revisit LabSummary/LabDetail later — split "real
-# useful API" vs "frontend needs" (e.g. move `nodes`/`config_time_ok` to a
-# separate request), and collapse the Summary/Detail overlap (Detail = Summary
-# + extra fields?).
+# (decided 2026-07-28: NO Summary/Detail split for v1.0 — Detail is already
+# Summary + definition + node list; revisit with the frontend rework if a
+# leaner shape proves wanted.)
 @dataclass(frozen=True, slots=True)
 class LabSummary:
     """One row of `GET /labs`. `status` is the durable record; `nodes` is the
     live count (0 when down or clab-api unreachable). `permissions` = caller's
-    effective set on THIS lab (global ∪ grants ∪ owner-implicit)."""
+    effective set on THIS lab (global ∪ grants ∪ owner-implicit), MASKED to
+    the lab-scoped permission set (APPROVED — global-only perms never appear
+    here; see /auth/me for those)."""
 
     name: str
     status: LabStatus
@@ -304,7 +312,7 @@ class LabSummary:
 
 
 @dataclass(frozen=True, slots=True)
-class LabDetail:  # TODO (deferred, reviewer): see LabSummary — heavy overlap.
+class LabDetail:  # No Summary/Detail split for v1.0 (see LabSummary note).
     """`GET /labs/{name}`: stored record + live nodes. `definition` is the
     lab's source of truth — None until authored (a "created" lab)."""
 
@@ -861,10 +869,14 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def destroy_lab(self, name: str, *, remove: bool = False) -> DestroyResponse:
         """DELETE /labs/{name} — lab:destroy.
 
-        remove=False: tear down; record -> "destroyed" (redeployable). QUIRK (APPROVED):
-        requires the lab to be RUNNING — 404 if already down.
-        remove=True: also soft-delete the record; teardown best-effort, so a
-        down lab is fine. Pin the asymmetry in tests."""
+        remove=False: tear down; record -> "destroyed" (redeployable, KEEPS
+        its mgmt-subnet reservation so a redeploy reproduces the same
+        environment). Requires the lab to be RUNNING — 409 when not
+        (APPROVED, supersedes the old 404 QUIRK: 404 stays reserved for
+        existence-hiding; wire today: 404).
+        remove=True: also soft-delete the record and RELEASE its mgmt-subnet
+        reservation (APPROVED); teardown best-effort, so a down lab is
+        fine."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
@@ -1002,7 +1014,10 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # Streams
     # ------------------------------------------------------------------ #
 
-    def events(self) -> AsyncIterator[LabEvent]:
+    # AsyncGenerator, not AsyncIterator (implementation finding): callers that
+    # abandon the stream early need a deterministic close (aclose /
+    # contextlib.aclosing) so the underlying connection is released.
+    def events(self) -> AsyncGenerator[LabEvent, None]:
         """GET /events (SSE) — any authenticated user; filtered to readable
         labs (set refreshes ~30 s, so a mid-stream grant lags up to that).
         Iterate with `async for`; keepalives are consumed, not yielded. Useful
@@ -1024,3 +1039,32 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         defaults to "admin" (wrong for e.g. VyOS); ignored for
         protocol="shell"."""
         raise NotImplementedError
+
+
+# --------------------------------------------------------------------------- #
+# Appendix — shipped catalogs (APPROVED: pinned as versioned contract facts)
+# --------------------------------------------------------------------------- #
+# The role catalog and builtin-template library are code-defined in the
+# backend; third-party clients must still QUERY them (GET /roles, GET
+# /labs/{name}/custom-config) rather than hardcode. They are enumerated here
+# so a catalog change is, by definition, a contract change (and a black-box
+# suite change) — not a silent drift.
+#
+# Permissions — lab-scoped (bindable per-lab or globally):
+#   lab:read, lab:edit, lab:configure, lab:validate, lab:terminal,
+#   lab:destroy, lab:grant
+# Permissions — global-only:
+#   lab:create, user:manage, group:manage
+#
+# Role catalog (scope — permissions):
+#   admin           global — every permission
+#   global_operator global — lab:create + all seven lab-scoped
+#   global_viewer   global — lab:read
+#   creator         global — lab:create
+#   user            global — none (the baseline role every new user gets)
+#   lab_owner       lab    — all seven lab-scoped (also the owner-implicit set)
+#   lab_manager     lab    — all lab-scoped EXCEPT lab:destroy
+#   lab_operator    lab    — lab:read, lab:configure, lab:validate, lab:terminal
+#   lab_viewer      lab    — lab:read
+#
+# Shipped builtin custom-config templates: mpls_te, ip_sla.

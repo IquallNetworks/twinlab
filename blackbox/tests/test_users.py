@@ -1,13 +1,14 @@
 """User management contract (global user:manage)."""
 
 import contextlib
+import os
 import uuid
 from collections.abc import AsyncIterator, Callable
 
 import pytest
 from twinlab_client import TwinlabApiError, TwinlabClient, UserSummary
 
-from _config import DEFAULT_PASSWORD, SuiteConfig, UserClientFactory
+from _config import ALTERNATE_PASSWORD, DEFAULT_PASSWORD, SuiteConfig, UserClientFactory
 
 
 @pytest.fixture
@@ -100,7 +101,7 @@ async def test_admin_password_reset_revokes_all_sessions(
     admin: TwinlabClient, config: SuiteConfig, make_user_client: UserClientFactory
 ) -> None:
     summary, client = await make_user_client(None)
-    await admin.set_user_password(summary.id, "bb-password-2")
+    await admin.set_user_password(summary.id, ALTERNATE_PASSWORD)
 
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await client.me()
@@ -110,7 +111,7 @@ async def test_admin_password_reset_revokes_all_sessions(
         with pytest.raises(TwinlabApiError) as rejected:
             _ = await fresh.login(summary.username, DEFAULT_PASSWORD)
         assert rejected.value.status_code == 401
-        info = await fresh.login(summary.username, "bb-password-2")
+        info = await fresh.login(summary.username, ALTERNATE_PASSWORD)
         assert info.username == summary.username
 
 
@@ -136,22 +137,40 @@ async def test_deactivate_revokes_and_blocks_login_reactivate_restores(
         assert info.username == summary.username
 
 
-async def test_last_active_admin_cannot_be_removed(admin: TwinlabClient) -> None:
-    # The rule guards the LAST active admin, so it is only testable when
-    # exactly one exists (deactivating a non-last admin would succeed — and
-    # kill the bootstrap account). `roles` covers direct bindings only; a
-    # group-derived admin would make this conservative, which is fine.
+async def test_non_last_admin_can_be_removed(
+    admin: TwinlabClient, unique: Callable[[str], str]
+) -> None:
+    # The complement of the last-admin guard, probed safely on a THROWAWAY
+    # admin: with the bootstrap admin still active, a second admin is not the
+    # last one and may be deactivated/deleted.
+    temp = await admin.create_user(unique("admin"), DEFAULT_PASSWORD, {"admin"})
+    try:
+        deactivated = await admin.set_user_active(temp.id, False)
+        assert deactivated.is_active is False
+    finally:
+        with contextlib.suppress(TwinlabApiError):
+            await admin.delete_user(temp.id)
+
+
+async def test_last_active_admin_cannot_be_deactivated(admin: TwinlabClient) -> None:
+    """The guard is only testable by aiming at the ACTUAL last admin — the
+    bootstrap account. If the endpoint exists but the guard is missing (a
+    plausible mid-rework state), the probe deactivates the bootstrap admin and
+    locks the stack out, so it is opt-in. The delete probe is omitted
+    entirely: a wrongly-deleted admin is unrecoverable even out of band."""
+    if os.environ.get("TWINLAB_TEST_LAST_ADMIN_GUARD") != "1":
+        pytest.skip(
+            "opt-in destructive probe (set TWINLAB_TEST_LAST_ADMIN_GUARD=1): if the "
+            "last-admin guard is unimplemented this deactivates the bootstrap admin"
+        )
+    # `roles` covers direct bindings only; a group-derived admin would make
+    # this conservative, which is fine.
     active_admins = [
         entry for entry in await admin.list_users() if entry.is_active and "admin" in entry.roles
     ]
     if len(active_admins) != 1:
         pytest.skip(f"{len(active_admins)} active admins present; the rule needs exactly one")
-    last = active_admins[0]
 
     with pytest.raises(TwinlabApiError) as deactivate:
-        _ = await admin.set_user_active(last.id, False)
+        _ = await admin.set_user_active(active_admins[0].id, False)
     assert deactivate.value.status_code == 409
-
-    with pytest.raises(TwinlabApiError) as delete:
-        await admin.delete_user(last.id)
-    assert delete.value.status_code == 409

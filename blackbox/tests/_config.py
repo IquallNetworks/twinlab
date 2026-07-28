@@ -4,6 +4,7 @@ Lives outside conftest because pytest's rootdir import mode doesn't make
 `conftest` importable as a module.
 """
 
+import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final
@@ -24,7 +25,10 @@ UserClientFactory = Callable[[set[str] | None], Awaitable[tuple[UserSummary, Twi
 LabFactory = Callable[[TwinlabClient | None], Awaitable[LabDetail]]
 GroupFactory = Callable[[], Awaitable[GroupSummary]]
 
-DEFAULT_PASSWORD: Final = "bb-password-1"  # >= 8 chars; throwaway test accounts only
+# Randomized per run: cleanup is best-effort on a live stack, and a leaked
+# bb-* account must not carry a known (committed) password.
+DEFAULT_PASSWORD: Final = f"bb-{secrets.token_urlsafe(12)}"
+ALTERNATE_PASSWORD: Final = f"bb-{secrets.token_urlsafe(12)}"  # for password-change tests
 
 # The seven lab-scoped permissions; a lab owner holds exactly this set implicitly.
 LAB_SCOPED_PERMISSIONS: Final[frozenset[str]] = frozenset(

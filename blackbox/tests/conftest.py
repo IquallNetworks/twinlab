@@ -68,10 +68,13 @@ async def anon(config: SuiteConfig) -> AsyncIterator[TwinlabClient]:
 
 @pytest.fixture
 async def admin(config: SuiteConfig) -> AsyncIterator[TwinlabClient]:
-    """A client logged in as the bootstrap admin."""
+    """A client logged in as the bootstrap admin. Logged out at teardown so
+    session rows don't accumulate on the persistent DB."""
     async with TwinlabClient(config.base_url) as client:
         _ = await client.login(config.admin_username, config.admin_password)
         yield client
+        with contextlib.suppress(TwinlabApiError, httpx.HTTPError):
+            await client.logout()
 
 
 @pytest.fixture
@@ -102,6 +105,8 @@ async def make_user_client(
 
     yield factory
     for summary, client in made:
+        with contextlib.suppress(TwinlabApiError, httpx.HTTPError):
+            await client.logout()
         await client.aclose()
         with contextlib.suppress(TwinlabApiError):
             await admin.delete_user(summary.id)

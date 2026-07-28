@@ -4,6 +4,8 @@ from twinlab_client import TwinlabClient
 
 from _config import LAB_SCOPED_PERMISSIONS, GroupFactory, UserClientFactory
 
+# Pinned in the contract's shipped-catalogs appendix (docs/
+# twinlab_client_shape.py): a catalog change is a contract + suite change.
 _EXPECTED_ROLES = frozenset(
     {
         "admin",

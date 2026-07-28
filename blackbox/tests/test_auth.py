@@ -3,7 +3,7 @@
 import pytest
 from twinlab_client import TwinlabApiError, TwinlabClient
 
-from _config import DEFAULT_PASSWORD, SuiteConfig, UserClientFactory
+from _config import ALTERNATE_PASSWORD, DEFAULT_PASSWORD, SuiteConfig, UserClientFactory
 
 
 async def test_me_unauthenticated_is_401(anon: TwinlabClient) -> None:
@@ -47,11 +47,22 @@ async def test_logout_is_idempotent(anon: TwinlabClient) -> None:
     await anon.logout()
 
 
-async def test_change_password_requires_current(make_user_client: UserClientFactory) -> None:
-    _, client = await make_user_client(None)
+async def test_change_password_requires_current(
+    config: SuiteConfig, make_user_client: UserClientFactory
+) -> None:
+    summary, client = await make_user_client(None)
     with pytest.raises(TwinlabApiError) as excinfo:
-        await client.change_password("not-the-current-password", "bb-password-2")
+        await client.change_password("not-the-current-password", ALTERNATE_PASSWORD)
     assert excinfo.value.status_code in (401, 403)
+
+    # The rejected change must not have altered the password: the attempted
+    # new password does not log in, the current one still does.
+    async with TwinlabClient(config.base_url) as fresh:
+        with pytest.raises(TwinlabApiError) as rejected:
+            _ = await fresh.login(summary.username, ALTERNATE_PASSWORD)
+        assert rejected.value.status_code == 401
+        info = await fresh.login(summary.username, DEFAULT_PASSWORD)
+        assert info.username == summary.username
 
 
 async def test_change_password_keeps_this_session_revokes_others(
@@ -61,7 +72,7 @@ async def test_change_password_keeps_this_session_revokes_others(
     async with TwinlabClient(config.base_url) as second:
         _ = await second.login(summary.username, DEFAULT_PASSWORD)
 
-        await first.change_password(DEFAULT_PASSWORD, "bb-password-2")
+        await first.change_password(DEFAULT_PASSWORD, ALTERNATE_PASSWORD)
 
         # The changing session survives; the other one is revoked.
         me = await first.me()
@@ -74,5 +85,5 @@ async def test_change_password_keeps_this_session_revokes_others(
         with pytest.raises(TwinlabApiError) as rejected:
             _ = await fresh.login(summary.username, DEFAULT_PASSWORD)
         assert rejected.value.status_code == 401
-        info = await fresh.login(summary.username, "bb-password-2")
+        info = await fresh.login(summary.username, ALTERNATE_PASSWORD)
         assert info.username == summary.username

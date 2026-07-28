@@ -12,7 +12,7 @@ Conventions carried by every method (not repeated per docstring):
 """
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
 from typing import Literal
 from urllib.parse import urlencode
@@ -410,10 +410,11 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def destroy_lab(self, name: str, *, remove: bool = False) -> DestroyResponse:
         """DELETE /labs/{name} — lab:destroy.
 
-        remove=False: tear down; record -> "destroyed" (redeployable);
-        requires the lab to be RUNNING — 404 if already down.
-        remove=True: also soft-delete the record; teardown best-effort, so a
-        down lab is fine."""
+        remove=False: tear down; record -> "destroyed" (redeployable, keeps
+        its mgmt-subnet reservation). Requires the lab to be RUNNING — 409
+        when not (404 stays reserved for existence-hiding).
+        remove=True: also soft-delete the record and release its mgmt-subnet
+        reservation; teardown best-effort, so a down lab is fine."""
         payload = await self._send_json(
             "DELETE", f"/labs/{name}", params={"remove": remove}, long=True
         )
@@ -583,14 +584,17 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # Streams
     # ------------------------------------------------------------------ #
 
-    def events(self) -> AsyncIterator[LabEvent]:
+    def events(self) -> AsyncGenerator[LabEvent]:
         """GET /events (SSE) — any authenticated user; filtered to readable
         labs (set refreshes ~30 s, so a mid-stream grant lags up to that).
         Iterate with `async for`; keepalives are consumed, not yielded. Useful
-        for awaiting deploy/destroy side effects instead of polling."""
+        for awaiting deploy/destroy side effects instead of polling.
+
+        When abandoning the stream early, close it deterministically (e.g.
+        `contextlib.aclosing`) so the underlying connection is released."""
         return self._event_stream()
 
-    async def _event_stream(self) -> AsyncIterator[LabEvent]:
+    async def _event_stream(self) -> AsyncGenerator[LabEvent]:
         # No read timeout: the stream idles between events (keepalive comments
         # keep the connection alive, not the read clock).
         timeout = httpx.Timeout(self._timeout, read=None)

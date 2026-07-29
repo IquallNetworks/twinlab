@@ -1,0 +1,18 @@
+#!/bin/sh
+# AuthorizedKeysCommand: offered-key fingerprint (%f) in, zero-or-one
+# authorized_keys lines out — resolved live from the Twinlab backend, so
+# revoking a key or a grant takes effect on the very next connection.
+#
+# sshd runs this as jumpauth with a minimal environment; config comes from the
+# file the entrypoint wrote (never argv — visible in `ps`). Any failure exits
+# non-zero, sshd ignores the output, and authentication is DENIED: the jump
+# fails closed when the backend is unreachable.
+#
+# --data-urlencode is load-bearing: SHA256 fingerprints are standard base64
+# and contain '+' and '/', which would corrupt a hand-built query string.
+set -eu
+. /etc/twinlab-jump/env
+exec curl --fail --silent --max-time 5 --get \
+    --data-urlencode "fingerprint=$1" \
+    --header "X-Jump-Token: ${JUMP_TOKEN}" \
+    "${BACKEND_URL}/internal/ssh/authorized-keys"

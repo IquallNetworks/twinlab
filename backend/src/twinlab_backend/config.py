@@ -9,7 +9,7 @@ the app fails startup on an `Err`.
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
 
 from twinlab_backend.result import Err, Ok, Result
 
@@ -31,6 +31,8 @@ _OPTIONAL_ENV_KEYS = {
     "session_ttl_hours": "SESSION_TTL_HOURS",
     "session_cookie_secure": "SESSION_COOKIE_SECURE",
     "mgmt_subnet_pool": "MGMT_SUBNET_POOL",
+    "ssh_jump_token": "SSH_JUMP_TOKEN",
+    "ssh_jump_address": "SSH_JUMP_ADDRESS",
 }
 
 
@@ -64,6 +66,25 @@ class Settings(BaseModel):
     # block, deliberately away from the host LAN (usually 192.168.x) and Docker's
     # 172.16/12 bridges; override per deployment if 10.77/16 clashes with a route.
     mgmt_subnet_pool: str = "10.77.0.0/16"
+
+    # SSH jump host (both optional in code — the backend runs without the
+    # feature; the compose stack requires them so a deployed stack can't
+    # silently ship a jump with no token). `ssh_jump_token` is the shared
+    # secret the jump's key-lookup script presents to /internal; None disables
+    # that route (404). `ssh_jump_address` is the EXTERNALLY reachable
+    # "host:port" advertised on GET /ssh-access; "" = not advertised.
+    ssh_jump_token: SecretStr | None = None
+    ssh_jump_address: str = ""
+
+    @field_validator("ssh_jump_address")
+    @classmethod
+    def _jump_address_is_host_port(cls, value: str) -> str:
+        if not value:
+            return value
+        host, _, port = value.rpartition(":")
+        if not host or not port.isdigit() or not 0 < int(port) < 65536:
+            raise ValueError("SSH_JUMP_ADDRESS must be 'host:port'")
+        return value
 
 
 @dataclass(frozen=True, slots=True)

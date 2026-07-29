@@ -39,6 +39,9 @@ it unset until the guard is implemented.
   compose stack. If a behavior can't be asserted through the API, that's an API gap to raise.
   One deliberate exception: wire-level security probes (e.g. the API-key secret must never appear
   in a listing payload) use raw HTTP, because the typed client cannot observe extra wire fields.
+  A second, same-spirit exception: the SSH-jump slices shell out to the host's OpenSSH client
+  (`ssh-keygen`, `ssh`) because the feature's contract IS a standard ssh connection — the host
+  needs OpenSSH installed.
 - Lab-deploying tests are expensive (real containerlab deploys of a tiny two-linux-node lab); they
   live in `test_labs_deploy.py` behind the `deploy` marker — deselect with `-m "not deploy"` for
   the cheap contract run. Everything else (including lab lifecycle, authoring, and grants) works on
@@ -57,11 +60,14 @@ it unset until the guard is implemented.
 | `test_labs.py`         | create-record/author/visibility/destroy — the lifecycle split |
 | `test_lab_authoring.py`| test suites + custom-config templates on a record            |
 | `test_jobs.py`         | async jobs without deploys: remove-job pollable after delete, hiding, history |
+| `test_ssh_keys.py`     | SSH public-key records: validation, global fingerprint uniqueness, jump coordinates |
 | `test_grants.py`       | delegation, anti-escalation, group grants, ownership transfer |
 | `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, power, terminal, events |
+| `test_ssh_jump.py`     | (`deploy`) real `ssh` probes through the jump host: permitopen scoping, revocation, fail-safe |
 
-The backend implements the full v1.0 contract (twelve deltas — delta 12 made the four long
-operations async jobs, which the deploy slice consumes via submit + `wait_job`), and the suite is
-**entirely green** (88/88 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+The backend implements the full v1.0 contract (thirteen deltas — delta 12 made the four long
+operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the
+SSH jump host the ssh slices exercise), and the suite is
+**entirely green** (98/98 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

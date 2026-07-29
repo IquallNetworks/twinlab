@@ -15,6 +15,9 @@ from twinlab_client import (
     LabDetail,
     LabNodeState,
     Principal,
+    SshAccess,
+    SshKey,
+    SshKeyGenerated,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -101,6 +104,93 @@ async def test_api_key_sends_bearer_header() -> None:
         "http://testserver", api_key="tl_secret", transport=httpx.MockTransport(handler)
     ) as client:
         _ = await client.me()
+
+
+_SSH_KEY_ID = "0198c0de-0000-7000-8000-00000000000b"
+_SSH_KEY_WIRE = {
+    "id": _SSH_KEY_ID,
+    "name": "laptop",
+    "algorithm": "ssh-ed25519",
+    "fingerprint": "SHA256:ZrrsZH82SZKt5kDXdU0J+MGcZiJKt8r2qXKOLcGfqik",
+    "comment": "galileo@laptop",
+    "created_at": "2026-07-29T10:00:00+00:00",
+    "last_used_at": None,
+}
+
+
+async def test_create_ssh_key_body_and_parse(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/auth/ssh-keys"
+        assert _json_body(request) == {
+            "name": "laptop",
+            "public_key": "ssh-ed25519 AAAAC3Nza galileo@laptop",
+        }
+        return httpx.Response(201, json=_SSH_KEY_WIRE)
+
+    async with make_client(handler) as client:
+        key = await client.create_ssh_key("laptop", "ssh-ed25519 AAAAC3Nza galileo@laptop")
+    assert isinstance(key, SshKey)
+    assert key.id == UUID(_SSH_KEY_ID)
+    assert key.algorithm == "ssh-ed25519"
+    assert key.fingerprint.startswith("SHA256:")
+    assert key.comment == "galileo@laptop"
+    assert key.last_used_at is None
+
+
+async def test_list_and_delete_ssh_keys(make_client: ClientFactory) -> None:
+    deleted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            deleted.append(request.url.path)
+            return httpx.Response(204)
+        assert request.url.path == "/api/v1/auth/ssh-keys"
+        return httpx.Response(200, json=[_SSH_KEY_WIRE])
+
+    async with make_client(handler) as client:
+        keys = await client.list_ssh_keys()
+        assert [k.name for k in keys] == ["laptop"]
+        await client.delete_ssh_key(UUID(_SSH_KEY_ID))
+    assert deleted == [f"/api/v1/auth/ssh-keys/{_SSH_KEY_ID}"]
+
+
+_PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+async def test_generate_ssh_key_body_and_parse(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/auth/ssh-keys/generate"
+        assert _json_body(request) == {"name": "laptop"}
+        return httpx.Response(201, json={"private_key": _PEM, "info": _SSH_KEY_WIRE})
+
+    async with make_client(handler) as client:
+        generated = await client.generate_ssh_key("laptop")
+    assert isinstance(generated, SshKeyGenerated)
+    assert generated.private_key.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+    assert generated.info.name == "laptop"
+
+
+async def test_ssh_access_enabled(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/ssh-access"
+        return httpx.Response(
+            200, json={"enabled": True, "host": "labs.example.com", "port": 2222, "user": "jump"}
+        )
+
+    async with make_client(handler) as client:
+        access = await client.get_ssh_access()
+    assert access == SshAccess(enabled=True, host="labs.example.com", port=2222, user="jump")
+
+
+async def test_ssh_access_disabled_is_all_none(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"enabled": False, "host": None, "port": None, "user": None}
+        )
+
+    async with make_client(handler) as client:
+        access = await client.get_ssh_access()
+    assert access == SshAccess(enabled=False, host=None, port=None, user=None)
 
 
 async def test_non_2xx_raises_api_error(make_client: ClientFactory) -> None:

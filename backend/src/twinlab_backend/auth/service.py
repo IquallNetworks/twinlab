@@ -130,29 +130,35 @@ async def global_role_names(session: AsyncSession, user: User) -> list[str]:
     return sorted(set(rows.all()))
 
 
-async def readable_lab_ids(session: AsyncSession, user: User) -> set[uuid.UUID] | None:
-    """The set of lab ids a user can read, or None meaning "all" (they hold a global
-    lab:read). Used to filter listings and the events stream without checking each lab
-    one at a time."""
+async def permitted_lab_ids(
+    session: AsyncSession, user: User, permission: str
+) -> set[uuid.UUID] | None:
+    """The set of lab ids on which the user holds a LAB-SCOPED `permission`,
+    or None meaning "all" (a global grant carries it). Owned labs are always
+    included — an owner implicitly holds every lab-scoped permission. Used to
+    filter listings, the events stream, and the SSH jump's authorized-keys
+    answer without checking labs one at a time."""
     grants = await load_grants(session, user)
-    if perms.LAB_READ in resolve_permissions(grants, None, is_owner=False):
+    if permission in resolve_permissions(grants, None, is_owner=False):
         return None
-    readable = {
+    permitted = {
         grant.lab_id
         for grant in grants
         if grant.scope_type == perms.SCOPE_LAB
         and grant.lab_id is not None
-        and perms.LAB_READ in perms.role_permissions(grant.role_name)
+        and permission in perms.role_permissions(grant.role_name)
     }
     owned = await session.scalars(select(Lab.id).where(Lab.owner_id == user.id))
-    readable |= set(owned.all())
-    return readable
+    permitted |= set(owned.all())
+    return permitted
 
 
-async def readable_lab_names(session: AsyncSession, user: User) -> set[str] | None:
-    """The lab *names* a user can read, or None for "all" — the events stream is
-    keyed by name, so it filters on this."""
-    ids = await readable_lab_ids(session, user)
+async def permitted_lab_names(
+    session: AsyncSession, user: User, permission: str
+) -> set[str] | None:
+    """The lab *names* variant of `permitted_lab_ids` — the events stream and
+    the clab-api inventory are keyed by name, so they filter on this."""
+    ids = await permitted_lab_ids(session, user, permission)
     if ids is None:
         return None
     if not ids:

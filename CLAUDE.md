@@ -36,14 +36,15 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (twelve deltas; delta 12 is the async job model). Two non-compose
+backend now implements in full (thirteen deltas; delta 12 is the async job model, delta 13 the SSH
+jump). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 88 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 98 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
 
-The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of five services:
+The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
 
 - **`frontend/`** — Vite + React + TypeScript (pnpm). **Currently targets the PRE-rework wire and
   is partially broken against the v1.0 backend** (accepted: no end users; its own rework to the
@@ -94,9 +95,22 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `?remove=true` soft-deletes the record and RELEASES its subnet. Config is env-sourced through a
   typed `load_settings(env) -> Result` loader (not pydantic-settings).
   Other endpoints under `/api/v1`: `health`, `health/ready`, `auth/*` (login/logout/me, `PUT
-  /auth/password` self-change that keeps the calling session, and **API keys** — `POST/GET/DELETE
+  /auth/password` self-change that keeps the calling session, **API keys** — `POST/GET/DELETE
   /auth/api-keys`, sha256-stored Bearer secrets shown once, dead when their user is deactivated or
-  deleted), `users/*` (list/create/get/roles/password-reset/activate-toggle/delete, with a
+  deleted — and **SSH keys** — `POST/GET/DELETE /auth/ssh-keys`, registered public keys for the
+  jump host (delta 13): pure-stdlib parse + SHA256 fingerprint, fingerprints globally unique, 422
+  `invalid_public_key`/`unsupported_key_type`, 409 `name_taken`/`key_already_registered`; plus
+  `POST /auth/ssh-keys/generate` — a server-side ed25519 pair via an ssh-keygen subprocess
+  boundary, one TemporaryDirectory per call so concurrency needs no lock, private key returned
+  once and never stored), `GET
+  /ssh-access` (advertised jump coordinates from `SSH_JUMP_ADDRESS`; `enabled:false` when unset),
+  `GET /internal/ssh/authorized-keys` (NOT under `/api/v1`, so the frontend proxy can't expose it;
+  `X-Jump-Token` guard — sshd's AuthorizedKeysCommand calls it per connection and gets one
+  authorized_keys line: `restrict,port-forwarding` + `permitopen="<ip>:*"` per node of the owner's
+  `lab:terminal` labs; **fail-safe invariant: an empty permitted set returns an EMPTY body**, never
+  a permitopen-less line, because sshd treats missing permitopen as forward-anywhere; clab failure
+  → 502 so the lookup script fails closed), `users/*`
+  (list/create/get/roles/password-reset/activate-toggle/delete, with a
   **last-admin guard**: 409 on deactivating or deleting the only active admin), `groups/*`,
   `roles`, `principals`, `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
   live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
@@ -151,6 +165,15 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `docker` connection (exec into `clab-<lab>-<node>` by name via the mounted Docker socket — no host
   network, no SSH). Returns structured per-node results (parsed from Ansible's PLAY RECAP). netlab
   (MIT) is aggregated with ansible-core + community.docker (GPLv3) as separate processes.
+- **`jump/`** — the SSH jump host (delta 13): stock OpenSSH sshd (debian:trixie-slim, BSD-licensed)
+  publishing `JUMP_PORT` (default 2222). One forwarding-only system account (`jump`, nologin, no
+  PTY/agent/X11/sftp); per-key access is resolved LIVE by `AuthorizedKeysCommand` → the backend's
+  `/internal` lookup (shared `JUMP_TOKEN`, required via compose `:?` so the stack can't start with
+  a well-known secret), so revoking a key/grant/user bites on the next connection — no per-user
+  provisioning in the container. Host keys persist on the `jump_hostkeys` volume (a recreate must
+  not look like a MITM). Sits on the plain compose network: containerlab's iptables rules make lab
+  mgmt bridges reachable without host networking (same mechanism the runner's IOL SSH push relies
+  on). Users connect with plain `ssh -J jump@host:2222 <node-user>@<mgmt_ip>` — Ansible-ready.
 - **`clab-api`** — the containerlab API server (`srl-labs/clab-api-server`, Apache-2.0), host-coupled
   (host network + PID, Docker socket and PAM databases mounted); it deploys lab nodes as sibling
   containers on the host daemon and authenticates a host user in the `clab_api` group.

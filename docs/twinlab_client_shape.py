@@ -48,6 +48,18 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     suite runs, unguarded today, gain it too). Finished jobs persist as
     recent history. Completion is discovered by POLLING only; job events on
     the SSE stream are deferred (recorded in ROADMAP).
+13. External SSH access (APPROVED 2026-07-29; shapes drafted for review):
+    users register SSH PUBLIC keys (``/auth/ssh-keys``, self-service like
+    API keys), and a stack-owned OpenSSH jump host lets a key's owner tunnel
+    — plain ``ssh -J``, Ansible-ready — to ALL TCP ports of nodes in labs
+    where they hold ``lab:terminal``, authorization re-evaluated from live
+    RBAC on every new connection. ``lab:terminal`` now means "interactive
+    node access" (web terminal AND SSH jump — no catalog change). ``GET
+    /ssh-access`` advertises the jump address. Besides bring-your-own-key,
+    ``POST /auth/ssh-keys/generate`` creates an ed25519 pair server-side,
+    registers the public half, and returns the private key ONCE (never
+    stored — the api-key pattern). (wire today: no ssh-key surface, no jump
+    service.)
 
 Conventions:
 
@@ -187,6 +199,50 @@ class ApiKeyCreated:
 
     key: str  # the bearer secret, e.g. "tl_<random>"; shown once, stored hashed
     info: ApiKey
+
+
+@dataclass(frozen=True, slots=True)
+class SshKey:
+    """One registered SSH public key (`/auth/ssh-keys`) — delta 13.
+
+    Registering a key unlocks the stack's SSH jump host for its owner (see
+    the SSH-keys client section for the connection semantics). Nothing here
+    is secret — the user keeps the private key — so create returns this same
+    shape (no `SshKeyCreated` analogue)."""
+
+    id: UUID
+    name: str  # caller-chosen label, unique per user, e.g. "laptop"
+    algorithm: str  # e.g. "ssh-ed25519"
+    fingerprint: str  # "SHA256:<43 base64 chars>" — what `ssh-keygen -lf` prints
+    comment: str | None  # trailing comment of the registered line, display only
+    created_at: datetime
+    last_used_at: datetime | None  # last OFFERED at the jump, not last node login
+
+
+@dataclass(frozen=True, slots=True)
+class SshKeyGenerated:
+    """`POST /auth/ssh-keys/generate` response — the only time the private
+    key exists outside the caller's hands. The server registers the public
+    half and DISCARDS the private half (no escrow); losing it means
+    generating a new key."""
+
+    private_key: str  # OpenSSH PEM text; write to a file with mode 0600
+    info: SshKey
+
+
+@dataclass(frozen=True, slots=True)
+class SshAccess:
+    """`GET /ssh-access` — the jump-host coordinates (delta 13).
+
+    `enabled` False (deployment has no jump configured) leaves the rest None.
+    Usage: ``ssh -o ProxyJump={user}@{host}:{port} <node-user>@<node-mgmt-ip>``
+    — node mgmt IPs ride on `LabNodeState.mgmt_ip`; the node's own login is
+    unchanged (the tunnel only grants reachability)."""
+
+    enabled: bool
+    host: str | None
+    port: int | None
+    user: str | None  # the jump account name, e.g. "jump"
 
 
 @dataclass(frozen=True, slots=True)
@@ -772,6 +828,45 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 
     async def revoke_api_key(self, key_id: UUID) -> None:
         """PROPOSED DELETE /auth/api-keys/{key_id} — 204, immediate."""
+        raise NotImplementedError
+
+    # SSH keys (delta 13): registered PUBLIC keys unlock the stack's SSH jump
+    # host. Through it a key's owner reaches ALL TCP ports of nodes in labs
+    # where they hold lab:terminal (owner-implicit included) — TCP forwarding
+    # only, no shell/PTY on the jump itself. Authorization is re-evaluated
+    # from live RBAC at every NEW connection: deleting a key, revoking
+    # lab:terminal, or deactivating the user takes effect on the next
+    # connection (established tunnels survive until closed), and the
+    # permitted node set is frozen per connection (reconnect after a
+    # redeploy changes node IPs).
+
+    async def create_ssh_key(self, name: str, public_key: str) -> SshKey:
+        """POST /auth/ssh-keys — 201. `public_key` is one OpenSSH
+        authorized_keys-format line ("<algorithm> <base64> [comment]", no
+        options). 422 invalid_public_key / unsupported_key_type; 409
+        name_taken (per user); 409 key_already_registered — fingerprints are
+        GLOBALLY unique, a key identifies one person at the jump."""
+        raise NotImplementedError
+
+    async def generate_ssh_key(self, name: str) -> SshKeyGenerated:
+        """POST /auth/ssh-keys/generate — 201. Server-side ed25519 pair for
+        users without their own key: the public half is registered under
+        `name` (equivalent to create_ssh_key from then on), the private half
+        is returned only here and never stored. 409 name_taken (per user);
+        a fingerprint conflict cannot occur (the key is freshly random)."""
+        raise NotImplementedError
+
+    async def list_ssh_keys(self) -> list[SshKey]:
+        """GET /auth/ssh-keys — the caller's own keys."""
+        raise NotImplementedError
+
+    async def delete_ssh_key(self, key_id: UUID) -> None:
+        """DELETE /auth/ssh-keys/{key_id} — 204. 404 ssh_key_not_found (own
+        keys only; someone else's id is indistinguishable from absent)."""
+        raise NotImplementedError
+
+    async def get_ssh_access(self) -> SshAccess:
+        """GET /ssh-access — jump-host coordinates; any authenticated user."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #

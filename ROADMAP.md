@@ -478,6 +478,31 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     events, so today the stream cannot signal their completion. Layer it on
     post-v1.0 without breaking the current contract.
 
+### External SSH access — jump service (contract delta 13) · **done**
+
+13. **Standard SSH access to lab nodes from outside, scoped by RBAC
+    (implemented 2026-07-29).** A compose-owned OpenSSH jump service (`jump/`,
+    published on `JUMP_PORT`, default 2222) replaces the old hand-configured
+    host `lab_jump` user. Users register SSH **public keys**
+    (`/auth/ssh-keys`, migration 0012; fingerprints globally unique — a key
+    identifies one person); sshd's `AuthorizedKeysCommand` resolves each new
+    connection live against the backend (`/internal/ssh/authorized-keys`,
+    shared-token guarded, registered outside `/api/v1` so the frontend proxy
+    can't expose it): one authorized_keys line restricted to
+    `permitopen="<node-ip>:*"` for every node of labs where the key's owner
+    holds `lab:terminal` (owner-implicit included). Besides bring-your-own
+    -key, `POST /auth/ssh-keys/generate` issues an ed25519 pair server-side
+    (ssh-keygen subprocess, private key returned once, never stored).
+    Fail-safe invariant: an
+    empty permitted set renders NO line (a permitopen-less line would mean
+    unrestricted forwarding). The jump sits on the plain compose network —
+    containerlab's iptables rules make lab mgmt bridges reachable without
+    host networking. `GET /ssh-access` advertises the coordinates
+    (`SSH_JUMP_ADDRESS`); usage is plain
+    `ssh -J jump@host:2222 <user>@<mgmt-ip>` — Ansible/netmiko/scp-ready.
+    Revocation (key delete, grant removal, user deactivation) bites on the
+    next connection; established tunnels survive until closed.
+
 ### Deferred items from the API review (2026-07-23) · **deferred**
 
 Surfaced while freezing the API shape for the Python client / black-box suite /

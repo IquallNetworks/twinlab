@@ -39,7 +39,9 @@ def upgrade() -> None:
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
-        sa.CheckConstraint("kind IN ('deploy','configure','destroy','suite_run')", name="ck_jobs_kind"),
+        sa.CheckConstraint(
+            "kind IN ('deploy','configure','destroy','suite_run')", name="ck_jobs_kind"
+        ),
         sa.CheckConstraint("status IN ('running','succeeded','failed')", name="ck_jobs_status"),
     )
     op.create_index("ix_jobs_lab_id", "jobs", ["lab_id"])

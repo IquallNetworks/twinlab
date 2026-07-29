@@ -58,6 +58,9 @@ from twinlab_client.models import (
     Role,
     RoleScope,
     SaveConfigResponse,
+    SshAccess,
+    SshKey,
+    SshKeyGenerated,
     SuiteReport,
     TestExpectation,
     TestResult,
@@ -116,6 +119,15 @@ def _get_bool(obj: dict[str, object], key: str, where: str) -> bool:
 
 def _get_int(obj: dict[str, object], key: str, where: str) -> int:
     value = _req(obj, key, where)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TwinlabProtocolError(where, f"{key!r}: expected integer, got {type(value).__name__}")
+    return value
+
+
+def _get_opt_int(obj: dict[str, object], key: str, where: str) -> int | None:
+    value = obj.get(key)
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise TwinlabProtocolError(where, f"{key!r}: expected integer, got {type(value).__name__}")
     return value
@@ -286,6 +298,40 @@ def parse_api_key_created(value: object) -> ApiKeyCreated:
     return ApiKeyCreated(
         key=_get_str(obj, "key", where),
         info=parse_api_key(_req(obj, "info", where)),
+    )
+
+
+def parse_ssh_key(value: object) -> SshKey:
+    where = "SshKey"
+    obj = as_object(value, where)
+    return SshKey(
+        id=_get_uuid(obj, "id", where),
+        name=_get_str(obj, "name", where),
+        algorithm=_get_str(obj, "algorithm", where),
+        fingerprint=_get_str(obj, "fingerprint", where),
+        comment=_get_opt_str(obj, "comment", where),
+        created_at=_get_datetime(obj, "created_at", where),
+        last_used_at=_get_opt_datetime(obj, "last_used_at", where),
+    )
+
+
+def parse_ssh_key_generated(value: object) -> SshKeyGenerated:
+    where = "SshKeyGenerated"
+    obj = as_object(value, where)
+    return SshKeyGenerated(
+        private_key=_get_str(obj, "private_key", where),
+        info=parse_ssh_key(_req(obj, "info", where)),
+    )
+
+
+def parse_ssh_access(value: object) -> SshAccess:
+    where = "SshAccess"
+    obj = as_object(value, where)
+    return SshAccess(
+        enabled=_get_bool(obj, "enabled", where),
+        host=_get_opt_str(obj, "host", where),
+        port=_get_opt_int(obj, "port", where),
+        user=_get_opt_str(obj, "user", where),
     )
 
 

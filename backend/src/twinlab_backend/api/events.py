@@ -19,8 +19,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from twinlab_backend.api_errors import ApiError
+from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import resolve_credentials
-from twinlab_backend.auth.service import readable_lab_names
+from twinlab_backend.auth.service import permitted_lab_names
 from twinlab_backend.config import Settings
 from twinlab_backend.db.models import User
 from twinlab_backend.deps import ClabClientDep, SettingsDep
@@ -56,7 +57,7 @@ async def _authenticate(request: Request, settings: Settings) -> User:
 
 async def _resolve_readable(request: Request, user: User) -> set[str] | None:
     async with request.app.state.session_factory() as session:
-        return await readable_lab_names(session, user)
+        return await permitted_lab_names(session, user, perms.LAB_READ)
 
 
 async def _sse(request: Request, clab: ClabApiClient, user: User) -> AsyncIterator[str]:

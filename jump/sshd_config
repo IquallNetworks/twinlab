@@ -1,0 +1,48 @@
+# Twinlab jump host. Forwarding-only: users tunnel to lab nodes they hold
+# lab:terminal on (per-key permitopen options rendered by the backend); no
+# shell, no PTY, no file transfer on the jump itself.
+
+Port 2222
+# Host keys live on a named volume so a recreated container keeps its identity
+# (a changed host key looks like a MITM to every user's known_hosts).
+HostKey /etc/ssh/host_keys/ssh_host_ed25519_key
+HostKey /etc/ssh/host_keys/ssh_host_rsa_key
+
+# VERBOSE logs the fingerprint of every accepted/rejected key — the audit trail.
+LogLevel VERBOSE
+# Pins the %f token format the backend looks keys up by (sha256 is the OpenSSH
+# default; pinned so a distro patch can't silently break the lookup).
+FingerprintHash sha256
+
+AllowUsers jump
+PermitRootLogin no
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+# PAM would re-check the account's (deliberately absent) password state.
+UsePAM no
+
+# The backend is the ONLY key source: no files on disk to drift.
+AuthorizedKeysFile none
+AuthorizedKeysCommand /usr/local/bin/twinlab-authorized-keys %f
+AuthorizedKeysCommandUser jumpauth
+
+# direct-tcpip only (ssh -J / -L / -W); no remote listens, no tunnels.
+AllowTcpForwarding local
+GatewayPorts no
+PermitTunnel no
+X11Forwarding no
+AllowAgentForwarding no
+PermitTTY no
+
+# Drop dead tunnels after ~90s of silence.
+ClientAliveInterval 30
+ClientAliveCountMax 3
+
+# The container healthcheck (ssh-keyscan from inside) never authenticates;
+# without the exemption OpenSSH's per-source penalties would eventually
+# throttle loopback and flap the healthcheck.
+PerSourcePenaltyExemptList 127.0.0.0/8
+
+# No Subsystem sftp: nothing to transfer on the jump itself.

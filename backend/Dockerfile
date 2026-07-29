@@ -2,7 +2,12 @@
 
 # uv-managed build. The venv (including the netlab CLI, a runtime dependency the
 # backend shells out to) is materialised from the lockfile for reproducibility.
-FROM python:3.14-slim AS base
+FROM python:3.14-slim
+
+# ssh-keygen for POST /auth/ssh-keys/generate (server-side keypairs). BSD.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/* AS base
 COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \

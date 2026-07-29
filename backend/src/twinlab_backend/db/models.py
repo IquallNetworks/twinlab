@@ -286,6 +286,37 @@ class ApiKey(Base):
     user: Mapped[User] = relationship(lazy="selectin")
 
 
+class SshKey(Base):
+    """A user's registered SSH public key — their credential at the stack's
+    jump host. Nothing secret is stored (it IS the public half). The
+    fingerprint is globally unique: sshd's key lookup carries only the
+    fingerprint, so a key must identify exactly one person. User deletion
+    cascades; a deactivated user's keys stop authorizing (is_active check in
+    the resolver)."""
+
+    __tablename__ = "ssh_keys"
+    # Names are per-user labels ("laptop"); two users may both have one.
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_ssh_key_user_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(64))
+    algorithm: Mapped[str] = mapped_column(String(64))
+    # Canonical base64 of the key blob — exactly what sshd must be handed back
+    # in the authorized_keys answer for authentication to succeed.
+    key_b64: Mapped[str] = mapped_column(Text())
+    comment: Mapped[str | None] = mapped_column(String(255), default=None)
+    # "SHA256:<unpadded base64>" — sshd's %f token verbatim; the jump lookup key.
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Stamped whenever the key is OFFERED at the jump (sshd looks it up).
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    user: Mapped[User] = relationship(lazy="selectin")
+
+
 class Session(Base):
     __tablename__ = "sessions"
 

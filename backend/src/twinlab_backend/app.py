@@ -20,9 +20,11 @@ from twinlab_backend.api.events import router as events_router
 from twinlab_backend.api.grants import router as grants_router
 from twinlab_backend.api.groups import router as groups_router
 from twinlab_backend.api.health import router as health_router
+from twinlab_backend.api.internal import router as internal_router
 from twinlab_backend.api.jobs import router as jobs_router
 from twinlab_backend.api.labs import router as labs_router
 from twinlab_backend.api.roles import router as roles_router
+from twinlab_backend.api.ssh_access import router as ssh_access_router
 from twinlab_backend.api.terminal import router as terminal_router
 from twinlab_backend.api.users import router as users_router
 from twinlab_backend.api_errors import register_error_handlers
@@ -125,6 +127,10 @@ def create_app() -> FastAPI:
     app.include_router(directory_router, prefix=_API_PREFIX)
     app.include_router(events_router, prefix=_API_PREFIX)
     app.include_router(terminal_router, prefix=_API_PREFIX)
+    app.include_router(ssh_access_router, prefix=_API_PREFIX)
+    # Deliberately unprefixed: the frontend proxy forwards only /api/v1, so
+    # /internal stays unreachable from outside the compose network.
+    app.include_router(internal_router)
     return app
 
 

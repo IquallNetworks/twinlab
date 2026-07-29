@@ -48,6 +48,9 @@ from twinlab_client.models import (
     Readiness,
     Role,
     SaveConfigResponse,
+    SshAccess,
+    SshKey,
+    SshKeyGenerated,
     TerminalProtocol,
     TestSuite,
     TestSuitesResponse,
@@ -222,6 +225,50 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def revoke_api_key(self, key_id: UUID) -> None:
         """DELETE /auth/api-keys/{key_id} — 204, immediate."""
         _ = await self._send("DELETE", f"/auth/api-keys/{key_id}")
+
+    # SSH keys: registered PUBLIC keys unlock the stack's SSH jump host.
+    # Through it a key's owner reaches ALL TCP ports of nodes in labs where
+    # they hold lab:terminal (owner-implicit included) — TCP forwarding only,
+    # no shell/PTY on the jump itself. Authorization is re-evaluated from
+    # live RBAC at every NEW connection: deleting a key, revoking
+    # lab:terminal, or deactivating the user takes effect on the next
+    # connection (established tunnels survive until closed), and the
+    # permitted node set is frozen per connection (reconnect after a
+    # redeploy changes node IPs).
+
+    async def create_ssh_key(self, name: str, public_key: str) -> SshKey:
+        """POST /auth/ssh-keys — 201. `public_key` is one OpenSSH
+        authorized_keys-format line ("<algorithm> <base64> [comment]", no
+        options). 422 invalid_public_key / unsupported_key_type; 409
+        name_taken (per user); 409 key_already_registered — fingerprints are
+        GLOBALLY unique, a key identifies one person at the jump."""
+        payload = await self._send_json(
+            "POST", "/auth/ssh-keys", json_body={"name": name, "public_key": public_key}
+        )
+        return _wire.parse_ssh_key(payload)
+
+    async def generate_ssh_key(self, name: str) -> SshKeyGenerated:
+        """POST /auth/ssh-keys/generate — 201. Server-side ed25519 pair for
+        users without their own key: the public half is registered under
+        `name` (equivalent to create_ssh_key from then on), the private half
+        is returned only here and never stored. 409 name_taken (per user);
+        a fingerprint conflict cannot occur (the key is freshly random)."""
+        payload = await self._send_json("POST", "/auth/ssh-keys/generate", json_body={"name": name})
+        return _wire.parse_ssh_key_generated(payload)
+
+    async def list_ssh_keys(self) -> list[SshKey]:
+        """GET /auth/ssh-keys — the caller's own keys."""
+        payload = await self._send_json("GET", "/auth/ssh-keys")
+        return [_wire.parse_ssh_key(v) for v in _wire.as_list(payload, "SshKey[]")]
+
+    async def delete_ssh_key(self, key_id: UUID) -> None:
+        """DELETE /auth/ssh-keys/{key_id} — 204. 404 ssh_key_not_found (own
+        keys only; someone else's id is indistinguishable from absent)."""
+        _ = await self._send("DELETE", f"/auth/ssh-keys/{key_id}")
+
+    async def get_ssh_access(self) -> SshAccess:
+        """GET /ssh-access — jump-host coordinates; any authenticated user."""
+        return _wire.parse_ssh_access(await self._send_json("GET", "/ssh-access"))
 
     # ------------------------------------------------------------------ #
     # Users (global user:manage)

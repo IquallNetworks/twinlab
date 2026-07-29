@@ -165,6 +165,50 @@ class ApiKeyCreated:
 
 
 @dataclass(frozen=True, slots=True)
+class SshKey:
+    """One registered SSH public key (`/auth/ssh-keys`).
+
+    Registering a key unlocks the stack's SSH jump host for its owner (see
+    `TwinlabClient.create_ssh_key` for the connection semantics). Nothing
+    here is secret — the user keeps the private key — so create returns this
+    same shape."""
+
+    id: UUID
+    name: str  # caller-chosen label, unique per user, e.g. "laptop"
+    algorithm: str  # e.g. "ssh-ed25519"
+    fingerprint: str  # "SHA256:<43 base64 chars>" — what `ssh-keygen -lf` prints
+    comment: str | None  # trailing comment of the registered line, display only
+    created_at: datetime
+    last_used_at: datetime | None  # last OFFERED at the jump, not last node login
+
+
+@dataclass(frozen=True, slots=True)
+class SshKeyGenerated:
+    """`POST /auth/ssh-keys/generate` response — the only time the private
+    key exists outside the caller's hands. The server registers the public
+    half and DISCARDS the private half (no escrow); losing it means
+    generating a new key."""
+
+    private_key: str  # OpenSSH PEM text; write to a file with mode 0600
+    info: SshKey
+
+
+@dataclass(frozen=True, slots=True)
+class SshAccess:
+    """`GET /ssh-access` — the jump-host coordinates.
+
+    `enabled` False (deployment has no jump configured) leaves the rest None.
+    Usage: ``ssh -o ProxyJump={user}@{host}:{port} <node-user>@<node-mgmt-ip>``
+    — node mgmt IPs ride on `LabNodeState.mgmt_ip`; the node's own login is
+    unchanged (the tunnel only grants reachability)."""
+
+    enabled: bool
+    host: str | None
+    port: int | None
+    user: str | None  # the jump account name, e.g. "jump"
+
+
+@dataclass(frozen=True, slots=True)
 class Principal:
     id: UUID
     name: str

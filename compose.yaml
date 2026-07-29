@@ -50,6 +50,11 @@ services:
       # Pool the per-lab management /24s are carved from (concurrent labs get
       # distinct mgmt subnets). Override in .env if 10.77/16 clashes with a route.
       MGMT_SUBNET_POOL: ${MGMT_SUBNET_POOL:-10.77.0.0/16}
+      # SSH jump host: the shared secret its key-lookup script presents to
+      # /internal, and the EXTERNALLY reachable host:port advertised on
+      # GET /ssh-access (keep the port in sync with JUMP_PORT).
+      SSH_JUMP_TOKEN: ${JUMP_TOKEN:?set JUMP_TOKEN in .env (openssl rand -hex 32)}
+      SSH_JUMP_ADDRESS: ${SSH_JUMP_ADDRESS:-localhost:2222}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # No host port: the backend is reached only through the frontend's /api/v1
@@ -118,6 +123,38 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # SSH jump host: users tunnel (`ssh -J jump@host:2222 <user>@<node-ip>`) to
+  # nodes of labs they hold lab:terminal on. Stock OpenSSH; per-key access is
+  # resolved live by the backend (AuthorizedKeysCommand -> /internal), so no
+  # per-user provisioning here. Plain compose network on purpose: containerlab
+  # installs iptables ACCEPT rules for its mgmt bridges, so lab node addresses
+  # are reachable from here without host networking or privileges (the same
+  # mechanism the netlab-runner's SSH config push relies on).
+  jump:
+    build: ./jump
+    environment:
+      BACKEND_URL: http://backend:8000
+      JUMP_TOKEN: ${JUMP_TOKEN:?set JUMP_TOKEN in .env (openssl rand -hex 32)}
+    ports:
+      - "${JUMP_PORT:-2222}:2222"
+    volumes:
+      # Host keys survive recreates: a changed host key looks like a MITM to
+      # every user's known_hosts.
+      - jump_hostkeys:/etc/ssh/host_keys
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      # Banner + host-key exchange proves sshd is answering (no python here;
+      # ssh-keyscan ships with openssh). -t ed25519: one probe, not one per
+      # host-key type — keeps the log quiet.
+      test: ["CMD", "ssh-keyscan", "-T", "2", "-t", "ed25519", "-p", "2222", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
   # Containerlab API server (github.com/srl-labs/clab-api-server, Apache-2.0).
   # It authenticates a host (PAM) user in the clab_api group and runs
   # containerlab against the host Docker daemon, so it needs host networking,
@@ -154,3 +191,4 @@ services:
 
 volumes:
   pgdata:
+  jump_hostkeys:

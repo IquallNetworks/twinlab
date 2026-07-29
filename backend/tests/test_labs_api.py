@@ -49,6 +49,7 @@ def test_summary_counts_live_nodes_and_owner() -> None:
     assert summary.status == "deployed"
     assert summary.owner is not None and summary.owner.name == "alice"
     assert summary.nodes == 2
+    assert summary.nodes_running == 2
     assert summary.permissions == ["lab:read"]
 
 
@@ -57,6 +58,23 @@ def test_summary_zero_nodes_when_absent_from_live() -> None:
     summary = lab_summary(lab, {}, [])
     assert summary.owner is None
     assert summary.nodes == 0
+    assert summary.nodes_running == 0
+
+
+def test_summary_counts_present_and_running_separately() -> None:
+    # After a host reboot containers are present but exited: nodes counts
+    # presence, nodes_running the actually-running subset.
+    exited = NodeInfo(
+        node_name="r2",
+        container_name="clab-tmp1-r2",
+        image="vyos",
+        state="exited",
+        ipv4_address="192.168.121.102/24",
+    )
+    lab = _lab("tmp1", "deployed", None)
+    summary = lab_summary(lab, {"tmp1": (_NODE, exited)}, [])
+    assert summary.nodes == 2
+    assert summary.nodes_running == 1
 
 
 def test_summary_masks_permissions_to_lab_scoped() -> None:

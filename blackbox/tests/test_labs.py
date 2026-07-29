@@ -7,7 +7,7 @@ test_labs_deploy.py behind the `deploy` marker.
 from collections.abc import Callable
 
 import pytest
-from twinlab_client import TwinlabApiError, TwinlabClient
+from twinlab_client import DestroyResponse, TwinlabApiError, TwinlabClient
 
 from _config import (
     LAB_SCOPED_PERMISSIONS,
@@ -44,6 +44,7 @@ async def test_created_lab_appears_in_list(admin: TwinlabClient, make_lab: LabFa
     row = rows[lab.name]
     assert row.status == "created"
     assert row.nodes == 0
+    assert row.nodes_running == 0
     assert row.config_time_status == "not_run"
     assert row.owner == lab.owner
 
@@ -107,8 +108,11 @@ async def test_destroy_with_remove_deletes_the_record(
     admin: TwinlabClient, unique: Callable[[str], str]
 ) -> None:
     lab = await admin.create_lab(unique("lab"))
-    result = await admin.destroy_lab(lab.name, remove=True)
-    assert result.status == "deleted"
+    job = await admin.destroy_lab(lab.name, remove=True)
+    done = await admin.wait_job(lab.name, job.id, timeout=120)
+    assert done.status == "succeeded", done.error
+    assert isinstance(done.result, DestroyResponse)
+    assert done.result.status == "deleted"
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await admin.get_lab(lab.name)
     assert excinfo.value.status_code == 404

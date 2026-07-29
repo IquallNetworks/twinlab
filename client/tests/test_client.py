@@ -11,6 +11,7 @@ import pytest
 from twinlab_client import (
     DeployResponse,
     Duration,
+    Job,
     LabDetail,
     LabNodeState,
     Principal,
@@ -24,6 +25,23 @@ from twinlab_client.client import TwinlabClient
 ClientFactory = Callable[[Callable[[httpx.Request], httpx.Response]], TwinlabClient]
 
 _OWNER_ID = "0198c0de-0000-7000-8000-000000000001"
+_JOB_ID = "0198c0de-0000-7000-8000-00000000000a"
+
+
+def _job_wire(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "id": _JOB_ID,
+        "lab_name": "lab1",
+        "kind": "deploy",
+        "status": "running",
+        "request": {"configure": True, "skip_config_time_checks": False},
+        "result": None,
+        "error": None,
+        "created_at": "2026-07-29T10:00:00+00:00",
+        "finished_at": None,
+    }
+    return base | overrides
+
 
 _LAB_DETAIL = {
     "name": "lab1",
@@ -132,41 +150,132 @@ async def test_create_lab_posts_name_only(make_client: ClientFactory) -> None:
     assert detail.definition is None
 
 
-async def test_deploy_lab_body_and_parse(make_client: ClientFactory) -> None:
+async def test_deploy_lab_submits_and_parses_job(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/labs/lab1/deploy"
         assert _json_body(request) == {"configure": True, "skip_config_time_checks": False}
-        return httpx.Response(
-            200,
-            json={
-                "status": "configured",
-                "lab_name": "lab1",
-                "nodes": ["r1", "r2"],
-                "configuration": [
-                    {"node": "r1", "status": "configured", "changed": 3, "failed": 0},
-                    {"node": "r2", "status": "configured", "changed": 3, "failed": 0},
-                ],
-                "validation": None,
-            },
-        )
+        return httpx.Response(202, json=_job_wire())
 
     async with make_client(handler) as client:
-        result = await client.deploy_lab("lab1", configure=True)
-    assert isinstance(result, DeployResponse)
-    assert result.status == "configured"
-    assert result.configuration is not None and len(result.configuration) == 2
-    assert result.validation is None
+        job = await client.deploy_lab("lab1", configure=True)
+    assert isinstance(job, Job)
+    assert job.kind == "deploy"
+    assert job.status == "running"
+    assert job.result is None and job.error is None
+    assert job.finished_at is None
+    assert job.request == {"configure": True, "skip_config_time_checks": False}
 
 
 async def test_destroy_lab_remove_param(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "DELETE"
         assert request.url.params["remove"] == "true"
-        return httpx.Response(200, json={"status": "deleted", "detail": "torn down"})
+        return httpx.Response(202, json=_job_wire(kind="destroy", request={"remove": True}))
 
     async with make_client(handler) as client:
-        result = await client.destroy_lab("lab1", remove=True)
-    assert result.status == "deleted"
+        job = await client.destroy_lab("lab1", remove=True)
+    assert job.kind == "destroy"
+    assert job.status == "running"
+
+
+async def test_get_job_parses_result_by_kind(make_client: ClientFactory) -> None:
+    deploy_result = {
+        "status": "configured",
+        "lab_name": "lab1",
+        "nodes": ["r1", "r2"],
+        "configuration": [
+            {"node": "r1", "status": "configured", "changed": 3, "failed": 0},
+            {"node": "r2", "status": "configured", "changed": 3, "failed": 0},
+        ],
+        "validation": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/api/v1/labs/lab1/jobs/{_JOB_ID}"
+        return httpx.Response(
+            200,
+            json=_job_wire(
+                status="succeeded",
+                result=deploy_result,
+                finished_at="2026-07-29T10:05:00+00:00",
+            ),
+        )
+
+    async with make_client(handler) as client:
+        job = await client.get_job("lab1", UUID(_JOB_ID))
+    assert job.status == "succeeded"
+    assert isinstance(job.result, DeployResponse)
+    assert job.result.status == "configured"
+    assert job.finished_at is not None
+
+
+async def test_failed_job_carries_error_envelope(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_job_wire(
+                status="failed",
+                error={
+                    "status_code": 502,
+                    "code": "upstream_error",
+                    "message": "clab-api unreachable",
+                    "extras": {},
+                },
+                finished_at="2026-07-29T10:05:00+00:00",
+            ),
+        )
+
+    async with make_client(handler) as client:
+        job = await client.get_job("lab1", UUID(_JOB_ID))
+    assert job.status == "failed"
+    assert job.result is None
+    assert job.error is not None
+    assert job.error.status_code == 502
+    assert job.error.code == "upstream_error"
+
+
+async def test_list_jobs_sends_limit(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/jobs"
+        assert request.url.params["limit"] == "5"
+        return httpx.Response(200, json=[_job_wire()])
+
+    async with make_client(handler) as client:
+        jobs = await client.list_jobs("lab1", limit=5)
+    assert len(jobs) == 1
+    assert jobs[0].kind == "deploy"
+
+
+async def test_wait_job_polls_to_terminal(make_client: ClientFactory) -> None:
+    polls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        polls.append(1)
+        if len(polls) < 3:
+            return httpx.Response(200, json=_job_wire())
+        return httpx.Response(
+            200,
+            json=_job_wire(
+                kind="destroy",
+                status="succeeded",
+                result={"status": "destroyed", "detail": "torn down"},
+                finished_at="2026-07-29T10:05:00+00:00",
+            ),
+        )
+
+    async with make_client(handler) as client:
+        job = await client.wait_job("lab1", UUID(_JOB_ID), poll_interval=0.01)
+    assert len(polls) == 3
+    assert job.status == "succeeded"
+
+
+async def test_wait_job_deadline_raises_timeout(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_job_wire())
+
+    async with make_client(handler) as client:
+        with pytest.raises(TimeoutError):
+            _ = await client.wait_job("lab1", UUID(_JOB_ID), timeout=0.02, poll_interval=0.01)
 
 
 async def test_put_test_suites_omits_none_expectation_fields(

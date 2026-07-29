@@ -61,6 +61,14 @@ NODE_CONFIG_STATUSES: Final[tuple[NodeConfigStatus, ...]] = ("configured", "fail
 DestroyStatus = Literal["destroyed", "deleted"]
 DESTROY_STATUSES: Final[tuple[DestroyStatus, ...]] = ("destroyed", "deleted")
 
+JobKind = Literal["deploy", "configure", "destroy", "suite_run"]
+JOB_KINDS: Final[tuple[JobKind, ...]] = ("deploy", "configure", "destroy", "suite_run")
+
+# No "pending"/"queued": there is no queue — a job starts the moment its
+# submit returns 202 (a concurrent submit is rejected 409, not queued).
+JobStatus = Literal["running", "succeeded", "failed"]
+JOB_STATUSES: Final[tuple[JobStatus, ...]] = ("running", "succeeded", "failed")
+
 ReadinessStatus = Literal["ready", "degraded"]
 READINESS_STATUSES: Final[tuple[ReadinessStatus, ...]] = ("ready", "degraded")
 
@@ -228,10 +236,13 @@ class LabNodeState:
 
 @dataclass(frozen=True, slots=True)
 class LabSummary:
-    """One row of `GET /labs`. `status` is the durable record; `nodes` is the
-    live count (0 when down or clab-api unreachable). `permissions` = caller's
-    effective set on THIS lab (global + grants + owner-implicit), masked to
-    the lab-scoped permission set — global-only perms ride on /auth/me."""
+    """One row of `GET /labs`. `status` is the durable record. `nodes` counts
+    the containers present in live state (any state; 0 when down or clab-api
+    unreachable); `nodes_running` the subset actually running — after a host
+    reboot a lab can be present-but-exited (e.g. 7/0). `permissions` =
+    caller's effective set on THIS lab (global + grants + owner-implicit),
+    masked to the lab-scoped permission set — global-only perms ride on
+    /auth/me."""
 
     name: str
     status: LabStatus
@@ -239,6 +250,7 @@ class LabSummary:
     created_at: datetime
     updated_at: datetime
     nodes: int
+    nodes_running: int
     config_time_status: ConfigTimeStatus
     permissions: set[str]
 
@@ -271,7 +283,7 @@ class NodeConfigResult:
 
 @dataclass(frozen=True, slots=True)
 class DeployResponse:
-    """`POST /labs/{name}/deploy`.
+    """Terminal `result` of a deploy Job.
 
     - bare deploy:               status="deployed", configuration/validation None
     - +configure, gate ok:       status="configured" (validation None if skipped
@@ -279,7 +291,8 @@ class DeployResponse:
     - +configure, push failed:   status="config_failed" — configuration carries
       the per-node results, validation None (gate not run)
     - +configure, gate failed:   status="validation_failed"
-    All four are 2xx: HTTP errors mean the operation could not run at all.
+    All four are job SUCCESSES: a *failed* job means the operation could not
+    run at all (`Job.error` carries the envelope).
     """
 
     status: DeployStatus
@@ -291,8 +304,9 @@ class DeployResponse:
 
 @dataclass(frozen=True, slots=True)
 class ConfigureResponse:
-    """`POST /labs/{name}/configure`. Like DeployResponse, but `configuration`
-    is always present (a push that couldn't run raises 422/502 instead)."""
+    """Terminal `result` of a configure Job. Like DeployResponse, but
+    `configuration` is always present (a push that couldn't run FAILS the
+    job instead)."""
 
     status: ConfigureStatus
     lab_name: str
@@ -302,8 +316,8 @@ class ConfigureResponse:
 
 @dataclass(frozen=True, slots=True)
 class DestroyResponse:
-    """`DELETE /labs/{name}`. "destroyed" = record kept, redeployable;
-    "deleted" = remove=true, record soft-deleted."""
+    """Terminal `result` of a destroy Job. "destroyed" = record kept,
+    redeployable; "deleted" = remove=true, record soft-deleted."""
 
     status: DestroyStatus
     detail: str  # containerlab teardown output, or "lab was not running"
@@ -455,6 +469,58 @@ class TestSuitesResponse:
     test_suites: dict[str, TestSuite]
     last_validation: dict[str, SuiteReport]
     config_time_status: ConfigTimeStatus
+
+
+# --------------------------------------------------------------------------- #
+# Jobs (async lab operations)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class JobError:
+    """Why a job FAILED — the error envelope, with TwinlabApiError's fields.
+    `status_code` classifies the failure in HTTP vocabulary (422
+    netlab_invalid, 502 upstream_error, ...) so error handling can match on
+    the same codes everywhere; it is never an actual response status (job
+    reads are 200)."""
+
+    status_code: int
+    code: str
+    message: str
+    extras: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class Job:
+    """One async lab operation, submitted by deploy/configure/destroy/suite
+    run and read back via `get_job`/`list_jobs`.
+
+    **failed = the operation could not run** (netlab rejected the stored
+    definition, clab-api/runner unreachable, ...) with the envelope in
+    `error`; an operation that RAN but produced a bad outcome — a config
+    push failing on nodes, a red config-time gate — is a **succeeded** job
+    whose `result.status` says so ("config_failed" / "validation_failed").
+
+    `result` is populated only on "succeeded", typed by `kind`:
+      deploy -> DeployResponse        configure -> ConfigureResponse
+      destroy -> DestroyResponse      suite_run -> SuiteReport
+
+    `request` echoes the submitted parameters verbatim (history/display
+    data, not a typed surface).
+
+    A backend restart fails any then-running job (code "backend_restart" —
+    the in-process task cannot survive; the record does). Finished jobs are
+    pruned beyond the newest ~20 per lab."""
+
+    id: UUID
+    lab_name: str
+    kind: JobKind
+    status: JobStatus
+    request: dict[str, object]
+    result: DeployResponse | ConfigureResponse | DestroyResponse | SuiteReport | None
+    error: JobError | None
+    created_at: datetime
+    finished_at: datetime | None  # None while running
 
 
 # --------------------------------------------------------------------------- #

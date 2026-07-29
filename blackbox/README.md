@@ -56,10 +56,12 @@ it unset until the guard is implemented.
 | `test_catalog.py`      | role catalog shapes, principals directory                    |
 | `test_labs.py`         | create-record/author/visibility/destroy — the lifecycle split |
 | `test_lab_authoring.py`| test suites + custom-config templates on a record            |
+| `test_jobs.py`         | async jobs without deploys: remove-job pollable after delete, hiding, history |
 | `test_grants.py`       | delegation, anti-escalation, group grants, ownership transfer |
-| `test_labs_deploy.py`  | (`deploy`) real deploys: lifecycle, mutex, netem, power, terminal, events |
+| `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, power, terminal, events |
 
-The backend implements the full v1.0 contract, and the suite is **entirely green** (83/83 with the
-`deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is the contract's enforcement: run it
-after backend changes; a new red means either a regression or a contract change that must go
-through review.
+The backend implements the full v1.0 contract (twelve deltas — delta 12 made the four long
+operations async jobs, which the deploy slice consumes via submit + `wait_job`), and the suite is
+**entirely green** (88/88 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+the contract's enforcement: run it after backend changes; a new red means either a regression or a
+contract change that must go through review.

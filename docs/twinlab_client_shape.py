@@ -37,6 +37,17 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     remove=true RELEASES the lab's mgmt-subnet reservation (a plain
     "destroyed" record keeps its subnet, so a redeploy reproduces the same
     environment).
+12. Async job model (APPROVED 2026-07-29; shapes drafted for review): the
+    four long operations — deploy, configure, destroy, suite run — return
+    **202 + a running ``Job``** and do the work server-side; callers poll
+    ``GET /labs/{name}/jobs/{id}`` (wire today: synchronous long calls that
+    return the result body directly). Pre-accept checks stay synchronous
+    (existence-hiding 404, 409 no_definition / lab_not_running, suite 404).
+    ONE running job per lab, any kind — a concurrent submit is 409
+    ``job_in_flight`` (subsumes delta 2's deploy mutex; configure/destroy/
+    suite runs, unguarded today, gain it too). Finished jobs persist as
+    recent history. Completion is discovered by POLLING only; job events on
+    the SSE stream are deferred (recorded in ROADMAP).
 
 Conventions:
 
@@ -293,11 +304,14 @@ class LabNodeState:
 # leaner shape proves wanted.)
 @dataclass(frozen=True, slots=True)
 class LabSummary:
-    """One row of `GET /labs`. `status` is the durable record; `nodes` is the
-    live count (0 when down or clab-api unreachable). `permissions` = caller's
-    effective set on THIS lab (global ∪ grants ∪ owner-implicit), MASKED to
-    the lab-scoped permission set (APPROVED — global-only perms never appear
-    here; see /auth/me for those)."""
+    """One row of `GET /labs`. `status` is the durable record. `nodes` counts
+    the containers PRESENT in live state (any state; 0 when down or clab-api
+    unreachable) and `nodes_running` the subset actually running (APPROVED
+    2026-07-29: both data points — after a host reboot a lab can be
+    present-but-exited, e.g. 7/0). `permissions` = caller's effective set on
+    THIS lab (global ∪ grants ∪ owner-implicit), MASKED to the lab-scoped
+    permission set (APPROVED — global-only perms never appear here; see
+    /auth/me for those)."""
 
     name: str
     status: LabStatus
@@ -305,6 +319,7 @@ class LabSummary:
     created_at: datetime
     updated_at: datetime
     nodes: int
+    nodes_running: int
     config_time_status: (
         ConfigTimeStatus  # APPROVED — wire today: config_time_ok: bool | None
     )
@@ -339,8 +354,8 @@ class NodeConfigResult:
 
 @dataclass(frozen=True, slots=True)
 class DeployResponse:
-    """`POST /labs/{name}/deploy` (lifecycle split — wire today: one-shot
-    `POST /labs` 201 and `POST /labs/{name}/redeploy`).
+    """Terminal `result` of a deploy Job (delta 12 — wire today: the body of
+    the synchronous `POST /labs/{name}/deploy`).
 
     - bare deploy:               status="deployed", configuration/validation None
     - +configure, gate ok:       status="configured" (validation None if skipped
@@ -348,7 +363,8 @@ class DeployResponse:
     - +configure, push failed:   status="config_failed" — configuration carries
       the per-node results, validation None (gate not run)
     - +configure, gate failed:   status="validation_failed"
-    All four are 2xx: HTTP errors mean the operation could not run at all.
+    All four are job SUCCESSES: a *failed* job means the operation could not
+    run at all (`Job.error` carries the envelope).
     """
 
     status: DeployStatus
@@ -360,8 +376,9 @@ class DeployResponse:
 
 @dataclass(frozen=True, slots=True)
 class ConfigureResponse:
-    """`POST /labs/{name}/configure`. Like DeployResponse, but `configuration`
-    is always present (a push that couldn't run raises 422/502 instead)."""
+    """Terminal `result` of a configure Job. Like DeployResponse, but
+    `configuration` is always present (a push that couldn't run FAILS the
+    job instead)."""
 
     status: ConfigureStatus
     lab_name: str
@@ -371,8 +388,8 @@ class ConfigureResponse:
 
 @dataclass(frozen=True, slots=True)
 class DestroyResponse:
-    """`DELETE /labs/{name}`. "destroyed" = record kept, redeployable;
-    "deleted" = remove=true, record soft-deleted."""
+    """Terminal `result` of a destroy Job. "destroyed" = record kept,
+    redeployable; "deleted" = remove=true, record soft-deleted."""
 
     status: Literal["destroyed", "deleted"]  # PROPOSAL (APPROVED): pinned
     detail: str  # containerlab teardown output, or "lab was not running"
@@ -530,6 +547,65 @@ class TestSuitesResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Jobs (async lab operations — delta 12)
+# --------------------------------------------------------------------------- #
+
+JobKind = Literal["deploy", "configure", "destroy", "suite_run"]
+JobStatus = Literal["running", "succeeded", "failed"]
+# No "pending"/"queued" status: there is no queue — a job starts the moment
+# its submit returns 202 (the one-running-job-per-lab mutex REJECTS a
+# concurrent submit with 409 job_in_flight rather than queueing it).
+
+
+@dataclass(frozen=True, slots=True)
+class JobError:
+    """Why a job FAILED — the error envelope, with TwinlabApiError's fields.
+    `status_code` classifies the failure in HTTP vocabulary (422
+    netlab_invalid, 502 upstream_error, ...) so error handling can match on
+    the same codes everywhere; it is never an actual response status (job
+    reads are 200)."""
+
+    status_code: int
+    code: str
+    message: str
+    extras: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class Job:
+    """One async lab operation, submitted by deploy/configure/destroy/suite
+    run and read back via `get_job`/`list_jobs`.
+
+    **failed = the operation could not run** (netlab rejected the stored
+    definition, clab-api/runner unreachable, ...) with the envelope in
+    `error`; an operation that RAN but produced a bad outcome — a config
+    push failing on nodes, a red config-time gate — is a **succeeded** job
+    whose `result.status` says so ("config_failed" / "validation_failed").
+
+    `result` is populated only on "succeeded", typed by `kind` (APPROVED:
+    the union, no per-kind accessors — the caller knows what it submitted):
+      deploy -> DeployResponse        configure -> ConfigureResponse
+      destroy -> DestroyResponse      suite_run -> SuiteReport
+
+    `request` echoes the submitted parameters verbatim (APPROVED: a raw
+    dict — history/display data, not a typed surface).
+
+    A backend restart fails any then-running job (code "backend_restart" —
+    the in-process task cannot survive; the record does). Finished jobs are
+    pruned beyond the newest ~20 per lab."""
+
+    id: UUID
+    lab_name: str
+    kind: JobKind
+    status: JobStatus
+    request: dict[str, object]
+    result: DeployResponse | ConfigureResponse | DestroyResponse | SuiteReport | None
+    error: JobError | None
+    created_at: datetime
+    finished_at: datetime | None  # None while running
+
+
+# --------------------------------------------------------------------------- #
 # Custom-config shapes
 # --------------------------------------------------------------------------- #
 
@@ -610,12 +686,11 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     instance); use as ``async with TwinlabClient(...) as client``. Non-2xx
     raises ``TwinlabApiError``.
 
-    Deploy/configure are synchronous long calls server-side (minutes on IOL)
-    — hence the separate ``action_timeout``.
-
-    PROPOSAL (recorded in ROADMAP): an async job model (202 + job polling or
-    the SSE stream) would fix the long-call and dropped-connection story; for
-    v1.0, generous timeouts suffice.
+    The four long operations (deploy/configure/destroy/suite run) are ASYNC
+    JOBS (delta 12): submit returns 202 + a running `Job`; the caller polls
+    `get_job` (or `wait_job`) for the terminal state. Every HTTP call is
+    short — `action_timeout` is the default `wait_job` deadline, i.e. how
+    long a submitted operation may take end to end.
     """
 
     def __init__(
@@ -632,8 +707,8 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         `subpath` is appended to it. `api_key` authenticates every request as
         `Authorization: Bearer <key>` instead of a login session (PROPOSED —
         no backend support yet; `login` still works on a keyed client but is
-        pointless). `action_timeout` covers deploy/configure/destroy and
-        suite runs."""
+        pointless). `action_timeout` is the default `wait_job` deadline —
+        submits themselves are fast 202s (delta 12)."""
         raise NotImplementedError
 
     async def aclose(self) -> None:
@@ -838,18 +913,19 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         *,
         configure: bool = False,
         skip_config_time_checks: bool = False,
-    ) -> DeployResponse:
-        """POST /labs/{name}/deploy — lab:edit (wire today: this verb is
-        /redeploy; the split renames it and makes it the ONLY deploy). Deploys
-        from the stored definition + suites + custom config: fresh if
-        "created"/"destroyed", overwrite-in-place if running. Long call —
-        waits for NOS readiness even without `configure`.
+    ) -> Job:
+        """POST /labs/{name}/deploy — lab:edit. **202 + the running deploy
+        Job** (delta 12 — wire today: a synchronous long call returning
+        DeployResponse directly). Deploys from the stored definition + suites
+        + custom config: fresh if "created"/"destroyed", overwrite-in-place
+        if running. The terminal job's `result` is a DeployResponse.
 
-        Errors: 409 no stored definition yet; 409 a deploy of this lab is
-        already in flight (the deploying-status mutex — APPROVED, closes
-        today's unguarded concurrent-redeploy race); 422 netlab rejects the
-        stored definition; 502 clab-api/runner failure or per-node push
-        failure. status="validation_failed" is a 2xx."""
+        Pre-accept (synchronous) errors: 409 no stored definition yet; 409
+        `job_in_flight` — ONE running job per lab, any kind. Post-accept
+        failures — netlab rejecting the stored definition, clab-api/runner
+        unreachable — fail the JOB (`error` carries the envelope); a push
+        that ran but failed and a red gate stay job successes
+        ("config_failed" / "validation_failed" result statuses)."""
         raise NotImplementedError
 
     # (create_and_deploy convenience removed per review: a client-side
@@ -857,26 +933,66 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # "created" record — and the bar was "remove unless atomic". Callers
     # compose create_lab + PUTs + deploy_lab explicitly.)
 
-    async def configure_lab(
-        self, name: str, *, skip_config_time_checks: bool = False
-    ) -> ConfigureResponse:
-        """POST /labs/{name}/configure — lab:configure. Pushes config from the
+    async def configure_lab(self, name: str, *, skip_config_time_checks: bool = False) -> Job:
+        """POST /labs/{name}/configure — lab:configure. **202 + the running
+        configure Job** (result: ConfigureResponse). Pushes config from the
         stored definition, then runs config-time suites unless skipped (the
         automatic run rides lab:configure, not lab:validate — deliberate).
-        422 bad definition; 502 runner/push failure."""
+        Pre-accept: 409 no definition; 409 job_in_flight. A push that
+        couldn't run fails the job; one that ran-but-failed succeeds with
+        result.status="config_failed"."""
         raise NotImplementedError
 
-    async def destroy_lab(self, name: str, *, remove: bool = False) -> DestroyResponse:
-        """DELETE /labs/{name} — lab:destroy.
+    async def destroy_lab(self, name: str, *, remove: bool = False) -> Job:
+        """DELETE /labs/{name} — lab:destroy. **202 + the running destroy
+        Job** (result: DestroyResponse).
 
         remove=False: tear down; record -> "destroyed" (redeployable, KEEPS
         its mgmt-subnet reservation so a redeploy reproduces the same
-        environment). Requires the lab to be RUNNING — 409 when not
-        (APPROVED, supersedes the old 404 QUIRK: 404 stays reserved for
-        existence-hiding; wire today: 404).
+        environment). Requires the lab to be RUNNING — a synchronous 409 at
+        submit, via a fast live-state pre-check.
         remove=True: also soft-delete the record and RELEASE its mgmt-subnet
-        reservation (APPROVED); teardown best-effort, so a down lab is
-        fine."""
+        reservation; teardown best-effort, so a down lab is fine. The job
+        stays pollable AFTER the soft-delete — job reads see soft-deleted
+        labs, so the terminal state is always reachable.
+        Pre-accept: 409 lab_not_running (remove=False); 409 job_in_flight."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Labs — jobs (async operations, delta 12)
+    # ------------------------------------------------------------------ #
+
+    async def get_job(self, lab_name: str, job_id: UUID) -> Job:
+        """GET /labs/{lab_name}/jobs/{job_id} — lab:read. 404 hides both an
+        unreadable lab and an unknown job id. Works on a soft-deleted lab
+        (a destroy-with-remove job must stay pollable to its terminal
+        state)."""
+        raise NotImplementedError
+
+    async def list_jobs(self, lab_name: str, *, limit: int = 20) -> list[Job]:
+        """GET /labs/{lab_name}/jobs?limit= — lab:read, newest first. Recent
+        history, not an audit log: finished jobs beyond the newest ~20 per
+        lab are pruned (and a re-created lab name starts with an empty
+        history — jobs don't leak across incarnations)."""
+        raise NotImplementedError
+
+    async def wait_job(
+        self,
+        lab_name: str,
+        job_id: UUID,
+        *,
+        timeout: float | None = None,
+        poll_interval: float = 2.0,
+    ) -> Job:
+        """Poll `get_job` until the job is terminal; return the terminal Job.
+        Pure client-side convenience — no wire surface beyond the polling.
+
+        Does NOT raise on a failed job — the caller inspects
+        status/result/error (APPROVED: no raise-on-failure flag). Raises
+        stdlib TimeoutError (APPROVED) when `timeout` (default: the
+        client's `action_timeout`) elapses with the job still running —
+        the job keeps running server-side; the caller can resume waiting.
+        """
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
@@ -894,10 +1010,12 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         on the next run."""
         raise NotImplementedError
 
-    async def run_test_suite(self, name: str, suite: str) -> SuiteReport:
-        """POST /labs/{name}/test-suites/{suite}/run — lab:validate. Runs one
-        suite (any stage); persists as its last run but NEVER moves the
-        config-time gate. 404 unknown suite. Long call (per-test `wait`)."""
+    async def run_test_suite(self, name: str, suite: str) -> Job:
+        """POST /labs/{name}/test-suites/{suite}/run — lab:validate. **202 +
+        the running suite_run Job** (result: SuiteReport — its worst case is
+        the sum of every test's `wait`, hence a job). Runs one suite (any
+        stage); persists as its last run but NEVER moves the config-time
+        gate. Pre-accept: 404 unknown suite; 409 job_in_flight."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
@@ -1023,8 +1141,13 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     def events(self) -> AsyncGenerator[LabEvent, None]:
         """GET /events (SSE) — any authenticated user; filtered to readable
         labs (set refreshes ~30 s, so a mid-stream grant lags up to that).
-        Iterate with `async for`; keepalives are consumed, not yielded. Useful
-        for awaiting deploy/destroy side effects instead of polling."""
+        Iterate with `async for`; keepalives are consumed, not yielded.
+
+        Container-lifecycle events only: deploy/destroy jobs surface node
+        create/start/stop here as a side effect, but configure and suite-run
+        jobs emit NOTHING — job completion is discovered by polling
+        `get_job`, never by this stream. (SSE job-status events are deferred
+        — recorded in ROADMAP.)"""
         raise NotImplementedError
 
     def terminal(

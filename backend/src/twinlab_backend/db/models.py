@@ -16,6 +16,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
@@ -23,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -217,6 +219,48 @@ class Lab(Base):
     # Two FKs point at users (created_by + owner_id), so the relationship must name
     # which one it follows. `owner` tracks owner_id (the authoritative owner).
     owner: Mapped[User | None] = relationship(lazy="selectin", foreign_keys=[owner_id])
+
+
+class Job(Base):
+    """One async lab operation (deploy/configure/destroy/suite run). The row IS
+    the API's job resource: submitted params echoed in `request`, the terminal
+    payload in `result` (succeeded) or the error envelope in `error` (failed).
+    Rows outlive the in-process task — a restart sweep fails any orphaned
+    `running` row — and are pruned to recent history per lab."""
+
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('deploy','configure','destroy','suite_run')", name="ck_jobs_kind"
+        ),
+        CheckConstraint("status IN ('running','succeeded','failed')", name="ck_jobs_status"),
+        # THE one-running-job-per-lab mutex: a concurrent submit loses this
+        # partial unique index at INSERT and maps to 409 job_in_flight.
+        Index(
+            "uq_jobs_one_running_per_lab",
+            "lab_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    # CASCADE is safe: labs are soft-deleted (the row survives), so a hard
+    # delete only happens via out-of-band DB surgery — jobs go with it.
+    lab_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    # The submitted parameters, echoed verbatim (history/display data). A deploy
+    # job also stashes the lab's pre-deploy status here (`previous_status`) so a
+    # failure — or the restart sweep — can restore it.
+    request: Mapped[dict[str, object]] = mapped_column(JSONB())
+    result: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    error: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class ApiKey(Base):

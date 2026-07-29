@@ -115,7 +115,9 @@ async def make_user_client(
 @pytest.fixture
 async def make_lab(admin: TwinlabClient, unique: Callable[[str], str]) -> AsyncIterator[LabFactory]:
     """Create a lab record owned by the given client (None = the admin).
-    Teardown best-effort destroys-with-remove as the admin."""
+    Teardown best-effort destroys-with-remove as the admin — submitting the
+    destroy job and waiting for it, so the next test can't race a teardown
+    still running server-side."""
     names: list[str] = []
 
     async def factory(owner: TwinlabClient | None) -> LabDetail:
@@ -126,8 +128,9 @@ async def make_lab(admin: TwinlabClient, unique: Callable[[str], str]) -> AsyncI
 
     yield factory
     for name in names:
-        with contextlib.suppress(TwinlabApiError):
-            _ = await admin.destroy_lab(name, remove=True)
+        with contextlib.suppress(TwinlabApiError, TimeoutError):
+            job = await admin.destroy_lab(name, remove=True)
+            _ = await admin.wait_job(name, job.id, timeout=120)
 
 
 @pytest.fixture

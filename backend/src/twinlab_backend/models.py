@@ -14,6 +14,10 @@ type ConfigTimeStatus = Literal["not_run", "passed", "failed"]
 type DeployStatus = Literal["deployed", "configured", "config_failed", "validation_failed"]
 type ConfigureStatus = Literal["configured", "config_failed", "validation_failed"]
 type DestroyStatus = Literal["destroyed", "deleted"]
+# Async job vocabularies (contract delta 12). No "pending": there is no queue —
+# a job starts at submit or the submit is rejected (409 job_in_flight).
+type JobKind = Literal["deploy", "configure", "destroy", "suite_run"]
+type JobStatus = Literal["running", "succeeded", "failed"]
 # Docker engine's container-state vocabulary; clab-api's passthrough is
 # validated against it at the read boundary (an unknown state is a loud 502).
 type ContainerState = Literal[
@@ -233,6 +237,37 @@ class DestroyResponse(BaseModel):
     detail: str
 
 
+class JobErrorOut(BaseModel):
+    """Why a job FAILED — the error envelope with a status classifier.
+    `status_code` uses HTTP vocabulary (422 netlab_invalid, 502
+    upstream_error, ...) so error handling matches on the same codes
+    everywhere; it is never an actual response status (job reads are 200)."""
+
+    status_code: int
+    code: str
+    message: str
+    extras: dict[str, object]
+
+
+class JobOut(BaseModel):
+    """One async lab operation (contract delta 12). `result` is set only on
+    "succeeded" and is the operation's payload, typed by `kind` on the wire
+    contract (DeployResponse / ConfigureResponse / DestroyResponse /
+    SuiteReport); served as stored. failed = could-not-run — an operation
+    that ran with a bad outcome (config_failed / validation_failed) is a
+    SUCCEEDED job whose result.status says so."""
+
+    id: uuid.UUID
+    lab_name: str
+    kind: JobKind
+    status: JobStatus
+    request: dict[str, object]
+    result: dict[str, object] | None = None
+    error: JobErrorOut | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
 class Principal(BaseModel):
     """A user or group as referenced in responses: id + display name."""
 
@@ -259,9 +294,11 @@ class LabNodeState(BaseModel):
 
 
 class LabSummary(BaseModel):
-    """A lab in a listing. `status` is the durable record's truth; `nodes` is
-    the live count from clab-api (0 when the lab isn't currently running or
-    clab-api couldn't be reached)."""
+    """A lab in a listing. `status` is the durable record's truth. `nodes`
+    counts the containers PRESENT in clab-api's live state (any state; 0 when
+    the lab is down or clab-api couldn't be reached); `nodes_running` the
+    subset actually running — after a host reboot a lab can be
+    present-but-exited (e.g. 7/0)."""
 
     name: str
     status: LabStatus
@@ -269,6 +306,7 @@ class LabSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     nodes: int
+    nodes_running: int
     # Config-time validation gate from the most recent configure. A skipped
     # gate RETAINS the previous result; "no config-time suites" = "not_run".
     config_time_status: ConfigTimeStatus

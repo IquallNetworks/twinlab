@@ -36,11 +36,12 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full. Two non-compose projects sit beside the services: **`client/`**
-(`twinlab-client`, the distributable async Python client — PyPI-ready, published at v1.0) and
-**`blackbox/`** (the black-box test suite: 83 tests exercising a live stack through the client
-only; all green, README documents env config and the `deploy` marker). The suite is the contract's
-enforcement — backend changes are verified against it, and contract changes go through review.
+backend now implements in full (twelve deltas; delta 12 is the async job model). Two non-compose
+projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 88 tests
+exercising a live stack through the client only; all green, README documents env config and the
+`deploy` marker). The suite is the contract's enforcement — backend changes are verified against
+it, and contract changes go through review.
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of five services:
 
@@ -75,14 +76,23 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   front; `PUT /labs/{name}` authors/replaces the stored definition (validated by a dry `netlab
   create`; the record's name and subnet are re-pinned into it — `set_lab_name`/`set_mgmt_subnet`,
   an explicit `addressing.mgmt.ipv4` wins); `POST /labs/{name}/deploy` is the ONLY deploy verb —
-  from the stored definition, fresh or overwrite-in-place, guarded by an atomic compare-and-swap
-  `deploying` mutex (409), opt-in `configure`; 409 `no_definition` on an unauthored record. A lab is
+  from the stored definition, fresh or overwrite-in-place, opt-in `configure`; 409 `no_definition`
+  on an unauthored record. **The four long operations (deploy/configure/destroy/suite-run) are
+  ASYNC JOBS** (contract delta 12): pre-accept checks stay synchronous, then the route returns
+  **202 + a running Job** and the work runs in an in-process task; callers poll `GET
+  /labs/{name}/jobs/{id}` (+ `GET .../jobs?limit=`, both `lab:read`, readable on a soft-deleted
+  lab so a destroy-with-remove job stays pollable; a revived name starts with no history). Jobs
+  persist in a `jobs` table; the partial unique index (one `running` row per lab) IS the operation
+  mutex — a concurrent submit of ANY kind is 409 `job_in_flight`. Job failed = could-not-run (the
+  error envelope on `job.error`); `config_failed`/`validation_failed` stay job successes. Startup/
+  shutdown sweeps (`job_store.sweep_orphans`) fail orphaned jobs (`backend_restart`/
+  `backend_shutdown`) and restore a lab wedged at `deploying` (single-process assumption). A lab is
   a **durable record** (a `labs` table): definition/suites/templates are reused by deploy and
   configure — the caller never resupplies them — and the record survives destroy (status
   `destroyed`, redeployable, subnet kept). `DELETE /labs/{name}` requires a RUNNING lab (409
-  `lab_not_running` otherwise — 404 stays existence-hiding); `?remove=true` soft-deletes the record
-  and RELEASES its subnet. Config is env-sourced through a typed `load_settings(env) -> Result`
-  loader (not pydantic-settings).
+  `lab_not_running` at submit, via a fast inspect pre-check — 404 stays existence-hiding);
+  `?remove=true` soft-deletes the record and RELEASES its subnet. Config is env-sourced through a
+  typed `load_settings(env) -> Result` loader (not pydantic-settings).
   Other endpoints under `/api/v1`: `health`, `health/ready`, `auth/*` (login/logout/me, `PUT
   /auth/password` self-change that keeps the calling session, and **API keys** — `POST/GET/DELETE
   /auth/api-keys`, sha256-stored Bearer secrets shown once, dead when their user is deactivated or
@@ -95,7 +105,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `netlab create`), each running a command over clab-api `exec` and matching stdout with a safe
   primitive (contains/not_contains/matches/json_path; no expression eval), polled until they pass or
   a per-test `wait` elapses. `GET/PUT /labs/{name}/test-suites` (read/author), `POST
-  /labs/{name}/test-suites/{suite}/run` (run one on demand). A suite's `stage` (`config-time` |
+  /labs/{name}/test-suites/{suite}/run` (run one on demand — an async job like the other long
+  operations). A suite's `stage` (`config-time` |
   `runtime`) controls only *automatic* execution: `config-time` suites run at the end of a configure
   (deploy/configure, gated by `skip_config_time_checks` — a skip RETAINS the previous gate) and gate
   "config done" — a failure leaves the lab deployed with `config_time_status="failed"` and returns
@@ -151,11 +162,11 @@ Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner quality gates: `ru
 check`, basedpyright (strict), pytest.
 
 **End-to-end deploy + config push is proven:** create → `PUT` the definition → `POST
-/labs/{name}/deploy` with `configure: true` → nodes deployed *and* configured via clab-api deploy +
-the netlab-runner, config-time gate green — exercised continuously by the black-box suite's
-`deploy`-marked tests (linux nodes) and previously verified on VyOS (OSPF adjacency reaches Full)
-and cisco IOL. Needs a host user in the `clab_api` group, node images pulled, and clab-api running.
-Keep this section current as the project evolves.
+/labs/{name}/deploy` with `configure: true` (202 + job) → poll the job to `succeeded` → nodes
+deployed *and* configured via clab-api deploy + the netlab-runner, config-time gate green —
+exercised continuously by the black-box suite's `deploy`-marked tests (linux nodes) and verified
+on VyOS (OSPF adjacency reaches Full) and cisco IOL. Needs a host user in the `clab_api` group,
+node images pulled, and clab-api running. Keep this section current as the project evolves.
 
 A previous, complete iteration lives in the sibling directory **`../bak.0`** (a four-layer Python
 package with an HTTP backend / CLI client / privileged lab-runner split, plus a full `docs/` design

@@ -11,14 +11,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from twinlab_backend.db.models import Lab
+from twinlab_backend.db.models import Job, Lab
 
 # Status values a lab row can hold (the lifecycle split). "created" is a bare
-# record (no definition yet); "deploying" is the in-flight deploy mutex.
+# record (no definition yet); "deploying" is a deploy job in flight (display
+# only — the jobs table's partial unique index is the actual mutex).
 STATUS_CREATED = "created"
 STATUS_DEPLOYING = "deploying"
 STATUS_DEPLOYED = "deployed"
@@ -27,7 +28,7 @@ STATUS_DESTROYED = "destroyed"
 
 @dataclass(frozen=True, slots=True)
 class LabStoreError:
-    reason: str  # "not_found" | "subnet_taken" | "name_taken" | "deploying"
+    reason: str  # "not_found" | "subnet_taken" | "name_taken"
     detail: str = ""
 
 
@@ -92,6 +93,10 @@ async def create_lab(
         lab.config_time_ok = None
         lab.custom_config = None
         lab.deleted_at = None
+        # A revived name starts with NO job history — the row keeps its id, so
+        # without this the previous incarnation's jobs (possibly a different
+        # owner's results) would surface on the fresh lab.
+        _ = await session.execute(delete(Job).where(Job.lab_id == lab.id))
     try:
         await session.commit()
     except IntegrityError:
@@ -104,34 +109,16 @@ async def create_lab(
         if holder is not None:
             return LabStoreError("subnet_taken", mgmt_subnet)
         return LabStoreError("name_taken", name)
+    # The revive path UPDATEs the row, so server-side `updated_at` (onupdate) is
+    # expired; load it here, in this async context, so rendering the record
+    # can't trip a sync lazy-load. (The insert path gets values via RETURNING.)
+    await session.refresh(lab)
     return lab
 
 
-async def begin_deploy(session: AsyncSession, name: str) -> str | LabStoreError:
-    """Atomically claim the deploy mutex: flip the lab to `deploying` only if no
-    deploy is already in flight, returning the PREVIOUS status so a failed
-    deploy can restore it. The compare-and-swap UPDATE (WHERE status unchanged)
-    makes two concurrent deploys serialize — the loser gets `deploying`."""
-    lab = await get_lab(session, name)
-    if lab is None:
-        return LabStoreError("not_found", name)
-    previous = lab.status
-    if previous == STATUS_DEPLOYING:
-        return LabStoreError("deploying", name)
-    claimed = await session.execute(
-        update(Lab).where(Lab.id == lab.id, Lab.status == previous).values(status=STATUS_DEPLOYING)
-    )
-    await session.commit()
-    # An UPDATE's execute() is a CursorResult; rowcount says whether OUR
-    # compare-and-swap matched (0 = another deploy claimed it between the read
-    # and the update).
-    if not isinstance(claimed, CursorResult) or claimed.rowcount != 1:
-        return LabStoreError("deploying", name)
-    return previous
-
-
 async def set_status(session: AsyncSession, name: str, status: str) -> Lab | LabStoreError:
-    """Restore a lab's status (a failed deploy reverts the `deploying` claim)."""
+    """Set a lab's display status (`deploying` while a deploy job runs; a failed
+    deploy restores the previous value). Plain — the job row is the mutex."""
     lab = await get_lab(session, name)
     if lab is None:
         return LabStoreError("not_found", name)

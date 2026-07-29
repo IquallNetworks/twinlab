@@ -11,7 +11,9 @@ Conventions carried by every method (not repeated per docstring):
 - Names (lab/node/suite) match ``^[A-Za-z0-9][A-Za-z0-9_.-]*$``, max 64.
 """
 
+import asyncio
 import json
+import time
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
 from typing import Literal
@@ -26,13 +28,11 @@ from twinlab_client.errors import TwinlabProtocolError, error_from_response
 from twinlab_client.models import (
     ApiKey,
     ApiKeyCreated,
-    ConfigureResponse,
     CustomConfigResponse,
-    DeployResponse,
-    DestroyResponse,
     Duration,
     Grant,
     GroupSummary,
+    Job,
     LabActionResponse,
     LabDetail,
     LabEvent,
@@ -48,7 +48,6 @@ from twinlab_client.models import (
     Readiness,
     Role,
     SaveConfigResponse,
-    SuiteReport,
     TerminalProtocol,
     TestSuite,
     TestSuitesResponse,
@@ -61,8 +60,11 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     """Async Twinlab API client. One instance = one session (cookie jar on the
     instance); use as ``async with TwinlabClient(...) as client``.
 
-    Deploy/configure are synchronous long calls server-side (minutes on some
-    NOSes) — hence the separate ``action_timeout``.
+    The four long operations (deploy/configure/destroy/suite run) are ASYNC
+    JOBS: submit returns 202 + a running `Job`; the caller polls `get_job`
+    (or `wait_job`) for the terminal state. `action_timeout` is the default
+    `wait_job` deadline, i.e. how long a submitted operation may take end to
+    end.
     """
 
     def __init__(
@@ -79,8 +81,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         """`base_url` = backend origin (e.g. "http://localhost:8000");
         `subpath` is appended to it. `api_key` authenticates every request as
         `Authorization: Bearer <key>` instead of a login session.
-        `action_timeout` covers deploy/configure/destroy and suite runs.
-        `transport` is a testing seam (httpx.MockTransport)."""
+        `action_timeout` is the default `wait_job` deadline — submits
+        themselves are fast 202s. `transport` is a testing seam
+        (httpx.MockTransport)."""
         if not base_url.startswith(("http://", "https://")):
             raise ValueError(f"base_url must be an http(s) origin, got {base_url!r}")
         self._origin = base_url.rstrip("/")
@@ -371,16 +374,17 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         *,
         configure: bool = False,
         skip_config_time_checks: bool = False,
-    ) -> DeployResponse:
-        """POST /labs/{name}/deploy — lab:edit. Deploys from the stored
+    ) -> Job:
+        """POST /labs/{name}/deploy — lab:edit. **202 + the running deploy
+        Job** (terminal `result`: DeployResponse). Deploys from the stored
         definition + suites + custom config: fresh if "created"/"destroyed",
-        overwrite-in-place if running. Long call — waits for NOS readiness
-        even without `configure`.
+        overwrite-in-place if running.
 
-        Errors: 409 no stored definition yet; 409 a deploy of this lab is
-        already in flight (the deploying-status mutex); 422 netlab rejects the
-        stored definition; 502 clab-api/runner failure. A push or gate failure
-        after a successful deploy is a 2xx (see DeployResponse)."""
+        Pre-accept (synchronous) errors: 409 no stored definition yet; 409
+        `job_in_flight` — ONE running job per lab, any kind. Post-accept
+        failures — netlab rejecting the stored definition, clab-api/runner
+        unreachable — fail the JOB; a push that ran but failed and a red
+        gate stay job successes (see DeployResponse)."""
         payload = await self._send_json(
             "POST",
             f"/labs/{name}/deploy",
@@ -388,37 +392,81 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
                 "configure": configure,
                 "skip_config_time_checks": skip_config_time_checks,
             },
-            long=True,
         )
-        return _wire.parse_deploy_response(payload)
+        return _wire.parse_job(payload)
 
-    async def configure_lab(
-        self, name: str, *, skip_config_time_checks: bool = False
-    ) -> ConfigureResponse:
-        """POST /labs/{name}/configure — lab:configure. Pushes config from the
+    async def configure_lab(self, name: str, *, skip_config_time_checks: bool = False) -> Job:
+        """POST /labs/{name}/configure — lab:configure. **202 + the running
+        configure Job** (result: ConfigureResponse). Pushes config from the
         stored definition, then runs config-time suites unless skipped (the
         automatic run rides lab:configure, not lab:validate — deliberate).
-        422 bad definition; 502 runner failure (nothing ran)."""
+        Pre-accept: 409 no definition; 409 job_in_flight. A push that
+        couldn't run fails the job; one that ran-but-failed succeeds with
+        result.status="config_failed"."""
         payload = await self._send_json(
             "POST",
             f"/labs/{name}/configure",
             json_body={"skip_config_time_checks": skip_config_time_checks},
-            long=True,
         )
-        return _wire.parse_configure_response(payload)
+        return _wire.parse_job(payload)
 
-    async def destroy_lab(self, name: str, *, remove: bool = False) -> DestroyResponse:
-        """DELETE /labs/{name} — lab:destroy.
+    async def destroy_lab(self, name: str, *, remove: bool = False) -> Job:
+        """DELETE /labs/{name} — lab:destroy. **202 + the running destroy
+        Job** (result: DestroyResponse).
 
         remove=False: tear down; record -> "destroyed" (redeployable, keeps
-        its mgmt-subnet reservation). Requires the lab to be RUNNING — 409
-        when not (404 stays reserved for existence-hiding).
+        its mgmt-subnet reservation). Requires the lab to be RUNNING — a
+        synchronous 409 at submit (404 stays reserved for existence-hiding).
         remove=True: also soft-delete the record and release its mgmt-subnet
-        reservation; teardown best-effort, so a down lab is fine."""
-        payload = await self._send_json(
-            "DELETE", f"/labs/{name}", params={"remove": remove}, long=True
-        )
-        return _wire.parse_destroy_response(payload)
+        reservation; teardown best-effort, so a down lab is fine. The job
+        stays pollable AFTER the soft-delete.
+        Pre-accept: 409 lab_not_running (remove=False); 409 job_in_flight."""
+        payload = await self._send_json("DELETE", f"/labs/{name}", params={"remove": remove})
+        return _wire.parse_job(payload)
+
+    # ------------------------------------------------------------------ #
+    # Labs — jobs (async operations)
+    # ------------------------------------------------------------------ #
+
+    async def get_job(self, lab_name: str, job_id: UUID) -> Job:
+        """GET /labs/{lab_name}/jobs/{job_id} — lab:read. 404 hides both an
+        unreadable lab and an unknown job id. Works on a soft-deleted lab
+        (a destroy-with-remove job must stay pollable to its terminal
+        state)."""
+        return _wire.parse_job(await self._send_json("GET", f"/labs/{lab_name}/jobs/{job_id}"))
+
+    async def list_jobs(self, lab_name: str, *, limit: int = 20) -> list[Job]:
+        """GET /labs/{lab_name}/jobs?limit= — lab:read, newest first. Recent
+        history, not an audit log: finished jobs beyond the newest ~20 per
+        lab are pruned."""
+        payload = await self._send_json("GET", f"/labs/{lab_name}/jobs", params={"limit": limit})
+        return [_wire.parse_job(v) for v in _wire.as_list(payload, "Job[]")]
+
+    async def wait_job(
+        self,
+        lab_name: str,
+        job_id: UUID,
+        *,
+        timeout: float | None = None,
+        poll_interval: float = 2.0,
+    ) -> Job:
+        """Poll `get_job` until the job is terminal; return the terminal Job.
+        Pure client-side convenience — no wire surface beyond the polling.
+
+        Does NOT raise on a failed job — the caller inspects
+        status/result/error. Raises TimeoutError when `timeout` (default:
+        the client's `action_timeout`) elapses with the job still running —
+        the job keeps running server-side; the caller can resume waiting."""
+        deadline = time.monotonic() + (timeout if timeout is not None else self._action_timeout)
+        while True:
+            job = await self.get_job(lab_name, job_id)
+            if job.status != "running":
+                return job
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"job {job_id} on lab {lab_name!r} still running after the wait deadline"
+                )
+            await asyncio.sleep(poll_interval)
 
     # ------------------------------------------------------------------ #
     # Labs — test suites
@@ -439,12 +487,14 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         )
         return _wire.parse_test_suites_response(payload)
 
-    async def run_test_suite(self, name: str, suite: str) -> SuiteReport:
-        """POST /labs/{name}/test-suites/{suite}/run — lab:validate. Runs one
-        suite (any stage); persists as its last run but NEVER moves the
-        config-time gate. 404 unknown suite. Long call (per-test `wait`)."""
-        payload = await self._send_json("POST", f"/labs/{name}/test-suites/{suite}/run", long=True)
-        return _wire.parse_suite_report(payload)
+    async def run_test_suite(self, name: str, suite: str) -> Job:
+        """POST /labs/{name}/test-suites/{suite}/run — lab:validate. **202 +
+        the running suite_run Job** (result: SuiteReport — its worst case is
+        the sum of every test's `wait`, hence a job). Runs one suite (any
+        stage); persists as its last run but NEVER moves the config-time
+        gate. Pre-accept: 404 unknown suite; 409 job_in_flight."""
+        payload = await self._send_json("POST", f"/labs/{name}/test-suites/{suite}/run")
+        return _wire.parse_job(payload)
 
     # ------------------------------------------------------------------ #
     # Labs — custom config
@@ -589,8 +639,12 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     def events(self) -> AsyncGenerator[LabEvent]:
         """GET /events (SSE) — any authenticated user; filtered to readable
         labs (set refreshes ~30 s, so a mid-stream grant lags up to that).
-        Iterate with `async for`; keepalives are consumed, not yielded. Useful
-        for awaiting deploy/destroy side effects instead of polling.
+        Iterate with `async for`; keepalives are consumed, not yielded.
+
+        Container-lifecycle events only: deploy/destroy jobs surface node
+        create/start/stop here as a side effect, but configure and suite-run
+        jobs emit NOTHING — job completion is discovered by polling
+        `get_job`, never by this stream.
 
         When abandoning the stream early, close it deterministically (e.g.
         `contextlib.aclosing`) so the underlying connection is released."""

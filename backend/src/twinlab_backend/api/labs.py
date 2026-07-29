@@ -13,13 +13,15 @@ maps typed errors to status codes.
 """
 
 import re
+import uuid
 from http import HTTPStatus
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from twinlab_backend.api.jobs import SessionFactory, job_out, spawn_job
 from twinlab_backend.api_errors import ApiError
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import CurrentUserDep, require_global, require_lab
@@ -44,6 +46,7 @@ from twinlab_backend.models import (
     DeployResponse,
     DestroyResponse,
     Duration,
+    JobOut,
     LabActionResponse,
     LabDetail,
     LabNodeState,
@@ -65,7 +68,7 @@ from twinlab_backend.models import (
     UpdateTestSuitesRequest,
 )
 from twinlab_backend.result import Err, Ok, Result
-from twinlab_backend.services import lab_store
+from twinlab_backend.services import job_store, lab_store
 from twinlab_backend.services.clab_api import (
     ClabApiClient,
     ClabApiError,
@@ -210,13 +213,17 @@ def _lab_status(lab: Lab) -> LabStatus:
 def lab_summary(
     lab: Lab, live: dict[str, tuple[NodeInfo, ...]], permissions: list[str]
 ) -> LabSummary:
+    live_nodes = live.get(lab.name, ())
     return LabSummary(
         name=lab.name,
         status=_lab_status(lab),
         owner=_owner_principal(lab),
         created_at=lab.created_at,
         updated_at=lab.updated_at,
-        nodes=len(live.get(lab.name, ())),
+        nodes=len(live_nodes),
+        # Counted on the raw passthrough (an off-vocabulary state simply isn't
+        # "running") so one odd node can't 502 the whole listing.
+        nodes_running=sum(1 for node in live_nodes if node.state == "running"),
         config_time_status=_config_time_status(lab.config_time_ok),
         permissions=_lab_scoped(permissions),
     )
@@ -585,50 +592,130 @@ async def update_lab_definition(
     return await _live_detail(updated, clab, granted)
 
 
-@router.post("/{lab_name}/deploy", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
+async def _submit_job(
+    db: AsyncSession,
+    lab_id: uuid.UUID,
+    lab_name: str,
+    kind: str,
+    params: dict[str, object],
+    user_id: uuid.UUID,
+) -> job_store.Job | ApiError:
+    """Take the lab's job mutex by inserting the running row (409 `job_in_flight`
+    with the holder in extras when another job is running), then prune old
+    history. Takes plain values, not the Lab row: a losing submit ROLLS BACK the
+    session, expiring every instance in it — touching the ORM row afterwards
+    would trip an expired-attribute load."""
+    submitted = await job_store.submit_job(db, lab_id, kind, params, user_id)
+    if isinstance(submitted, job_store.JobStoreError):
+        # The running job is by construction the newest (a later submit would
+        # have been rejected); name it so the caller can poll or wait it out.
+        holder = await job_store.list_jobs(db, lab_id, limit=1)
+        extras: dict[str, object] = (
+            {"job_id": str(holder[0].id), "kind": holder[0].kind} if holder else {}
+        )
+        return ApiError(
+            409, "job_in_flight", f"another job is already running on '{lab_name}'", extras
+        )
+    await job_store.prune_finished(db, lab_id)
+    return submitted
+
+
+async def _deploy_job(
+    session_factory: SessionFactory,
+    clab: ClabApiClient,
+    runner: RunnerClient,
+    library: BuiltinLibrary,
+    lab_name: str,
+    *,
+    previous_status: str,
+    configure: bool,
+    skip_config_time: bool,
+) -> DeployResponse:
+    """The deploy operation, run inside a job task: fresh session, lab re-fetched.
+    A failed clab deploy restores the pre-deploy status before re-raising;
+    failures past mark_deployed (readiness, config push) leave the lab deployed."""
+    async with session_factory() as db:
+        lab = await lab_store.get_lab(db, lab_name)
+        if lab is None or lab.definition is None:
+            # Unreachable via the API (the mutex holds and pre-checks passed at
+            # submit) — typed anyway so a corrupt row fails the job loudly.
+            raise ApiError(409, "no_definition", f"lab '{lab_name}' lost its definition")
+        definition = lab.definition
+        deployed = await _run_deploy(
+            definition, clab, _config_fileset(library, lab), reconfigure=True
+        )
+        if isinstance(deployed, Err):
+            _ = await lab_store.set_status(db, lab_name, previous_status)
+            raise deployed.error
+        _ = await lab_store.mark_deployed(db, lab_name)
+        return await _finish_deploy(
+            deployed.value,
+            definition,
+            runner,
+            db,
+            lab,
+            library,
+            configure=configure,
+            skip_config_time=skip_config_time,
+        )
+
+
+@router.post(
+    "/{lab_name}/deploy", status_code=202, dependencies=[Depends(require_lab(perms.LAB_EDIT))]
+)
 async def deploy_lab(
     lab_name: LabName,
+    http_request: Request,
     clab: ClabClientDep,
     runner: RunnerClientDep,
     db: SessionDep,
     library: BuiltinLibraryDep,
+    user: CurrentUserDep,
     request: DeployLabRequest | None = None,
-) -> DeployResponse:
+) -> JobOut:
     # THE deploy verb (lifecycle split): build the lab from its stored
     # definition + suites + custom config — fresh if created/destroyed,
     # overwrite-in-place if running (clab reconfigure). The caller never
-    # resupplies the definition; the stored subnet is baked into it, so there
-    # is no allocation here. The body is optional (a bare deploy).
+    # resupplies the definition. 202 + the running job (contract delta 12);
+    # the body is optional (a bare deploy).
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
-    definition = lab.definition
-    if definition is None:
+    if lab.definition is None:
         raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
 
-    # The deploying-status mutex: claim atomically, restore on failure.
-    previous = await lab_store.begin_deploy(db, lab_name)
-    if isinstance(previous, lab_store.LabStoreError):
-        raise ApiError(409, "lab_deploying", f"a deploy of '{lab_name}' is already in flight")
-
-    deployed = await _run_deploy(definition, clab, _config_fileset(library, lab), reconfigure=True)
-    if isinstance(deployed, Err):
-        _ = await lab_store.set_status(db, lab_name, previous)
-        raise deployed.error
-    # Preserve the owner, definition, and subnet; only flip status. Failures
-    # past this point (readiness, config push) leave the lab deployed.
-    _ = await lab_store.mark_deployed(db, lab_name)
     body = request if request is not None else DeployLabRequest()
-    return await _finish_deploy(
-        deployed.value,
-        definition,
-        runner,
-        db,
-        lab,
-        library,
-        configure=body.configure,
-        skip_config_time=body.skip_config_time_checks,
-    )
+    lab_id = lab.id  # captured before submit: a losing submit expires the row
+    previous_status = lab.status
+    params: dict[str, object] = {
+        "configure": body.configure,
+        "skip_config_time_checks": body.skip_config_time_checks,
+        # Private bookkeeping (stripped from the echo): what a failed deploy —
+        # or the restart sweep — restores the lab's status to.
+        "_previous_status": previous_status,
+    }
+    job = await _submit_job(db, lab_id, lab_name, "deploy", params, user.id)
+    if isinstance(job, ApiError):
+        raise job
+    # Display status only — the job row is the lock.
+    _ = await lab_store.set_status(db, lab_name, lab_store.STATUS_DEPLOYING)
+
+    session_factory: SessionFactory = http_request.app.state.session_factory
+
+    async def work() -> DeployResponse:
+        return await _deploy_job(
+            session_factory,
+            clab,
+            runner,
+            library,
+            lab_name,
+            previous_status=previous_status,
+            configure=body.configure,
+            skip_config_time=body.skip_config_time_checks,
+        )
+
+    spawn_job(http_request, job.id, work)
+    return job_out(job, lab_name)
 
 
 @router.get("")
@@ -659,41 +746,84 @@ async def get_lab(
     return await _live_detail(lab, clab, granted)
 
 
-@router.post("/{lab_name}/configure", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
+async def _configure_job(
+    session_factory: SessionFactory,
+    runner: RunnerClient,
+    library: BuiltinLibrary,
+    lab_name: str,
+    *,
+    skip_config_time: bool,
+) -> ConfigureResponse:
+    """The configure operation, run inside a job task. A push that couldn't run
+    raises (fails the job); one that ran with per-node failures is data
+    (contract delta 9) — the job succeeds with status `config_failed`."""
+    async with session_factory() as db:
+        lab = await lab_store.get_lab(db, lab_name)
+        if lab is None or lab.definition is None:
+            raise ApiError(409, "no_definition", f"lab '{lab_name}' lost its definition")
+        definition = lab.definition
+        pushed = await _push_config(runner, definition, _config_fileset(library, lab))
+        if isinstance(pushed, Err):
+            raise pushed.error
+        report = pushed.value
+        configuration = _to_models(report)
+        if not report.succeeded:
+            return ConfigureResponse(
+                status="config_failed",
+                lab_name=lab_name,
+                configuration=configuration,
+                validation=None,
+            )
+        status, validation = await _run_config_time(
+            runner, db, lab, definition, library, skip=skip_config_time
+        )
+        return ConfigureResponse(
+            status=status, lab_name=lab_name, configuration=configuration, validation=validation
+        )
+
+
+@router.post(
+    "/{lab_name}/configure",
+    status_code=202,
+    dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))],
+)
 async def configure_nodes(
     lab_name: LabName,
+    http_request: Request,
     runner: RunnerClientDep,
     db: SessionDep,
     library: BuiltinLibraryDep,
+    user: CurrentUserDep,
     request: ConfigureRequest | None = None,
-) -> ConfigureResponse:
+) -> JobOut:
     # The definition is the lab's stored source of truth; the caller does not
     # resupply it. Config rendering is deterministic, so it reproduces the
     # intended per-node config. After the push, the lab's config-time suites run
-    # (unless skipped) to gate "config done". The body is optional (a bare
-    # configure keeps the default: run the checks).
+    # (unless skipped) to gate "config done". 202 + the running job; the body is
+    # optional (a bare configure keeps the default: run the checks).
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
-    definition = lab.definition
-    if definition is None:
+    if lab.definition is None:
         raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
 
-    pushed = await _push_config(runner, definition, _config_fileset(library, lab))
-    if isinstance(pushed, Err):
-        raise pushed.error
-    report = pushed.value
-    configuration = _to_models(report)
-    if not report.succeeded:
-        # The push RAN; per-node failure is data (contract delta 9).
-        return ConfigureResponse(
-            status="config_failed", lab_name=lab_name, configuration=configuration, validation=None
-        )
     skip = request.skip_config_time_checks if request is not None else False
-    status, validation = await _run_config_time(runner, db, lab, definition, library, skip=skip)
-    return ConfigureResponse(
-        status=status, lab_name=lab_name, configuration=configuration, validation=validation
+    lab_id = lab.id  # captured before submit: a losing submit expires the row
+    job = await _submit_job(
+        db, lab_id, lab_name, "configure", {"skip_config_time_checks": skip}, user.id
     )
+    if isinstance(job, ApiError):
+        raise job
+
+    session_factory: SessionFactory = http_request.app.state.session_factory
+
+    async def work() -> ConfigureResponse:
+        return await _configure_job(
+            session_factory, runner, library, lab_name, skip_config_time=skip
+        )
+
+    spawn_job(http_request, job.id, work)
+    return job_out(job, lab_name)
 
 
 # --- Test suites: declared assertions run against the live lab. Read/author with
@@ -725,39 +855,75 @@ async def put_test_suites(
     return _test_suites_response(updated)
 
 
+async def _suite_run_job(
+    session_factory: SessionFactory,
+    runner: RunnerClient,
+    library: BuiltinLibrary,
+    lab_name: str,
+    suite: str,
+) -> SuiteReport:
+    """The on-demand suite run, inside a job task. The result is persisted
+    (updating just this suite's last run) but the config-time gate is left
+    untouched: a manual run isn't a configure."""
+    async with session_factory() as db:
+        lab = await lab_store.get_lab(db, lab_name)
+        if lab is None:
+            raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+        target = _load_suites(lab.test_suites).get(suite)
+        if target is None:
+            raise ApiError(404, "suite_not_found", f"lab '{lab_name}' has no suite '{suite}'")
+        definition = lab.definition
+        if definition is None:
+            raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
+        executor = _runner_executor(runner, definition, _config_fileset(library, lab))
+        report = await run_suite(executor, suite, target)
+        _ = await lab_store.record_validation(
+            db,
+            lab_name,
+            {suite: report.model_dump(mode="json")},
+            config_time_ok=None,
+            set_config_time=False,
+        )
+        return report
+
+
 @router.post(
     "/{lab_name}/test-suites/{suite}/run",
+    status_code=202,
     dependencies=[Depends(require_lab(perms.LAB_VALIDATE))],
 )
 async def run_test_suite(
     lab_name: LabName,
     suite: SuiteName,
+    http_request: Request,
     runner: RunnerClientDep,
     db: SessionDep,
     library: BuiltinLibraryDep,
-) -> SuiteReport:
-    # Run one suite on demand — any stage; a config-time suite can be re-run here
-    # too. The result is persisted (updating just this suite's last run) but the
-    # config-time gate is left untouched: a manual run isn't a configure.
+    user: CurrentUserDep,
+) -> JobOut:
+    # Run one suite on demand — any stage; a config-time suite can be re-run
+    # here too. 202 + the running job (a run's worst case is the sum of every
+    # test's `wait`). Pre-checks are synchronous: unknown lab/suite 404.
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
-    target = _load_suites(lab.test_suites).get(suite)
-    if target is None:
+    if _load_suites(lab.test_suites).get(suite) is None:
         raise ApiError(404, "suite_not_found", f"lab '{lab_name}' has no suite '{suite}'")
-    definition = lab.definition
-    if definition is None:  # the runner needs the inventory to exec anywhere
+    if lab.definition is None:  # the runner needs the inventory to exec anywhere
         raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
-    executor = _runner_executor(runner, definition, _config_fileset(library, lab))
-    report = await run_suite(executor, suite, target)
-    _ = await lab_store.record_validation(
-        db,
-        lab_name,
-        {suite: report.model_dump(mode="json")},
-        config_time_ok=None,
-        set_config_time=False,
-    )
-    return report
+
+    lab_id = lab.id  # captured before submit: a losing submit expires the row
+    job = await _submit_job(db, lab_id, lab_name, "suite_run", {"suite": suite}, user.id)
+    if isinstance(job, ApiError):
+        raise job
+
+    session_factory: SessionFactory = http_request.app.state.session_factory
+
+    async def work() -> SuiteReport:
+        return await _suite_run_job(session_factory, runner, library, lab_name, suite)
+
+    spawn_job(http_request, job.id, work)
+    return job_out(job, lab_name)
 
 
 # --- Custom-config templates: the seam for config netlab doesn't model (MPLS-TE,
@@ -796,41 +962,81 @@ async def put_custom_config(
     return _custom_config_response(library, updated)
 
 
-@router.delete("/{lab_name}", dependencies=[Depends(require_lab(perms.LAB_DESTROY))])
-async def destroy_lab(
-    lab_name: LabName, clab: ClabClientDep, db: SessionDep, remove: bool = False
+async def _destroy_job(
+    session_factory: SessionFactory, clab: ClabApiClient, lab_name: str, *, remove: bool
 ) -> DestroyResponse:
-    """Tear down the running lab. Default (`remove=false`) keeps the record,
-    flipping it to `destroyed` (redeployable) — and so requires the lab to be up.
-    With `remove=true` it also soft-deletes the record (hidden from the catalog,
-    row kept); tearing down is then best-effort, so a lab that isn't running is
-    fine (a `destroyed` lab can be deleted from the list)."""
-    result = await clab.destroy(lab_name)
-    if isinstance(result, Err):
-        not_found = result.error.status_code == HTTPStatus.NOT_FOUND
-        # A not-running lab is fatal for a plain destroy, but expected when
-        # deleting one that's already down. Any other upstream failure is a 502.
-        if not remove or not not_found:
-            if not_found:
-                # The record exists (require_lab resolved it) but nothing is
-                # running: 409, not 404 — 404 stays reserved for
-                # existence-hiding (contract delta 11).
+    """The destroy operation, inside a job task. The submit pre-check already
+    required a running lab for a plain destroy; a teardown-404 here (torn down
+    in the race window) still fails the job with `lab_not_running`."""
+    async with session_factory() as db:
+        result = await clab.destroy(lab_name)
+        if isinstance(result, Err):
+            not_found = result.error.status_code == HTTPStatus.NOT_FOUND
+            # A not-running lab is fatal for a plain destroy, but expected when
+            # deleting one that's already down. Other upstream failures are 502.
+            if not remove or not not_found:
+                if not_found:
+                    raise ApiError(409, "lab_not_running", f"lab '{lab_name}' is not running")
+                raise ApiError(502, "upstream_error", result.error.message)
+            teardown_detail = "lab was not running"
+        else:
+            teardown_detail = result.value
+
+        if remove:
+            deleted = await lab_store.soft_delete(db, lab_name)
+            if isinstance(deleted, lab_store.LabStoreError):
+                # Absent or already deleted — nothing to remove from the catalog.
+                raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+            return DestroyResponse(status="deleted", detail=teardown_detail)
+
+        # Retain the definition, flip status. not_found (deployed out-of-band) is fine.
+        _ = await lab_store.mark_destroyed(db, lab_name)
+        return DestroyResponse(status="destroyed", detail=teardown_detail)
+
+
+@router.delete(
+    "/{lab_name}", status_code=202, dependencies=[Depends(require_lab(perms.LAB_DESTROY))]
+)
+async def destroy_lab(
+    lab_name: LabName,
+    http_request: Request,
+    clab: ClabClientDep,
+    db: SessionDep,
+    user: CurrentUserDep,
+    remove: bool = False,
+) -> JobOut:
+    """Tear down the running lab — 202 + the running destroy job. Default
+    (`remove=false`) keeps the record, flipping it to `destroyed` (redeployable)
+    — and so requires the lab to be up: a fast live-state pre-check makes that a
+    synchronous 409 at submit (404 stays reserved for existence-hiding, contract
+    delta 11). With `remove=true` it also soft-deletes the record (hidden from
+    the catalog, row kept — the job itself stays pollable); teardown is then
+    best-effort, so a lab that isn't running is fine."""
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+
+    if not remove:
+        # Pre-accept the "must be running" rule; the job tolerates the small
+        # TOCTOU window (a teardown race fails the job with the same code).
+        inspected = await clab.inspect(lab_name)
+        if isinstance(inspected, Err):
+            if inspected.error.status_code == HTTPStatus.NOT_FOUND:
                 raise ApiError(409, "lab_not_running", f"lab '{lab_name}' is not running")
-            raise ApiError(502, "upstream_error", result.error.message)
-        teardown_detail = "lab was not running"
-    else:
-        teardown_detail = result.value
+            raise ApiError(502, "upstream_error", inspected.error.message)
 
-    if remove:
-        deleted = await lab_store.soft_delete(db, lab_name)
-        if isinstance(deleted, lab_store.LabStoreError):
-            # Absent or already deleted — nothing to remove from the catalog.
-            raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
-        return DestroyResponse(status="deleted", detail=teardown_detail)
+    lab_id = lab.id  # captured before submit: a losing submit expires the row
+    job = await _submit_job(db, lab_id, lab_name, "destroy", {"remove": remove}, user.id)
+    if isinstance(job, ApiError):
+        raise job
 
-    # Retain the definition, flip status. not_found (deployed out-of-band) is fine.
-    await lab_store.mark_destroyed(db, lab_name)
-    return DestroyResponse(status="destroyed", detail=teardown_detail)
+    session_factory: SessionFactory = http_request.app.state.session_factory
+
+    async def work() -> DestroyResponse:
+        return await _destroy_job(session_factory, clab, lab_name, remove=remove)
+
+    spawn_job(http_request, job.id, work)
+    return job_out(job, lab_name)
 
 
 # --- Runtime control & observability (operate on live clab-api state, not the

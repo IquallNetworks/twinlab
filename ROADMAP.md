@@ -109,11 +109,11 @@ configured labs → distinct subnets, both configured, both SSH-able):
   plugin), so HOME can't be isolated — instead config pushes are **serialized**
   with an `asyncio.Lock` (one lab configures at a time; deploys stay concurrent).
 
-**TODO (known gap, not yet built).** A backend crash *between* reserving a lab
-(status `deploying`) and marking it `deployed` leaves the row stuck in `deploying`
-with its subnet held. Fix: a startup reconciler that sweeps `deploying` rows —
-mark `deployed` if clab-api shows the lab up, else release the reservation. Low
-likelihood, cheap to add later; parked here so it isn't forgotten.
+**~~TODO~~ CLOSED by the async job model (2026-07-29).** A backend crash mid-deploy
+used to leave the row stuck in `deploying`. The job model's startup sweep
+(`job_store.sweep_orphans`) fails any orphaned `running` job and restores the
+lab's pre-deploy status from the deploy job's stashed `_previous_status` — the
+subnet stays reserved on the record, as designed.
 
 ### Phase 2 — live UI substrate · **done**
 4. **Live events.** Backend consumes the clab-api `GET /api/v1/events` NDJSON
@@ -456,18 +456,32 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     a pre-v2 role (`operator`/`viewer`) resolve to no permissions until re-assigned to a
     v2 role.
 
+### Async job model (contract delta 12) · **done**
+
+12. **The four long operations are async jobs (implemented 2026-07-29).**
+    Deploy/configure/destroy/suite-run return **202 + a Job**; callers poll
+    `GET /labs/{name}/jobs/{id}` (list endpoint + client `wait_job` beside it).
+    Jobs persist in a `jobs` table (migration 0011); a partial unique index —
+    one `running` row per lab — is the operation mutex (409 `job_in_flight`,
+    any kind; it subsumed the deploy CAS and gave configure/destroy/suite-run
+    a mutex they never had). Failed = could-not-run with the error envelope on
+    the job; `config_failed`/`validation_failed` remain job successes.
+    Startup/shutdown sweeps fail orphaned jobs (`backend_restart` /
+    `backend_shutdown`) and unwedge `deploying` labs (closing the Phase 1.1
+    reconciler TODO). Single-process assumption (bare uvicorn, 1 worker).
+
+    **Deferred: SSE job events.** Completion is discovered by POLLING only.
+    Job-status transitions on the `/events` SSE stream (named events + an
+    in-process broker feeding the per-connection queues; the client's SSE
+    parser learns to discriminate `event:` names) would give the frontend live
+    updates without polling — configure/suite-run jobs emit no container
+    events, so today the stream cannot signal their completion. Layer it on
+    post-v1.0 without breaking the current contract.
+
 ### Deferred items from the API review (2026-07-23) · **deferred**
 
 Surfaced while freezing the API shape for the Python client / black-box suite /
 backend rework (`docs/twinlab_client_shape.py`); explicitly parked, not planned.
-
-- **Async job model for long lab operations.** Deploy/redeploy/configure are
-  synchronous HTTP calls that run for minutes (IOL boot + Ansible push +
-  validation gate); a dropped connection leaves the caller blind while the
-  operation continues server-side. A job model (202 + job id, progress via
-  polling or the existing `/events` SSE stream) fixes the long-call and
-  reconnect story. Post-v1.0: for v1.0 the client compensates with a generous
-  `action_timeout`.
 - **`GET /principals` enumeration exposure.** The grant-picker directory
   exposes every user and group name to ANY authenticated caller — including the
   zero-permission `user` role. Accepted for now (the tool is low-scale and

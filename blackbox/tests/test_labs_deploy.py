@@ -3,6 +3,9 @@
 Each test deploys its own tiny two-linux-node lab (LINUX_LAB_DEFINITION), so
 the slice needs the node image pullable on the host. Deselect with
 `-m "not deploy"` for the cheap contract run.
+
+The long operations are async jobs: tests submit, then `wait_job` to the
+terminal state and assert on the job's `result`.
 """
 
 import asyncio
@@ -12,10 +15,14 @@ from contextlib import aclosing
 
 import pytest
 from twinlab_client import (
+    ConfigureResponse,
     DeployResponse,
+    DestroyResponse,
     Duration,
+    Job,
     LabDetail,
     LabEvent,
+    SuiteReport,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -27,13 +34,20 @@ from _config import LINUX_LAB_DEFINITION, LabFactory, UserClientFactory
 
 pytestmark = pytest.mark.deploy
 
+# A linux-node deploy takes tens of seconds; leave slack for a loaded host.
+JOB_WAIT = 600.0
+
 
 async def _deployed_lab(admin: TwinlabClient, make_lab: LabFactory) -> LabDetail:
     lab = await make_lab(None)
     _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
-    result = await admin.deploy_lab(lab.name)
-    assert result.status == "deployed"
-    assert result.configuration is None and result.validation is None
+    job = await admin.deploy_lab(lab.name)
+    assert job.kind == "deploy"
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+    assert isinstance(done.result, DeployResponse)
+    assert done.result.status == "deployed"
+    assert done.result.configuration is None and done.result.validation is None
     return await admin.get_lab(lab.name)
 
 
@@ -45,7 +59,25 @@ async def _first_event_for(stream: AsyncGenerator[LabEvent], lab: str) -> LabEve
 
 
 async def test_deploy_lifecycle(admin: TwinlabClient, make_lab: LabFactory) -> None:
-    detail = await _deployed_lab(admin, make_lab)
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+
+    # Submit returns the RUNNING job; a real deploy takes seconds, so an
+    # immediate read must still see it running (and in the history list).
+    job = await admin.deploy_lab(lab.name)
+    assert job.status == "running"
+    assert job.result is None and job.error is None and job.finished_at is None
+    seen = await admin.get_job(lab.name, job.id)
+    assert seen.status == "running"
+    assert next(j.id for j in await admin.list_jobs(lab.name)) == job.id
+
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+    assert isinstance(done.result, DeployResponse)
+    assert done.result.status == "deployed"
+    assert done.finished_at is not None
+
+    detail = await admin.get_lab(lab.name)
     assert detail.status == "deployed"
     assert {node.name for node in detail.nodes} == {"n1", "n2"}
     for node in detail.nodes:
@@ -63,28 +95,33 @@ async def test_deploy_lifecycle(admin: TwinlabClient, make_lab: LabFactory) -> N
 
     # Deploying over a running lab is allowed (overwrite in place).
     again = await admin.deploy_lab(detail.name)
-    assert again.status == "deployed"
+    again_done = await admin.wait_job(detail.name, again.id, timeout=JOB_WAIT)
+    assert again_done.status == "succeeded", again_done.error
 
     # Destroy keeps the record, redeployable.
-    destroyed = await admin.destroy_lab(detail.name)
-    assert destroyed.status == "destroyed"
+    destroy = await admin.destroy_lab(detail.name)
+    destroy_done = await admin.wait_job(detail.name, destroy.id, timeout=JOB_WAIT)
+    assert destroy_done.status == "succeeded", destroy_done.error
+    assert isinstance(destroy_done.result, DestroyResponse)
+    assert destroy_done.result.status == "destroyed"
     after = await admin.get_lab(detail.name)
     assert after.status == "destroyed"
     assert after.definition is not None  # the record survives with its definition
     assert after.nodes == []
 
-    # A destroyed (not-running) lab refuses a plain destroy: 409, not the
-    # existence-hiding 404 (contract delta 11).
+    # A destroyed (not-running) lab refuses a plain destroy: a SYNCHRONOUS
+    # 409 at submit, not the existence-hiding 404 (contract delta 11).
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await admin.destroy_lab(detail.name)
     assert excinfo.value.status_code == 409
 
     # A destroyed lab deploys fresh from the stored definition.
-    redeployed = await admin.deploy_lab(detail.name)
-    assert redeployed.status == "deployed"
+    redeploy = await admin.deploy_lab(detail.name)
+    redeploy_done = await admin.wait_job(detail.name, redeploy.id, timeout=JOB_WAIT)
+    assert redeploy_done.status == "succeeded", redeploy_done.error
 
 
-async def test_deploy_mutex_rejects_concurrent_deploys(
+async def test_deploy_mutex_rejects_concurrent_submits(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:
     lab = await make_lab(None)
@@ -93,14 +130,21 @@ async def test_deploy_mutex_rejects_concurrent_deploys(
     outcomes = await asyncio.gather(
         admin.deploy_lab(lab.name), admin.deploy_lab(lab.name), return_exceptions=True
     )
-    # Exactly one deploy runs; the concurrent one hits the deploying mutex.
-    # (Assumes the two requests overlap — safe while a real containerlab
-    # deploy takes seconds; revisit if deploys ever get a fast path.)
-    successes = [o for o in outcomes if isinstance(o, DeployResponse)]
+    # ONE running job per lab: exactly one submit wins the mutex; the other
+    # is rejected at submit time (deterministic — no timing assumption).
+    winners = [o for o in outcomes if isinstance(o, Job)]
     errors = [o for o in outcomes if isinstance(o, TwinlabApiError)]
-    assert len(successes) == 1, outcomes
+    assert len(winners) == 1, outcomes
     assert len(errors) == 1, outcomes
     assert errors[0].status_code == 409
+
+    # While the winner runs, EVERY kind is locked out — destroy too.
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.destroy_lab(lab.name, remove=True)
+    assert excinfo.value.status_code == 409
+
+    # Drain so teardown's destroy isn't refused by the still-running job.
+    _ = await admin.wait_job(lab.name, winners[0].id, timeout=JOB_WAIT)
 
 
 async def test_netem_set_show_clear(admin: TwinlabClient, make_lab: LabFactory) -> None:
@@ -137,6 +181,11 @@ async def test_node_power_cycle(admin: TwinlabClient, make_lab: LabFactory) -> N
     stopped = {node.name: node for node in (await admin.get_lab(detail.name)).nodes}
     assert stopped["n1"].state != "running"
     assert stopped["n2"].state == "running"
+
+    # The listing splits presence from liveness: both containers exist, one runs.
+    row = {r.name: r for r in await admin.list_labs()}[detail.name]
+    assert row.nodes == 2
+    assert row.nodes_running == 1
 
     _ = await admin.node_power(detail.name, "n1", "start")
     started = {node.name: node for node in (await admin.get_lab(detail.name)).nodes}
@@ -209,15 +258,20 @@ async def test_configure_and_validation_pipeline(
     }
     _ = await admin.put_test_suites(lab.name, passing_gate)
 
-    result = await admin.deploy_lab(lab.name, configure=True)
+    deploy = await admin.deploy_lab(lab.name, configure=True)
+    deploy_done = await admin.wait_job(lab.name, deploy.id, timeout=JOB_WAIT)
+    assert deploy_done.status == "succeeded", deploy_done.error
+    result = deploy_done.result
+    assert isinstance(result, DeployResponse)
     assert result.status == "configured"
     assert result.configuration is not None
     assert all(node.status == "configured" for node in result.configuration)
     assert result.validation is not None and result.validation[0].failed == 0
     assert (await admin.get_lab(lab.name)).config_time_status == "passed"
 
-    # A failing config-time gate is DATA: 2xx validation_failed, lab still
-    # deployed, gate red and unambiguous in the record.
+    # A failing config-time gate is DATA: the job SUCCEEDS with
+    # result.status="validation_failed", lab still deployed, gate red and
+    # unambiguous in the record.
     red_gate = {
         "gate": TestSuite(
             tests={
@@ -240,19 +294,32 @@ async def test_configure_and_validation_pipeline(
         ),
     }
     _ = await admin.put_test_suites(lab.name, red_gate)
-    outcome = await admin.configure_lab(lab.name)
+    configure = await admin.configure_lab(lab.name)
+    configure_done = await admin.wait_job(lab.name, configure.id, timeout=JOB_WAIT)
+    assert configure_done.status == "succeeded", configure_done.error
+    outcome = configure_done.result
+    assert isinstance(outcome, ConfigureResponse)
     assert outcome.status == "validation_failed"
     detail = await admin.get_lab(lab.name)
     assert detail.status == "deployed"
     assert detail.config_time_status == "failed"
 
     # Skipping the gate RETAINS the previous (failed) result — never erases it.
-    skipped = await admin.configure_lab(lab.name, skip_config_time_checks=True)
+    skip = await admin.configure_lab(lab.name, skip_config_time_checks=True)
+    skip_done = await admin.wait_job(lab.name, skip.id, timeout=JOB_WAIT)
+    assert skip_done.status == "succeeded", skip_done.error
+    skipped = skip_done.result
+    assert isinstance(skipped, ConfigureResponse)
     assert skipped.status == "configured"
     assert (await admin.get_lab(lab.name)).config_time_status == "failed"
 
     # A manual run persists as the suite's last run but NEVER moves the gate.
-    report = await admin.run_test_suite(lab.name, "manual")
+    run = await admin.run_test_suite(lab.name, "manual")
+    assert run.kind == "suite_run"
+    run_done = await admin.wait_job(lab.name, run.id, timeout=JOB_WAIT)
+    assert run_done.status == "succeeded", run_done.error
+    report = run_done.result
+    assert isinstance(report, SuiteReport)
     assert report.failed == 0 and report.passed >= 1
     suites_state = await admin.get_test_suites(lab.name)
     assert suites_state.last_validation["manual"].passed >= 1

@@ -17,6 +17,8 @@ from twinlab_client.models import (
     DEPLOY_STATUSES,
     DESTROY_STATUSES,
     DURATION_UNITS,
+    JOB_KINDS,
+    JOB_STATUSES,
     LAB_STATUSES,
     NODE_CONFIG_STATUSES,
     PRINCIPAL_TYPES,
@@ -35,6 +37,9 @@ from twinlab_client.models import (
     Grant,
     GroupMember,
     GroupSummary,
+    Job,
+    JobError,
+    JobKind,
     LabActionResponse,
     LabDetail,
     LabEvent,
@@ -351,6 +356,7 @@ def parse_lab_summary(value: object) -> LabSummary:
         created_at=_get_datetime(obj, "created_at", where),
         updated_at=_get_datetime(obj, "updated_at", where),
         nodes=_get_int(obj, "nodes", where),
+        nodes_running=_get_int(obj, "nodes_running", where),
         config_time_status=_get_literal(obj, "config_time_status", where, CONFIG_TIME_STATUSES),
         permissions=_get_str_set(obj, "permissions", where),
     )
@@ -599,6 +605,54 @@ def parse_test_suites_response(value: object) -> TestSuitesResponse:
         test_suites=suites,
         last_validation=last_validation,
         config_time_status=_get_literal(obj, "config_time_status", where, CONFIG_TIME_STATUSES),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Jobs
+# --------------------------------------------------------------------------- #
+
+
+def parse_job_error(value: object) -> JobError:
+    where = "JobError"
+    obj = as_object(value, where)
+    return JobError(
+        status_code=_get_int(obj, "status_code", where),
+        code=_get_str(obj, "code", where),
+        message=_get_str(obj, "message", where),
+        extras=as_object(_req(obj, "extras", where), where),
+    )
+
+
+def _parse_job_result(
+    kind: JobKind, value: object, where: str
+) -> DeployResponse | ConfigureResponse | DestroyResponse | SuiteReport | None:
+    if value is None:
+        return None
+    if kind == "deploy":
+        return parse_deploy_response(value)
+    if kind == "configure":
+        return parse_configure_response(value)
+    if kind == "destroy":
+        return parse_destroy_response(value)
+    return parse_suite_report(value)
+
+
+def parse_job(value: object) -> Job:
+    where = "Job"
+    obj = as_object(value, where)
+    kind: JobKind = _get_literal(obj, "kind", where, JOB_KINDS)
+    error_value = _req(obj, "error", where)
+    return Job(
+        id=_get_uuid(obj, "id", where),
+        lab_name=_get_str(obj, "lab_name", where),
+        kind=kind,
+        status=_get_literal(obj, "status", where, JOB_STATUSES),
+        request=as_object(_req(obj, "request", where), where),
+        result=_parse_job_result(kind, _req(obj, "result", where), where),
+        error=None if error_value is None else parse_job_error(error_value),
+        created_at=_get_datetime(obj, "created_at", where),
+        finished_at=_get_opt_datetime(obj, "finished_at", where),
     )
 
 

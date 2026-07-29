@@ -90,13 +90,20 @@ def require_global(permission: str) -> Callable[..., Awaitable[User]]:
     return dependency
 
 
-def require_lab(permission: str) -> Callable[..., Awaitable[User]]:
+def require_lab(
+    permission: str, *, include_deleted: bool = False
+) -> Callable[..., Awaitable[User]]:
     """Dependency factory: resolve the `{lab_name}` lab and require `permission` on it.
     A caller without even `lab:read` gets 404 (existence hidden); with read but not
-    `permission`, 403."""
+    `permission`, 403.
+
+    `include_deleted` relaxes only the soft-delete filter (the permission check
+    still runs — bindings and owner survive soft-delete). Used ONLY by the job
+    read routes: a destroy-with-remove job must stay pollable to its terminal
+    state after the lab record is gone."""
 
     async def dependency(lab_name: _LabNamePath, user: CurrentUserDep, db: SessionDep) -> User:
-        lab = await lab_store.get_lab(db, lab_name)
+        lab = await lab_store.get_lab(db, lab_name, include_deleted=include_deleted)
         if lab is None:
             raise _unknown_lab(lab_name)
         granted = await effective_permissions_for(db, user, lab)

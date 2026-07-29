@@ -16,13 +16,20 @@ import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { labQueryOptions, labsQueryOptions } from '@/lib/queries'
 
-/** Edit a lab's stored netlab definition. The change is persisted but does not
- * touch the running lab — a redeploy applies it. The lab's name is fixed by the
+/** Author or edit a lab's stored netlab definition (null until first authored —
+ * the lifecycle split's authoring step). The change is persisted but does not
+ * touch the running lab — a deploy applies it. The lab's name is fixed by the
  * record, so a `name:` in the edited text is ignored by the backend. */
-export function EditDefinitionDialog({ name, definition }: { name: string; definition: string }) {
+export function EditDefinitionDialog({
+  name,
+  definition,
+}: {
+  name: string
+  definition: string | null
+}) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState(definition)
+  const [draft, setDraft] = useState(definition ?? '')
 
   const save = useMutation({
     mutationFn: () => api.updateLabDefinition(name, draft),
@@ -31,7 +38,7 @@ export function EditDefinitionDialog({ name, definition }: { name: string; defin
         queryClient.invalidateQueries({ queryKey: labQueryOptions(name).queryKey }),
         queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey }),
       ])
-      toast.success(`Definition updated. Redeploy ${name} to apply it.`)
+      toast.success(`Definition saved. Deploy ${name} to apply it.`)
       setOpen(false)
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Update failed'),
@@ -39,7 +46,7 @@ export function EditDefinitionDialog({ name, definition }: { name: string; defin
 
   // Reset the draft to the current definition each time the dialog opens.
   function onOpenChange(next: boolean) {
-    if (next) setDraft(definition)
+    if (next) setDraft(definition ?? '')
     setOpen(next)
   }
 
@@ -52,7 +59,7 @@ export function EditDefinitionDialog({ name, definition }: { name: string; defin
         <DialogHeader>
           <DialogTitle>Edit definition — {name}</DialogTitle>
           <DialogDescription>
-            Update the stored netlab definition. This is saved but not applied until you redeploy.
+            Update the stored netlab definition. This is saved but not applied until you deploy.
           </DialogDescription>
         </DialogHeader>
         <Textarea

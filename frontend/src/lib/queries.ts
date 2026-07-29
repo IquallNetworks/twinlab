@@ -73,3 +73,28 @@ export const customConfigQueryOptions = (name: string) =>
     queryKey: ['labs', name, 'custom-config'],
     queryFn: () => api.getCustomConfig(name),
   })
+
+// Jobs live under their own root key (not ['labs', ...]) so the SSE handler can
+// invalidate them explicitly alongside the lab tree.
+export const labJobsQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['jobs', name],
+    queryFn: () => api.listJobs(name),
+  })
+
+export const apiKeysQueryOptions = queryOptions({
+  queryKey: ['api-keys'],
+  queryFn: () => api.listApiKeys(),
+})
+
+export const sshKeysQueryOptions = queryOptions({
+  queryKey: ['ssh-keys'],
+  queryFn: () => api.listSshKeys(),
+})
+
+// The jump coordinates are deployment config — static for the session.
+export const sshAccessQueryOptions = queryOptions({
+  queryKey: ['ssh-access'],
+  queryFn: () => api.getSshAccess(),
+  staleTime: Infinity,
+})

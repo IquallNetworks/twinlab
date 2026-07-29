@@ -24,10 +24,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { api } from '@/lib/api'
+import { api, waitJob } from '@/lib/api'
 import { formatDateTime, testStatusBadgeVariant } from '@/lib/format'
 import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
-import type { SuiteReport, TestSuite } from '@/lib/schemas'
+import { suiteReportSchema, type SuiteReport, type TestSuite } from '@/lib/schemas'
 
 function summaryLine(report: SuiteReport): string {
   const parts = [`${report.passed} passed`, `${report.failed} failed`]
@@ -222,21 +222,26 @@ export function TestSuites({
   const [running, setRunning] = useState<string | null>(null)
   const { data, isPending, isError, error } = useQuery(testSuitesQueryOptions(name))
 
+  // A run is an async job; the terminal job's result is the SuiteReport.
   const run = useMutation({
-    mutationFn: (suite: string) => api.runTestSuite(name, suite),
-    onSuccess: async (report) => {
+    mutationFn: async (suite: string) => waitJob(name, await api.runTestSuite(name, suite)),
+    onSuccess: async (job) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: testSuitesQueryOptions(name).queryKey }),
         queryClient.invalidateQueries({ queryKey: labQueryOptions(name).queryKey }),
         queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey }),
       ])
+      const report = suiteReportSchema.parse(job.result)
       const ok = report.failed === 0 && report.errored === 0
       const message = `${report.suite}: ${summaryLine(report)}`
       if (ok) toast.success(message)
       else toast.error(message)
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Run failed'),
-    onSettled: () => setRunning(null),
+    onSettled: () => {
+      setRunning(null)
+      void queryClient.invalidateQueries({ queryKey: ['jobs', name] })
+    },
   })
 
   function onRun(suite: string) {
@@ -267,7 +272,7 @@ export function TestSuites({
           </p>
         ) : (
           <>
-            {data.config_time_ok === false && (
+            {data.config_time_status === 'failed' && (
               <p className="text-destructive text-sm font-medium">
                 Config-time validation failed on the last configure — the lab is deployed but did not
                 pass its convergence checks.

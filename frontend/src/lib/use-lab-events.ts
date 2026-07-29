@@ -30,6 +30,9 @@ export function useLabEvents(): void {
       clearTimeout(timer)
       timer = setTimeout(() => {
         void queryClient.invalidateQueries({ queryKey: ['labs'] })
+        // Job history is keyed under its own root so lab-tree invalidations
+        // stay cheap; refresh it on the same signal.
+        void queryClient.invalidateQueries({ queryKey: ['jobs'] })
       }, DEBOUNCE_MS)
     }
 

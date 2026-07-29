@@ -46,26 +46,32 @@ it, and contract changes go through review.
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
 
-- **`frontend/`** — Vite + React + TypeScript (pnpm). **Currently targets the PRE-rework wire and
-  is partially broken against the v1.0 backend** (accepted: no end users; its own rework to the
-  v1.0 contract is the next step). Its dev server proxies `/api/v1` to the
+- **`frontend/`** — Vite + React + TypeScript (pnpm). **A working prototype on the v1.0 wire**
+  (step 1 of the two-step frontend rework; step 2 — a from-zero rebuild — is still ahead, so
+  polish is deliberately deferred). Its dev server proxies `/api/v1` to the
   backend (`VITE_PROXY_TARGET`, default `http://localhost:8000`). UI stack: **shadcn/ui** (radix
   base) on Tailwind v4, the **TanStack** family (Query for data, Router in code-based mode for
   routing, Form for forms) and **zod** for validation. It covers the current backend scope —
-  cookie-session **login**, **user management** (`/users`: list, create, edit roles), and **lab
-  management** (`/labs` list + deploy dialog, `/labs/$name` detail: a control panel with
-  edit-definition/redeploy/configure/destroy, whole-lab and per-node start/stop/restart, save-config,
-  per-node logs, a live interface inventory, per-node netem link impairment (set/show/reset
-  delay/jitter/loss/rate/corruption), a per-node **web console** (an xterm.js terminal over a
-  WebSocket to the node, ssh/shell, shown only while the node is up), and a **test-suites** panel
-  (view suites grouped config-time-first, run one on demand, expand per-test pass/fail/error, author
-  the suite set as JSON; a "config-time failed" badge when the last gate failed) — controls in
-  focused `components/lab/*` components).
+  cookie-session **login**, **user management** (`/users`: list, create, edit roles), an
+  **account page** (`/account`: self-service API keys and SSH keys — register / server-side
+  generate with one-time private-key reveal + download / delete, plus the advertised jump
+  coordinates), and **lab management** mirroring the lifecycle split: `/labs` list (owner,
+  running/total nodes, created/deploying/deployed/destroyed badges) with a create-record dialog
+  (name only), and `/labs/$name` detail where the definition is authored (edit-definition handles
+  the null definition of a fresh record) and deployed — deploy/configure/destroy/delete/suite-run
+  submit **202 async jobs** and await them via a `waitJob` poll helper (`src/lib/api.ts`), a
+  failed job's error envelope landing in the toast; an **Operations card** lists recent jobs.
+  Plus whole-lab and per-node start/stop/restart, save-config, per-node logs, a live interface
+  inventory (short-name keyed), per-node netem impairment ({value, unit} durations, REPLACE
+  semantics — reset = set with only the interface), a per-node **web console** (xterm.js over
+  the terminal WebSocket), a **ProxyJump copy command** per node when `GET /ssh-access` is
+  enabled, and the **test-suites** panel (runs are jobs; `config_time_status` tri-state banner).
   Auth gate: a pathless layout route resolves `GET /auth/me` in `beforeLoad` and redirects to `/login`
   on 401; action buttons are gated on the caller's permissions. Live updates: `useLabEvents`
   (mounted in `AppShell`) subscribes to the `/events` SSE stream and invalidates the `['labs']`
-  query tree on each event, so lab state refreshes without polling. API access goes through a typed,
-  zod-parsed fetch client (`src/lib/api.ts`). Gates: `pnpm typecheck` + `pnpm build`.
+  and `['jobs']` query trees on each event, so lab state refreshes without polling. API access
+  goes through a typed, zod-parsed fetch client (`src/lib/api.ts`) that raises the
+  `{code, message, extras}` envelope as `ApiError`. Gates: `pnpm typecheck` + `pnpm build`.
 - **`backend/`** — FastAPI (uv, **Python 3.14**, ids are stdlib **UUIDv7**). Turns a declarative
   netlab definition into a running lab: runs `netlab create` to generate a containerlab topology,
   then deploys it through the clab-api server (piped inline as `topologyContent`). Config push is

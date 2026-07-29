@@ -73,16 +73,21 @@ export const labNodeStateSchema = z.object({
 })
 export type LabNodeState = z.infer<typeof labNodeStateSchema>
 
-// config_time_ok: the last config-time validation gate — null (not run / skipped
-// / no config-time suites), true (passed), false (failed).
+// config_time_status: the last config-time validation gate — "not_run" (never
+// run / skipped since), "passed", or "failed" (the lab is deployed but its
+// config-time suites did not all pass).
+export const configTimeStatusSchema = z.enum(['not_run', 'passed', 'failed'])
+export type ConfigTimeStatus = z.infer<typeof configTimeStatusSchema>
+
 export const labSummarySchema = z.object({
   name: z.string(),
-  status: z.string(), // "deployed" | "destroyed"
-  owner: z.string().nullable(),
+  status: z.string(), // "created" | "deploying" | "deployed" | "destroyed"
+  owner: principalSchema.nullable(),
   created_at: z.string(),
   updated_at: z.string(),
-  nodes: z.number(),
-  config_time_ok: z.boolean().nullable(),
+  nodes: z.number(), // containers present
+  nodes_running: z.number(), // containers actually running
+  config_time_status: configTimeStatusSchema,
   permissions: z.array(z.string()), // the caller's effective permissions on this lab
 })
 export type LabSummary = z.infer<typeof labSummarySchema>
@@ -91,15 +96,22 @@ export const labListSchema = z.array(labSummarySchema)
 export const labDetailSchema = z.object({
   name: z.string(),
   status: z.string(),
-  definition: z.string(),
-  owner: z.string().nullable(),
+  definition: z.string().nullable(), // null until authored (status "created")
+  owner: principalSchema.nullable(),
   created_at: z.string(),
   updated_at: z.string(),
   nodes: z.array(labNodeStateSchema),
-  config_time_ok: z.boolean().nullable(),
+  config_time_status: configTimeStatusSchema,
   permissions: z.array(z.string()), // the caller's effective permissions on this lab
 })
 export type LabDetail = z.infer<typeof labDetailSchema>
+
+// Ownership transfer response: the lab plus its new owner.
+export const labOwnerSchema = z.object({
+  lab: z.string(),
+  owner: principalSchema,
+})
+export type LabOwner = z.infer<typeof labOwnerSchema>
 
 // --- Test suites (see components/lab/test-suites). A suite groups tests; each
 // runs a command on nodes and matches its stdout with one safe primitive. A
@@ -156,7 +168,7 @@ export type SuiteReport = z.infer<typeof suiteReportSchema>
 export const testSuitesResponseSchema = z.object({
   test_suites: z.record(z.string(), testSuiteSchema),
   last_validation: z.record(z.string(), suiteReportSchema),
-  config_time_ok: z.boolean().nullable(),
+  config_time_status: configTimeStatusSchema,
 })
 export type TestSuitesResponse = z.infer<typeof testSuitesResponseSchema>
 
@@ -181,6 +193,8 @@ export const nodeConfigResultSchema = z.object({
 })
 export type NodeConfigResult = z.infer<typeof nodeConfigResultSchema>
 
+// Deploy/configure/destroy shapes are JOB RESULT payloads (parsed out of
+// job.result once the job succeeds), not response bodies.
 export const deployResponseSchema = z.object({
   status: z.string(),
   lab_name: z.string(),
@@ -240,13 +254,21 @@ export const saveConfigResponseSchema = z.object({
 })
 export type SaveConfigResponse = z.infer<typeof saveConfigResponseSchema>
 
+// A netem duration as a structured {value, unit} pair; the author's unit
+// choice is preserved by the backend.
+export const durationSchema = z.object({
+  value: z.number(),
+  unit: z.enum(['us', 'ms', 's']),
+})
+export type Duration = z.infer<typeof durationSchema>
+
 // Current netem link impairment on one node interface (see components/lab/netem).
-// delay/jitter are netem duration strings ("50ms", "" when unset); loss/corruption
-// are percentages; rate is kbit/s (0 = unshaped).
+// null / 0 means that dimension is unshaped; loss/corruption are percentages;
+// rate is kbit/s.
 export const netemImpairmentSchema = z.object({
   interface: z.string(),
-  delay: z.string(),
-  jitter: z.string(),
+  delay: durationSchema.nullable(),
+  jitter: durationSchema.nullable(),
   loss: z.number(),
   rate: z.number(),
   corruption: z.number(),
@@ -254,13 +276,13 @@ export const netemImpairmentSchema = z.object({
 export type NetemImpairment = z.infer<typeof netemImpairmentSchema>
 export const nodeNetemSchema = z.array(netemImpairmentSchema)
 
-// Impairment to apply. Every field is optional and independent; the backend
-// rejects an all-empty set and jitter without delay. Omitted fields are left
-// unchanged rather than zeroed, so we send only the ones the user filled in.
+// Impairment to apply — REPLACE semantics: the body is the interface's COMPLETE
+// desired impairment. An omitted dimension is cleared, and a body with only the
+// interface clears everything on it (there is no separate reset endpoint).
 export interface NetemSetInput {
   interface: string
-  delay?: string
-  jitter?: string
+  delay?: Duration
+  jitter?: Duration
   loss?: number
   rate?: number
   corruption?: number
@@ -271,6 +293,84 @@ export interface NetemSetInput {
 export type LifecycleAction = 'start' | 'stop' | 'restart'
 export type FreezeAction = 'pause' | 'unpause'
 export type NodeAction = LifecycleAction | FreezeAction
+
+// --- Async jobs (contract delta 12). The four long operations (deploy,
+// configure, destroy, suite run) return 202 + a Job; callers poll it to its
+// terminal state. `result` is set only on "succeeded" and is the operation's
+// payload (DeployResponse / ConfigureResponse / DestroyResponse / SuiteReport,
+// typed by `kind`). A FAILED job means could-not-run; an operation that ran
+// with a bad outcome (config_failed / validation_failed) is a SUCCEEDED job
+// whose result.status says so. ---
+
+export const jobErrorSchema = z.object({
+  status_code: z.number(), // HTTP vocabulary classifier, not a response status
+  code: z.string(),
+  message: z.string(),
+  extras: z.record(z.string(), z.unknown()),
+})
+export type JobError = z.infer<typeof jobErrorSchema>
+
+export const jobSchema = z.object({
+  id: z.string(),
+  lab_name: z.string(),
+  kind: z.enum(['deploy', 'configure', 'destroy', 'suite_run']),
+  status: z.enum(['running', 'succeeded', 'failed']),
+  request: z.record(z.string(), z.unknown()),
+  result: z.record(z.string(), z.unknown()).nullable(),
+  error: jobErrorSchema.nullable(),
+  created_at: z.string(),
+  finished_at: z.string().nullable(),
+})
+export type Job = z.infer<typeof jobSchema>
+export const jobListSchema = z.array(jobSchema)
+
+// --- Self-service credentials (API keys, SSH keys) and the jump coordinates. ---
+
+export const apiKeySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  created_at: z.string(),
+  last_used_at: z.string().nullable(),
+})
+export type ApiKey = z.infer<typeof apiKeySchema>
+export const apiKeyListSchema = z.array(apiKeySchema)
+
+// The Bearer secret is returned only at creation, stored hashed server-side.
+export const apiKeyCreatedSchema = z.object({
+  key: z.string(),
+  info: apiKeySchema,
+})
+export type ApiKeyCreated = z.infer<typeof apiKeyCreatedSchema>
+
+export const sshKeySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  algorithm: z.string(),
+  fingerprint: z.string(), // "SHA256:<base64>", as `ssh-keygen -lf` prints
+  comment: z.string().nullable(),
+  created_at: z.string(),
+  last_used_at: z.string().nullable(), // last OFFERED at the jump host
+})
+export type SshKey = z.infer<typeof sshKeySchema>
+export const sshKeyListSchema = z.array(sshKeySchema)
+
+// The private key exists only in this response — the public half is registered,
+// the private half is never stored server-side.
+export const sshKeyGeneratedSchema = z.object({
+  private_key: z.string(),
+  info: sshKeySchema,
+})
+export type SshKeyGenerated = z.infer<typeof sshKeyGeneratedSchema>
+
+// Jump-host coordinates for external SSH to lab nodes:
+// ssh -o ProxyJump={user}@{host}:{port} <node-user>@<node-mgmt-ip>
+export const sshAccessSchema = z.object({
+  enabled: z.boolean(),
+  host: z.string().nullable(),
+  port: z.number().nullable(),
+  user: z.string().nullable(),
+})
+export type SshAccess = z.infer<typeof sshAccessSchema>
 
 // A lab lifecycle event pushed over SSE (see lib/use-lab-events).
 export const labEventSchema = z.object({

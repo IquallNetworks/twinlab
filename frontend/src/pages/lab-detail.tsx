@@ -4,13 +4,14 @@ import { ChevronLeft, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { CustomConfig } from '@/components/lab/custom-config'
+import { DeployDialog } from '@/components/lab/deploy-dialog'
 import { LabAccess } from '@/components/lab/lab-access'
 import { EditDefinitionDialog } from '@/components/lab/edit-definition-dialog'
 import { LabInterfaces } from '@/components/lab/lab-interfaces'
+import { LabJobs } from '@/components/lab/lab-jobs'
 import { LabLifecycleControls } from '@/components/lab/lab-lifecycle-controls'
 import { NetemControls } from '@/components/lab/netem-controls'
 import { NodeControls } from '@/components/lab/node-controls'
-import { RedeployDialog } from '@/components/lab/redeploy-dialog'
 import { TestSuites } from '@/components/lab/test-suites'
 import {
   AlertDialog,
@@ -35,10 +36,16 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api, ApiError } from '@/lib/api'
+import { api, ApiError, waitJob } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { formatDateTime, nodeStateBadgeVariant, statusBadgeVariant } from '@/lib/format'
-import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
+import {
+  labQueryOptions,
+  labsQueryOptions,
+  sshAccessQueryOptions,
+  testSuitesQueryOptions,
+} from '@/lib/queries'
+import { configureResponseSchema, type SshAccess } from '@/lib/schemas'
 
 // Per-lab permissions (from the lab detail payload — see lab.permissions): editing
 // the definition/suites/templates is lab:edit; delegating access is lab:grant.
@@ -50,12 +57,17 @@ const PERM_LAB_TERMINAL = 'lab:terminal'
 const PERM_LAB_VALIDATE = 'lab:validate'
 const PERM_LAB_GRANT = 'lab:grant'
 
-/** Node management address plus a copy-paste `ssh <ip>` command. The command is
- * username-agnostic (device logins vary); it runs from the host, since the lab
- * nodes sit on the host management bridge, not the compose network. */
-function MgmtCell({ ip }: { ip: string }) {
+/** Node management address plus a copy-paste ssh command. The command is
+ * username-agnostic (device logins vary). When the stack advertises a jump host
+ * it rides ProxyJump — reachable from anywhere, Ansible-ready (needs a
+ * registered SSH key; see the Account page); otherwise it's a plain `ssh <ip>`
+ * that only works from the lab host itself. */
+function MgmtCell({ ip, jump }: { ip: string; jump: SshAccess | undefined }) {
   if (!ip) return <span className="text-muted-foreground">—</span>
-  const command = `ssh ${ip}`
+  const command =
+    jump?.enabled && jump.host !== null && jump.port !== null && jump.user !== null
+      ? `ssh -J ${jump.user}@${jump.host}:${jump.port} ${ip}`
+      : `ssh ${ip}`
   return (
     <div className="flex items-center gap-1.5">
       <span className="font-mono text-xs">{ip}</span>
@@ -89,42 +101,53 @@ export function LabDetailPage({ name }: { name: string }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { data: lab, isPending, isError, error } = useQuery(labQueryOptions(name))
+  const { data: sshAccess } = useQuery(sshAccessQueryOptions)
 
+  // The long operations are async jobs: submit → 202 + Job → poll to terminal.
+  // A failed job rejects with its error envelope, landing in the onError toast;
+  // an operation that ran with a bad outcome (config_failed/validation_failed)
+  // is a SUCCEEDED job whose result.status says so.
   const configure = useMutation({
-    mutationFn: () => api.configureLab(name),
-    onSuccess: async (result) => {
+    mutationFn: async () => waitJob(name, await api.configureLab(name)),
+    onSuccess: async (job) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: labQueryOptions(name).queryKey }),
         queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey }),
         queryClient.invalidateQueries({ queryKey: testSuitesQueryOptions(name).queryKey }),
       ])
+      const result = configureResponseSchema.parse(job.result)
       if (result.status === 'validation_failed') {
         toast.error(`Configured ${result.lab_name}, but config-time validation failed`)
+      } else if (result.status === 'config_failed') {
+        toast.error(`Config push to ${result.lab_name} failed on at least one node`)
       } else {
         toast.success(`Configured ${result.lab_name} (${result.configuration.length} nodes)`)
       }
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Configure failed'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
   })
 
   const destroy = useMutation({
-    mutationFn: () => api.destroyLab(name),
+    mutationFn: async () => waitJob(name, await api.destroyLab(name)),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
       toast.success(`Destroyed ${name}`)
       await navigate({ to: '/labs' })
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Destroy failed'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
   })
 
   const del = useMutation({
-    mutationFn: () => api.deleteLab(name),
+    mutationFn: async () => waitJob(name, await api.deleteLab(name)),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
       toast.success(`Deleted ${name}`)
       await navigate({ to: '/labs' })
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
   })
 
   if (isPending) {
@@ -162,13 +185,19 @@ export function LabDetailPage({ name }: { name: string }) {
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold">{lab.name}</h1>
           <Badge variant={statusBadgeVariant(lab.status)}>{lab.status}</Badge>
-          {lab.config_time_ok === false && (
+          {lab.config_time_status === 'failed' && (
             <Badge variant="destructive">config-time failed</Badge>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {can(PERM_LAB_EDIT) && <EditDefinitionDialog name={lab.name} definition={lab.definition} />}
-          {can(PERM_LAB_EDIT) && <RedeployDialog name={lab.name} />}
+          {can(PERM_LAB_EDIT) && (
+            <DeployDialog
+              name={lab.name}
+              hasDefinition={lab.definition !== null}
+              isRedeploy={isDeployed}
+            />
+          )}
           {can(PERM_LAB_CONFIGURE) && (
             <Button variant="outline" onClick={() => configure.mutate()} disabled={configure.isPending}>
               {configure.isPending ? 'Configuring…' : 'Configure'}
@@ -229,7 +258,7 @@ export function LabDetailPage({ name }: { name: string }) {
         <CardContent className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
           <div>
             <div className="text-muted-foreground">Owner</div>
-            <div>{lab.owner ?? '—'}</div>
+            <div>{lab.owner?.name ?? '—'}</div>
           </div>
           <div>
             <div className="text-muted-foreground">Nodes</div>
@@ -264,7 +293,9 @@ export function LabDetailPage({ name }: { name: string }) {
         <CardContent>
           {lab.nodes.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              No running nodes{lab.status === 'destroyed' ? ' (destroyed)' : ''}.
+              {lab.status === 'created'
+                ? 'No nodes yet — author a definition and deploy the lab.'
+                : `No running nodes${lab.status === 'destroyed' ? ' (destroyed)' : ''}.`}
             </p>
           ) : (
             <Table>
@@ -285,7 +316,7 @@ export function LabDetailPage({ name }: { name: string }) {
                     <TableCell className="font-mono text-xs">{node.container}</TableCell>
                     <TableCell className="font-mono text-xs">{node.image}</TableCell>
                     <TableCell>
-                      <MgmtCell ip={node.mgmt_ip} />
+                      <MgmtCell ip={node.mgmt_ip} jump={sshAccess} />
                     </TableCell>
                     <TableCell>
                       <Badge variant={nodeStateBadgeVariant(node.state)}>{node.state}</Badge>
@@ -328,14 +359,22 @@ export function LabDetailPage({ name }: { name: string }) {
 
       {can(PERM_LAB_GRANT) && <LabAccess name={lab.name} owner={lab.owner} />}
 
+      <LabJobs name={lab.name} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Definition</CardTitle>
         </CardHeader>
         <CardContent>
-          <pre className="bg-muted overflow-x-auto rounded-md p-4 font-mono text-xs">
-            {lab.definition}
-          </pre>
+          {lab.definition === null ? (
+            <p className="text-muted-foreground text-sm">
+              No definition yet — use Edit definition to author this lab.
+            </p>
+          ) : (
+            <pre className="bg-muted overflow-x-auto rounded-md p-4 font-mono text-xs">
+              {lab.definition}
+            </pre>
+          )}
         </CardContent>
       </Card>
     </div>

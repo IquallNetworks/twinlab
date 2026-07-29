@@ -20,7 +20,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogClose,
@@ -42,22 +41,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Textarea } from '@/components/ui/textarea'
-import { api } from '@/lib/api'
+import { api, waitJob } from '@/lib/api'
 import { formatDateTime, statusBadgeVariant } from '@/lib/format'
 import { labsQueryOptions, meQueryOptions } from '@/lib/queries'
 
 const PERM_LAB_CREATE = 'lab:create'
 const PERM_LAB_DESTROY = 'lab:destroy'
 
-const DEFINITION_PLACEHOLDER = `provider: clab
-defaults.device: vyos
-module: [ospf]
-nodes: [r1, r2]
-links: [r1-r2]
-`
-
-const deploySchema = z.object({
+const createSchema = z.object({
   // Same path-safe charset the backend enforces (`_Name`): the name keys the
   // record and every /labs/{name} route, so it must be a safe URL segment.
   name: z
@@ -68,37 +59,31 @@ const deploySchema = z.object({
       /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
       'Start with a letter or digit; then letters, digits, dot, dash or underscore',
     ),
-  definition: z.string().min(1, 'A netlab definition is required'),
-  configure: z.boolean(),
-  skipConfigTimeChecks: z.boolean(),
 })
 
-function DeployLabDialog() {
+/** Create a bare lab record (the lifecycle split's first step) and jump to its
+ * detail page, where the definition is authored and deployed. */
+function CreateLabDialog() {
   const [open, setOpen] = useState(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
-  const deploy = useMutation({
-    mutationFn: (value: z.infer<typeof deploySchema>) =>
-      api.deployLab(value.name, value.definition, value.configure, value.skipConfigTimeChecks),
-    onSuccess: async (result) => {
+  const create = useMutation({
+    mutationFn: (value: z.infer<typeof createSchema>) => api.createLab(value.name),
+    onSuccess: async (lab) => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
-      if (result.status === 'validation_failed') {
-        toast.error(`Lab ${result.lab_name} deployed, but config-time validation failed`)
-      } else {
-        toast.success(`Lab ${result.lab_name} ${result.status}`)
-      }
+      toast.success(`Lab ${lab.name} created — author its definition, then deploy`)
       setOpen(false)
-      await navigate({ to: '/labs/$name', params: { name: result.lab_name } })
+      await navigate({ to: '/labs/$name', params: { name: lab.name } })
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Deploy failed'),
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Create failed'),
   })
 
   const form = useForm({
-    defaultValues: { name: '', definition: '', configure: false, skipConfigTimeChecks: false },
-    validators: { onSubmit: deploySchema },
+    defaultValues: { name: '' },
+    validators: { onSubmit: createSchema },
     onSubmit: async ({ value }) => {
-      await deploy.mutateAsync(value)
+      await create.mutateAsync(value)
     },
   })
 
@@ -111,9 +96,9 @@ function DeployLabDialog() {
       }}
     >
       <DialogTrigger asChild>
-        <Button>Deploy lab</Button>
+        <Button>New lab</Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-md">
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -122,10 +107,10 @@ function DeployLabDialog() {
           }}
         >
           <DialogHeader>
-            <DialogTitle>Deploy lab</DialogTitle>
+            <DialogTitle>New lab</DialogTitle>
             <DialogDescription>
-              Name the lab, then paste a netlab definition. It must name each node&apos;s device and
-              the provider.
+              Name the lab. You author its netlab definition and deploy it from the lab page — the
+              name is its durable identity.
             </DialogDescription>
           </DialogHeader>
 
@@ -147,59 +132,6 @@ function DeployLabDialog() {
                 </div>
               )}
             </form.Field>
-
-            <form.Field name="definition">
-              {(field) => (
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor={field.name}>Definition</Label>
-                  <Textarea
-                    id={field.name}
-                    className="min-h-56 font-mono text-sm"
-                    placeholder={DEFINITION_PLACEHOLDER}
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(e) => field.handleChange(e.target.value)}
-                  />
-                  <FieldError errors={field.state.meta.errors} />
-                </div>
-              )}
-            </form.Field>
-
-            <form.Field name="configure">
-              {(field) => (
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id={field.name}
-                    checked={field.state.value}
-                    onCheckedChange={(c) => field.handleChange(c === true)}
-                  />
-                  <Label htmlFor={field.name} className="font-normal">
-                    Push configuration after deploy (adds minutes)
-                  </Label>
-                </div>
-              )}
-            </form.Field>
-
-            <form.Subscribe selector={(s) => s.values.configure}>
-              {(configureOn) =>
-                configureOn ? (
-                  <form.Field name="skipConfigTimeChecks">
-                    {(field) => (
-                      <div className="flex items-center gap-2 pl-6">
-                        <Checkbox
-                          id={field.name}
-                          checked={field.state.value}
-                          onCheckedChange={(c) => field.handleChange(c === true)}
-                        />
-                        <Label htmlFor={field.name} className="text-muted-foreground font-normal">
-                          Skip config-time checks
-                        </Label>
-                      </div>
-                    )}
-                  </form.Field>
-                ) : null
-              }
-            </form.Subscribe>
           </div>
 
           <DialogFooter>
@@ -211,7 +143,7 @@ function DeployLabDialog() {
             <form.Subscribe selector={(s) => ({ canSubmit: s.canSubmit, isSubmitting: s.isSubmitting })}>
               {({ canSubmit, isSubmitting }) => (
                 <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                  {isSubmitting ? 'Deploying…' : 'Deploy'}
+                  {isSubmitting ? 'Creating…' : 'Create'}
                 </Button>
               )}
             </form.Subscribe>
@@ -223,11 +155,12 @@ function DeployLabDialog() {
 }
 
 /** Per-row delete: soft-deletes the lab (tearing it down first if it's up) and
- * refreshes the list. Confirmed behind an alert dialog since it's destructive. */
+ * refreshes the list. The teardown is an async job we poll to completion.
+ * Confirmed behind an alert dialog since it's destructive. */
 function DeleteLabAction({ name }: { name: string }) {
   const queryClient = useQueryClient()
   const del = useMutation({
-    mutationFn: () => api.deleteLab(name),
+    mutationFn: async () => waitJob(name, await api.deleteLab(name)),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
       toast.success(`Deleted ${name}`)
@@ -280,7 +213,7 @@ export function LabsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Labs</h1>
-        {canCreate && <DeployLabDialog />}
+        {canCreate && <CreateLabDialog />}
       </div>
 
       {isError ? (
@@ -329,8 +262,13 @@ export function LabsPage() {
                   <TableCell>
                     <Badge variant={statusBadgeVariant(lab.status)}>{lab.status}</Badge>
                   </TableCell>
-                  <TableCell>{lab.owner ?? <span className="text-muted-foreground">—</span>}</TableCell>
-                  <TableCell>{lab.nodes}</TableCell>
+                  <TableCell>
+                    {lab.owner?.name ?? <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    {/* running / present containers; 0/0 until deployed */}
+                    {lab.nodes_running}/{lab.nodes}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatDateTime(lab.created_at)}
                   </TableCell>

@@ -22,11 +22,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
+import { formatDuration } from '@/lib/format'
 import { labInterfacesQueryOptions, nodeNetemQueryOptions } from '@/lib/queries'
 import type { LabNodeState, NetemImpairment, NetemSetInput } from '@/lib/schemas'
 
-// Impairment inputs are kept as raw strings; an empty field is left unchanged
-// (omitted from the request) rather than sent as zero.
+// Impairment inputs are kept as raw strings. Set has REPLACE semantics: the
+// request is the interface's complete desired impairment, so an empty field
+// means that dimension is CLEARED (omitted from the request).
 interface Fields {
   delay: string // ms
   jitter: string // ms
@@ -38,12 +40,13 @@ interface Fields {
 const EMPTY_FIELDS: Fields = { delay: '', jitter: '', loss: '', rate: '', corruption: '' }
 
 /** Turn the raw fields into a set request, or null when nothing is filled in
- * (the backend rejects an empty impairment set, so we don't send one). Delay and
- * jitter are ms numbers here; netem wants duration strings, so they get a `ms`. */
+ * (an all-empty body would clear the interface — that's the Reset button's job,
+ * so Apply treats it as a mistake). Delay and jitter are entered in ms and sent
+ * as structured {value, unit} durations. */
 function buildInput(iface: string, f: Fields): NetemSetInput | null {
   const input: NetemSetInput = { interface: iface }
-  if (f.delay.trim() !== '') input.delay = `${Number(f.delay)}ms`
-  if (f.jitter.trim() !== '') input.jitter = `${Number(f.jitter)}ms`
+  if (f.delay.trim() !== '') input.delay = { value: Number(f.delay), unit: 'ms' }
+  if (f.jitter.trim() !== '') input.jitter = { value: Number(f.jitter), unit: 'ms' }
   if (f.loss.trim() !== '') input.loss = Number(f.loss)
   if (f.rate.trim() !== '') input.rate = Number(f.rate)
   if (f.corruption.trim() !== '') input.corruption = Number(f.corruption)
@@ -109,8 +112,8 @@ function CurrentImpairments({
         {data.map((imp: NetemImpairment) => (
           <TableRow key={imp.interface}>
             <TableCell className="font-medium">{imp.interface}</TableCell>
-            <TableCell>{imp.delay || '—'}</TableCell>
-            <TableCell>{imp.jitter || '—'}</TableCell>
+            <TableCell>{formatDuration(imp.delay)}</TableCell>
+            <TableCell>{formatDuration(imp.jitter)}</TableCell>
             <TableCell>{pct(imp.loss)}</TableCell>
             <TableCell>{imp.rate > 0 ? `${imp.rate} kbit/s` : '—'}</TableCell>
             <TableCell>{pct(imp.corruption)}</TableCell>
@@ -153,15 +156,13 @@ export function NetemControls({
   const [fields, setFields] = useState<Fields>(EMPTY_FIELDS)
   const [resetting, setResetting] = useState<string | null>(null)
 
-  // Interface options for the selected node come from the live inventory, which
-  // keys each node by its container name (`clab-<lab>-<node>`), not the short node
-  // name this control uses — so match on the node's container from the lab record.
+  // Interface options for the selected node come from the live inventory, keyed
+  // by the same short node name this control uses.
   const { data: inventory } = useQuery({
     ...labInterfacesQueryOptions(name),
     enabled: enabled && node !== '',
   })
-  const container = nodes.find((n) => n.name === node)?.container ?? ''
-  const interfaces = inventory?.find((n) => n.node === container)?.interfaces ?? []
+  const interfaces = inventory?.find((n) => n.node === node)?.interfaces ?? []
 
   async function invalidateNetem() {
     await queryClient.invalidateQueries({ queryKey: nodeNetemQueryOptions(name, node).queryKey })
@@ -177,8 +178,9 @@ export function NetemControls({
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to set impairment'),
   })
 
+  // Clearing an interface = a set with no impairments (replace semantics).
   const reset = useMutation({
-    mutationFn: (target: string) => api.resetNodeNetem(name, node, target),
+    mutationFn: (target: string) => api.setNodeNetem(name, node, { interface: target }),
     onSuccess: async (result) => {
       await invalidateNetem()
       toast.success(result.message)

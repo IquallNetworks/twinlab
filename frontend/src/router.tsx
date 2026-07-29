@@ -8,6 +8,7 @@ import {
 
 import { AppShell } from '@/components/app-shell'
 import { meQueryOptions } from '@/lib/queries'
+import { AccountPage } from '@/pages/account'
 import { GroupsPage } from '@/pages/groups'
 import { LabDetailPage } from '@/pages/lab-detail'
 import { LabsPage } from '@/pages/labs'
@@ -80,9 +81,22 @@ const groupsRoute = createRoute({
   component: GroupsPage,
 })
 
+const accountRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/account',
+  component: AccountPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  authRoute.addChildren([indexRoute, labsRoute, labDetailRoute, usersRoute, groupsRoute]),
+  authRoute.addChildren([
+    indexRoute,
+    labsRoute,
+    labDetailRoute,
+    usersRoute,
+    groupsRoute,
+    accountRoute,
+  ]),
 ])
 
 export const router = createRouter({

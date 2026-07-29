@@ -30,11 +30,12 @@ import {
   rolesQueryOptions,
 } from '@/lib/queries'
 import { labRoles } from '@/lib/roles'
+import type { Principal } from '@/lib/schemas'
 
 /** Delegate access to a lab: view/add/remove role grants (to users or groups) and
  * transfer ownership. Shown only when the caller holds lab:grant on the lab; the
  * backend still enforces anti-escalation and owner-equivalence for transfer. */
-export function LabAccess({ name, owner }: { name: string; owner: string | null }) {
+export function LabAccess({ name, owner }: { name: string; owner: Principal | null }) {
   const queryClient = useQueryClient()
   const { data: grants } = useQuery(labGrantsQueryOptions(name))
   const { data: principals } = useQuery(principalsQueryOptions)
@@ -95,7 +96,7 @@ export function LabAccess({ name, owner }: { name: string; owner: string | null 
       <CardContent className="flex flex-col gap-6">
         <div className="text-sm">
           <span className="text-muted-foreground">Owner: </span>
-          <span className="font-medium">{owner ?? '—'}</span>
+          <span className="font-medium">{owner?.name ?? '—'}</span>
         </div>
 
         {/* Current grants */}

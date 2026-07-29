@@ -1,29 +1,35 @@
 import { z } from 'zod'
 
 import {
-  configureResponseSchema,
-  deployResponseSchema,
-  destroyResponseSchema,
+  apiKeyCreatedSchema,
+  apiKeyListSchema,
   grantSchema,
   grantListSchema,
   groupListSchema,
   groupSummarySchema,
+  jobListSchema,
+  jobSchema,
   labActionResponseSchema,
   labDetailSchema,
   labInterfacesSchema,
   labListSchema,
+  labOwnerSchema,
   nodeLogsResponseSchema,
   nodeNetemSchema,
   principalsResponseSchema,
   roleListSchema,
   saveConfigResponseSchema,
-  suiteReportSchema,
+  sshAccessSchema,
+  sshKeyGeneratedSchema,
+  sshKeyListSchema,
+  sshKeySchema,
   customConfigResponseSchema,
   testSuitesResponseSchema,
   userInfoSchema,
   userListSchema,
   userSummarySchema,
   type FreezeAction,
+  type Job,
   type LifecycleAction,
   type NetemSetInput,
   type NodeAction,
@@ -34,33 +40,38 @@ import {
 // there is no token to store or attach here.
 const BASE = '/api/v1'
 
-/** A failed backend response, carrying the HTTP status so callers can branch
- * (e.g. 401 → not authenticated) and a message lifted from FastAPI's `detail`. */
+/** A failed backend response or job, carrying the HTTP status (so callers can
+ * branch, e.g. 401 → not authenticated / 404 → no such lab), the stable error
+ * code slug, and the human-readable message from the one v1.0 error envelope
+ * `{code, message, extras}` every non-2xx wears. */
 export class ApiError extends Error {
   readonly status: number
+  readonly code: string | null
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
-async function errorMessage(resp: Response): Promise<string> {
+async function envelope(resp: Response): Promise<{ message: string; code: string | null }> {
   try {
     const body: unknown = await resp.json()
-    const detail = (body as { detail?: unknown }).detail
-    if (typeof detail === 'string') return detail
-    // Our lab/user errors return a structured detail object with a `message`.
-    if (detail && typeof detail === 'object') {
-      const message = (detail as { message?: unknown }).message
-      if (typeof message === 'string') return message
-      return JSON.stringify(detail)
+    const { code, message } = body as { code?: unknown; message?: unknown }
+    if (typeof message === 'string') {
+      return { message, code: typeof code === 'string' ? code : null }
     }
-    return `HTTP ${resp.status}`
+    return { message: `HTTP ${resp.status}`, code: null }
   } catch {
-    return `HTTP ${resp.status}`
+    return { message: `HTTP ${resp.status}`, code: null }
   }
+}
+
+async function toApiError(resp: Response): Promise<ApiError> {
+  const { message, code } = await envelope(resp)
+  return new ApiError(resp.status, message, code)
 }
 
 async function request<S extends z.ZodType>(
@@ -72,7 +83,7 @@ async function request<S extends z.ZodType>(
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
-  if (!resp.ok) throw new ApiError(resp.status, await errorMessage(resp))
+  if (!resp.ok) throw await toApiError(resp)
   return schema.parse(await resp.json())
 }
 
@@ -81,7 +92,7 @@ async function requestVoid(path: string, init?: RequestInit): Promise<void> {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
-  if (!resp.ok) throw new ApiError(resp.status, await errorMessage(resp))
+  if (!resp.ok) throw await toApiError(resp)
 }
 
 export interface CreateUserInput {
@@ -154,50 +165,49 @@ export const api = {
   deleteGrant: (name: string, bindingId: string) =>
     requestVoid(`/labs/${encodeURIComponent(name)}/grants/${bindingId}`, { method: 'DELETE' }),
   transferOwner: (name: string, userId: string) =>
-    request(`/labs/${encodeURIComponent(name)}/owner`, grantSchema, {
+    request(`/labs/${encodeURIComponent(name)}/owner`, labOwnerSchema, {
       method: 'PUT',
       body: JSON.stringify({ user_id: userId }),
     }),
 
   listLabs: () => request('/labs', labListSchema),
   getLab: (name: string) => request(`/labs/${encodeURIComponent(name)}`, labDetailSchema),
-  // skipConfigTimeChecks bypasses the automatic config-time suites (only meaningful
-  // alongside configure); it is off by default so convergence gating is on.
-  deployLab: (name: string, definition: string, configure: boolean, skipConfigTimeChecks = false) =>
-    request('/labs', deployResponseSchema, {
-      method: 'POST',
-      body: JSON.stringify({
-        name,
-        definition,
-        configure,
-        skip_config_time_checks: skipConfigTimeChecks,
-      }),
-    }),
-  configureLab: (name: string, skipConfigTimeChecks = false) =>
-    request(`/labs/${encodeURIComponent(name)}/configure`, configureResponseSchema, {
-      method: 'POST',
-      body: JSON.stringify({ skip_config_time_checks: skipConfigTimeChecks }),
-    }),
-  destroyLab: (name: string) =>
-    request(`/labs/${encodeURIComponent(name)}`, destroyResponseSchema, { method: 'DELETE' }),
-  // Delete removes the lab from the catalog (soft-delete: the record is retained
-  // server-side but hidden). `remove=true` also tears the lab down first if it's
-  // still up, so a running or already-destroyed lab can both be deleted.
-  deleteLab: (name: string) =>
-    request(`/labs/${encodeURIComponent(name)}?remove=true`, destroyResponseSchema, {
-      method: 'DELETE',
-    }),
 
+  // The lifecycle split: create a bare record (name only), author the definition
+  // via PUT, then deploy from the stored definition. The four long operations
+  // (deploy/configure/destroy/suite run) return 202 + a Job — await them with
+  // waitJob() below.
+  createLab: (name: string) =>
+    request('/labs', labDetailSchema, { method: 'POST', body: JSON.stringify({ name }) }),
   updateLabDefinition: (name: string, definition: string) =>
     request(`/labs/${encodeURIComponent(name)}`, labDetailSchema, {
       method: 'PUT',
       body: JSON.stringify({ definition }),
     }),
-  redeployLab: (name: string, configure: boolean, skipConfigTimeChecks = false) =>
-    request(`/labs/${encodeURIComponent(name)}/redeploy`, deployResponseSchema, {
+  // skipConfigTimeChecks bypasses the automatic config-time suites (only meaningful
+  // alongside configure); it is off by default so convergence gating is on.
+  deployLab: (name: string, configure: boolean, skipConfigTimeChecks = false) =>
+    request(`/labs/${encodeURIComponent(name)}/deploy`, jobSchema, {
       method: 'POST',
       body: JSON.stringify({ configure, skip_config_time_checks: skipConfigTimeChecks }),
     }),
+  configureLab: (name: string, skipConfigTimeChecks = false) =>
+    request(`/labs/${encodeURIComponent(name)}/configure`, jobSchema, {
+      method: 'POST',
+      body: JSON.stringify({ skip_config_time_checks: skipConfigTimeChecks }),
+    }),
+  destroyLab: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}`, jobSchema, { method: 'DELETE' }),
+  // Delete removes the lab from the catalog (soft-delete: the record is retained
+  // server-side but hidden). `remove=true` also tears the lab down first if it's
+  // still up, so a running or already-destroyed lab can both be deleted.
+  deleteLab: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}?remove=true`, jobSchema, { method: 'DELETE' }),
+
+  getJob: (name: string, jobId: string) =>
+    request(`/labs/${encodeURIComponent(name)}/jobs/${jobId}`, jobSchema),
+  listJobs: (name: string, limit = 20) =>
+    request(`/labs/${encodeURIComponent(name)}/jobs?limit=${limit}`, jobListSchema),
   nodeAction: (name: string, node: string, action: NodeAction) =>
     request(
       `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/${action}`,
@@ -226,7 +236,8 @@ export const api = {
     request(`/labs/${encodeURIComponent(name)}/interfaces`, labInterfacesSchema),
 
   // Netem link impairment, keyed by node + interface (the backend resolves the
-  // node to its container). Set/reset take lab:configure; show takes lab:read.
+  // node to its container). Set takes lab:configure; show takes lab:read. Set
+  // REPLACES the interface's impairment: sending only { interface } clears it.
   nodeNetem: (name: string, node: string) =>
     request(
       `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/netem`,
@@ -238,12 +249,6 @@ export const api = {
       labActionResponseSchema,
       { method: 'POST', body: JSON.stringify(input) },
     ),
-  resetNodeNetem: (name: string, node: string, iface: string) =>
-    request(
-      `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/netem/reset`,
-      labActionResponseSchema,
-      { method: 'POST', body: JSON.stringify({ interface: iface }) },
-    ),
 
   // Test suites. Read/author (lab:read / lab:create); run one on demand
   // (lab:validate). `testSuites` is the raw suite map, validated server-side.
@@ -254,10 +259,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ test_suites: testSuites }),
     }),
+  // Runs are async jobs; the terminal job's result is the SuiteReport.
   runTestSuite: (name: string, suite: string) =>
     request(
       `/labs/${encodeURIComponent(name)}/test-suites/${encodeURIComponent(suite)}/run`,
-      suiteReportSchema,
+      jobSchema,
       { method: 'POST' },
     ),
 
@@ -271,4 +277,58 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ custom_config: customConfig }),
     }),
+
+  // Self-service API keys (Bearer credentials). The secret is shown once at
+  // creation and stored hashed server-side.
+  listApiKeys: () => request('/auth/api-keys', apiKeyListSchema),
+  createApiKey: (name: string) =>
+    request('/auth/api-keys', apiKeyCreatedSchema, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  deleteApiKey: (keyId: string) => requestVoid(`/auth/api-keys/${keyId}`, { method: 'DELETE' }),
+
+  // Self-service SSH public keys for the jump host. Generate returns the
+  // private half exactly once; the server never stores it.
+  listSshKeys: () => request('/auth/ssh-keys', sshKeyListSchema),
+  createSshKey: (name: string, publicKey: string) =>
+    request('/auth/ssh-keys', sshKeySchema, {
+      method: 'POST',
+      body: JSON.stringify({ name, public_key: publicKey }),
+    }),
+  generateSshKey: (name: string) =>
+    request('/auth/ssh-keys/generate', sshKeyGeneratedSchema, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  deleteSshKey: (keyId: string) => requestVoid(`/auth/ssh-keys/${keyId}`, { method: 'DELETE' }),
+
+  // Jump-host coordinates for external SSH to lab nodes (enabled:false when the
+  // deployment advertises none).
+  getSshAccess: () => request('/ssh-access', sshAccessSchema),
+}
+
+// How often a pending job is re-read. Long operations take minutes; 1.5 s keeps
+// completion latency low without hammering the backend.
+const JOB_POLL_MS = 1500
+
+/** Poll a submitted job to its terminal state. Resolves with the terminal Job
+ * on success (callers parse `job.result` with the matching result schema);
+ * rejects with an ApiError built from the job's error envelope when the
+ * operation could not run. No deadline: deploys legitimately take minutes, and
+ * mutation pending-states communicate progress meanwhile. */
+export async function waitJob(name: string, job: Job): Promise<Job> {
+  let current = job
+  while (current.status === 'running') {
+    await new Promise((resolve) => setTimeout(resolve, JOB_POLL_MS))
+    current = await api.getJob(name, current.id)
+  }
+  if (current.status === 'failed') {
+    // A failed job always carries its error envelope; the fallback is defensive.
+    const error = current.error
+    throw error
+      ? new ApiError(error.status_code, error.message, error.code)
+      : new ApiError(500, `${current.kind} job failed`)
+  }
+  return current
 }

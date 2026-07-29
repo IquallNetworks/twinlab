@@ -61,6 +61,13 @@ export function AppShell() {
                 Groups
               </Link>
             )}
+            {/* Self-service credentials — no permission gate. */}
+            <Link
+              to="/account"
+              className="text-muted-foreground data-[status=active]:text-foreground"
+            >
+              Account
+            </Link>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm">
             <span className="text-muted-foreground">{me?.username}</span>

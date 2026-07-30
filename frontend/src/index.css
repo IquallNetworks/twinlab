@@ -9,8 +9,12 @@
 @import '@fontsource/ibm-plex-serif';
 @import '@fontsource/ibm-plex-sans';
 
-/* The Phase-1 identity token packs (schematic / control / blueprint). */
+/* The identity token packs (schematic default, blueprint shelved). */
 @import './styles/identities.css';
+
+/* React Flow base styles + the identity mapping for the topology canvas. */
+@import '@xyflow/react/dist/style.css';
+@import './styles/topology.css';
 
 @custom-variant dark (&:is(.dark *));
 

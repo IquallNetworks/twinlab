@@ -47,8 +47,8 @@ it, and contract changes go through review.
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
 
 - **`frontend/`** — Vite + React + TypeScript (pnpm). **Being rebuilt in place on the v1.0 wire**
-  (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–2 done**, next
-  is Phase 3 — the topology view). Phase 1 (graphical identity): identities are CSS token packs
+  (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–3 done**, next
+  is Phase 4 — the guided builder). Phase 1 (graphical identity): identities are CSS token packs
   keyed off `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk +
   IBM Plex Mono, faint line-grid canvas) is the chosen design system and Blueprint is
   shelved-but-selectable; the twin-diamond wordmark is the logo; header chrome has its own
@@ -69,7 +69,13 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `lib/use-all-jobs.ts` — since there is no cross-lab jobs endpoint, polling 4s only while a
   running job is visible). Long ops submit **202 async jobs** awaited via `waitJob`
   (`src/lib/api.ts`); the frozen **test-suites** panel and netem/power/interfaces/custom-config
-  live on the Operations tab. UI stack: **shadcn/ui** (radix base) on Tailwind v4, the
+  live on the Operations tab. Phase 3 (topology view): a **Topology tab** renders the stored
+  definition on a React Flow + dagre canvas — `lib/topology.ts` best-effort-parses netlab's link
+  forms (unresolvable entries surface as an "N links not rendered" strip, never dropped; LAN
+  hubs for multi-access; drift shown both ways), live node state + netem badges overlay it
+  (queries shared with the netem controls, running nodes only), selection reuses the connect
+  drawer + node controls, and the toolbar does auto-layout, LR/TB and PNG export; undeployed
+  labs render as documentation. UI stack: **shadcn/ui** (radix base) on Tailwind v4, the
   **TanStack** family (Query, Router in code-based mode, Form) and **zod**. Auth gate: a pathless
   layout route resolves `GET /auth/me` in `beforeLoad`, redirects to `/login` on 401; actions
   gate on the caller's permissions. `useLabEvents` records SSE events to the activity store and

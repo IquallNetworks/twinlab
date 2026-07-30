@@ -1,0 +1,18 @@
+/* React Flow themed through its --xy-* custom properties, mapped onto the
+ * identity tokens so the canvas flips with the pack's own dark/light. */
+.react-flow {
+    /* An explicit near-white drawing surface (the card token), with the grid
+     * faded to a whisper — the graph reads first, the paper second. */
+    --xy-background-color: var(--card);
+    --xy-background-pattern-color: color-mix(in oklab, var(--foreground) 1.5%, transparent);
+    --xy-edge-stroke: var(--muted-foreground);
+    --xy-edge-stroke-selected: var(--primary);
+    --xy-minimap-background-color: var(--card);
+    --xy-minimap-mask-background-color: color-mix(in oklab, var(--muted) 60%, transparent);
+    --xy-controls-button-background-color: var(--card);
+    --xy-controls-button-background-color-hover: var(--muted);
+    --xy-controls-button-color: var(--foreground);
+    --xy-controls-button-border-color: var(--border);
+    --xy-attribution-background-color: transparent;
+    --xy-node-border-radius: 2px;
+}

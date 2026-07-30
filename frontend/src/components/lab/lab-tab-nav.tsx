@@ -17,6 +17,9 @@ export function LabTabNav({ name, permissions }: { name: string; permissions: st
       <Link to="/labs/$name/overview" params={{ name }} className={TAB_LINK}>
         Overview
       </Link>
+      <Link to="/labs/$name/topology" params={{ name }} className={TAB_LINK}>
+        Topology
+      </Link>
       <Link to="/labs/$name/nodes" params={{ name }} className={TAB_LINK}>
         Nodes
       </Link>

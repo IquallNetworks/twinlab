@@ -128,6 +128,19 @@ New ui primitives: tabs + sheet (zero new npm deps — the radix-ui monolith cov
 **Exit:** any deployed example lab (mpls-l3vpn) renders correctly with live state; actions work
 from the canvas.
 
+**Outcome (2026-07-30): DONE.** `lib/topology.ts` is a pure best-effort parser over netlab's
+link zoo (strings, lists, dicts, interfaces lists, link groups, dict-of-lists; dotted
+`defaults.device` handled) with an `unrendered` count the canvas surfaces — never a silent drop;
+multi-access links render as LAN hubs, undeclared-but-linked nodes as implicit, and live
+containers missing from the definition as unlinked "drifted" nodes. The canvas (React Flow v12 +
+dagre, themed via `--xy-*` → identity tokens) wires fixed-geometry device cards center-to-center
+with straight edges, seeds dagre positions only on shape/rankdir change (drags survive live
+refetches), overlays state dots and netem badges (`useQueries` over running nodes, keys shared
+with the Operations netem controls), and reuses NodeConnectDrawer + NodeControls from a selection
+panel. Toolbar: auto-layout, LR/TB, PNG export (`html-to-image`, approved). Undeployed labs
+render all-not-deployed — topology as documentation. Link oper state remains parked on the
+backend link table.
+
 ### Phase 4 — guided builder
 
 - The same canvas, editable, on the Build tab: device palette ("add node → pick device/image"),
@@ -177,6 +190,15 @@ Frontend-driven wants that surfaced in this roadmap:
 - **Device/image catalog endpoint** — what devices/images can this deployment actually run
   (feeds the builder palette; replaces the curated client-side list).
 - **Link table + link oper state** — expose the netlab-generated link graph and per-link state
-  (upgrades the topology overlay from node-state-only to true link state).
+  (upgrades the topology overlay from node-state-only to true link state). Now has a second,
+  user-requested consumer: **link-level netem from the canvas** (click an edge to manage its
+  impairment; color impaired edges) needs the definition-link → `node:iface` mapping, which only
+  the generated clab topology knows. Implementation pointer: the backend's
+  `create_clab_topology()` (services/netlab.py) already returns the parsed clab topology whose
+  `links[].endpoints` carry exact `node:iface` pairs — a `GET /labs/{name}/links` endpoint is a
+  deterministic re-generation from the stored definition (cacheable per definition hash).
+  Contract change → review gate.
 - **SSE job events** — already in ROADMAP; would let the job center drop its polling.
 - **Deployed-definition snapshot** — enables "definition drifted since deploy" hints.
+- **Server-side topology layout** — a layout field on the lab record, so a manually arranged
+  topology is shared across users/browsers (today it persists per browser in localStorage).

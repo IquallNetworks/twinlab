@@ -47,31 +47,56 @@ const BASE = '/api/v1'
 export class ApiError extends Error {
   readonly status: number
   readonly code: string | null
+  readonly extras: Record<string, unknown> | null
 
-  constructor(status: number, message: string, code: string | null = null) {
+  constructor(
+    status: number,
+    message: string,
+    code: string | null = null,
+    extras: Record<string, unknown> | null = null,
+  ) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.extras = extras
   }
 }
 
-async function envelope(resp: Response): Promise<{ message: string; code: string | null }> {
+interface Envelope {
+  message: string
+  code: string | null
+  extras: Record<string, unknown> | null
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+async function envelope(resp: Response): Promise<Envelope> {
   try {
     const body: unknown = await resp.json()
-    const { code, message } = body as { code?: unknown; message?: unknown }
-    if (typeof message === 'string') {
-      return { message, code: typeof code === 'string' ? code : null }
+    const { code, message, extras } = body as {
+      code?: unknown
+      message?: unknown
+      extras?: unknown
     }
-    return { message: `HTTP ${resp.status}`, code: null }
+    if (typeof message === 'string') {
+      return {
+        message,
+        code: typeof code === 'string' ? code : null,
+        extras: isPlainRecord(extras) ? extras : null,
+      }
+    }
+    return { message: `HTTP ${resp.status}`, code: null, extras: null }
   } catch {
-    return { message: `HTTP ${resp.status}`, code: null }
+    return { message: `HTTP ${resp.status}`, code: null, extras: null }
   }
 }
 
 async function toApiError(resp: Response): Promise<ApiError> {
-  const { message, code } = await envelope(resp)
-  return new ApiError(resp.status, message, code)
+  const { message, code, extras } = await envelope(resp)
+  return new ApiError(resp.status, message, code, extras)
 }
 
 async function request<S extends z.ZodType>(
@@ -327,7 +352,7 @@ export async function waitJob(name: string, job: Job): Promise<Job> {
     // A failed job always carries its error envelope; the fallback is defensive.
     const error = current.error
     throw error
-      ? new ApiError(error.status_code, error.message, error.code)
+      ? new ApiError(error.status_code, error.message, error.code, error.extras)
       : new ApiError(500, `${current.kind} job failed`)
   }
   return current

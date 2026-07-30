@@ -92,6 +92,14 @@ export const labJobsQueryOptions = (name: string) =>
     queryFn: () => api.listJobs(name),
   })
 
+// Cross-lab job history. Under the same ['jobs'] root as the per-lab lists, so
+// one invalidation (SSE, a submit) refreshes whichever is on screen.
+export const allJobsQueryOptions = (limit: number) =>
+  queryOptions({
+    queryKey: ['jobs', 'all', limit],
+    queryFn: () => api.listAllJobs(limit),
+  })
+
 export const apiKeysQueryOptions = queryOptions({
   queryKey: ['api-keys'],
   queryFn: () => api.listApiKeys(),

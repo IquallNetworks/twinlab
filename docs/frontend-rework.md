@@ -111,8 +111,9 @@ endpoint), and a permission-gated admin card. Lab detail became routed tabs
 test-suites + custom-config sit on Operations (user-chosen). The per-node Connect drawer and the
 Account page both serve the corrected SSH guidance from `lib/ssh.ts` (ssh_config block /
 ProxyCommand — the bare `-J` copy command is gone). Jobs: one shared `JobsTable` powers `/jobs`
-and the per-lab history; aggregation is client-side `useQueries` over per-lab keys with polling
-only while a running job is visible — the cross-lab jobs endpoint stays a parked backend item.
+and the per-lab history; aggregation was client-side `useQueries` over per-lab keys with polling
+only while a running job was visible — *(superseded 2026-07-30: delta 15 landed `GET /jobs`, so
+it is one query and partial failure is no longer possible; see the parked list below)*.
 New ui primitives: tabs + sheet (zero new npm deps — the radix-ui monolith covers both).
 
 ### Phase 3 — topology view (read-only)
@@ -239,6 +240,14 @@ Frontend-driven wants that surfaced in this roadmap:
 
 - **Device/image catalog endpoint** — what devices/images can this deployment actually run
   (feeds the builder palette; replaces the curated client-side list).
+- **Cross-lab jobs endpoint** — **DONE 2026-07-30 (contract delta 15, APPROVED)**.
+  `GET /jobs?limit=` (1-200, default 20) serves recent jobs over every readable lab in one
+  indexed query, filtered by the events stream's readable-lab set — any authenticated user, and
+  no lab is named so there is nothing to hide behind. Jobs of REMOVED labs are EXCLUDED, the
+  approved trade-off: the fleet list follows `GET /labs` and a revived name keeps its empty
+  history, while a destroy-with-remove job is still followed by id on its own lab route (which
+  stays readable on a removed lab). The frontend's `useAllJobs` fan-out collapsed to one query,
+  which removed partial-failure handling (`failedLabs`) entirely.
 - **Link table + link oper state** — **DONE 2026-07-30 (contract delta 14, APPROVED)**. `GET
   /labs/{name}/links` serves the LOGICAL link table from netlab's *expanded* topology (`netlab
   create -o config -o provider -o json:nodefault=` — `-o` replaces the default output set and
@@ -259,7 +268,16 @@ Frontend-driven wants that surfaced in this roadmap:
   panel with per-endpoint state + extracted `NetemForm`/`useSetNetem`/filtered
   `CurrentImpairments`). Blackbox: the netem test now takes its interface from `links()` instead
   of guessing "first non-mgmt ethN".
-- **SSE job events** — already in ROADMAP; would let the job center drop its polling.
+- **SSE job events** — **DONE 2026-07-30 (contract delta 16, APPROVED)**. `GET /events` now
+  carries TWO **named** events: `lab` (the container events it always relayed) and `job`
+  (`{lab, job_id, kind, status, timestamp}`, emitted at submit and at the terminal state).
+  Naming them was the breaking part — every event used to be the unnamed default, so
+  `onmessage` sees nothing now; the frontend and the Python client were updated in the same
+  batch, and the client SKIPS event names it has no parser for so the server can add more.
+  The event is a POKE: no result/error on it, the record stays the record. Job events are born
+  in-process, so they ride a deliberately lossy broker (bounded queue per stream, drop rather
+  than stall the job runner). There is NO replay on reconnect, so the jobs poll was slowed to a
+  15s fallback rather than deleted.
 - **Deployed-definition snapshot** — enables "definition drifted since deploy" hints.
 - **Server-side topology layout** — a layout field on the lab record, so a manually arranged
   topology is shared across users/browsers (today it persists per browser in localStorage).

@@ -1,9 +1,16 @@
-"""Server-Sent Events: relay clab-api lab events to the browser.
+"""Server-Sent Events: lab and job events to the browser.
 
-clab-api streams container lifecycle events as NDJSON on a long-lived connection.
-We distill each to a lean `{lab, node, action, timestamp}` and re-emit it as SSE so
-the frontend can invalidate the affected lab's queries instead of polling. One
-upstream clab-api stream per browser connection (simple; the tool is low-scale).
+Two sources, two NAMED events (contract delta 16):
+
+- `lab` — clab-api streams container lifecycle events as NDJSON on a long-lived
+  connection. We distill each to a lean `{lab, node, action, timestamp}` and
+  re-emit it. One upstream clab-api stream per browser connection (simple; the
+  tool is low-scale).
+- `job` — job lifecycle, published in-process by the job runner (a submit and a
+  terminal state), so completion no longer has to be discovered by polling.
+
+Both are pokes: the frontend invalidates the affected queries and re-reads.
+There is no replay on reconnect, so nothing may treat this as the record.
 
 Events are filtered to the labs the caller may read: a global `lab:read` sees all;
 otherwise only owned labs and labs granted to the caller (directly or via a group).
@@ -25,9 +32,10 @@ from twinlab_backend.auth.service import permitted_lab_names
 from twinlab_backend.config import Settings
 from twinlab_backend.db.models import User
 from twinlab_backend.deps import ClabClientDep, SettingsDep
-from twinlab_backend.models import LabEvent
+from twinlab_backend.models import JobEvent, LabEvent
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.clab_api import LabEvent as ClabLabEvent
+from twinlab_backend.services.job_events import JobEventBroker
 
 router = APIRouter(tags=["events"])
 
@@ -61,43 +69,59 @@ async def _resolve_readable(request: Request, user: User) -> set[str] | None:
 
 
 async def _sse(request: Request, clab: ClabApiClient, user: User) -> AsyncIterator[str]:
-    """Relay upstream events as SSE, dropping events for labs the caller can't read
-    and interleaving keepalive comments while idle. A background task feeds a queue so
-    we can time out on it for both the keepalive and the readable-set refresh."""
-    queue: asyncio.Queue[ClabLabEvent | None] = asyncio.Queue()
+    """Relay both event sources as SSE, dropping events for labs the caller can't
+    read and interleaving keepalive comments while idle. Background tasks feed one
+    queue so we can time out on it for both the keepalive and the readable-set
+    refresh.
 
-    async def produce() -> None:
+    Two sources, two NAMED events (delta 16): container events relayed from
+    clab-api (`lab`) and job lifecycle events published in-process (`job`)."""
+    queue: asyncio.Queue[ClabLabEvent | JobEvent | None] = asyncio.Queue()
+    broker: JobEventBroker = request.app.state.job_events
+
+    async def relay_labs() -> None:
         try:
             async for event in clab.stream_events():
                 await queue.put(event)
         finally:
             await queue.put(None)  # sentinel: upstream ended
 
-    task = asyncio.create_task(produce())
+    async def relay_jobs(source: asyncio.Queue[JobEvent]) -> None:
+        # The broker's per-subscriber queue is bounded and drops when full; this
+        # merge is the only reader, so it drains promptly.
+        while True:
+            await queue.put(await source.get())
+
     readable = await _resolve_readable(request, user)
     next_refresh = asyncio.get_event_loop().time() + _READABLE_TTL_SECONDS
-    try:
-        yield ": connected\n\n"  # flush headers so EventSource fires `open`
-        while True:
-            if asyncio.get_event_loop().time() >= next_refresh:
-                readable = await _resolve_readable(request, user)
-                next_refresh = asyncio.get_event_loop().time() + _READABLE_TTL_SECONDS
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_SECONDS)
-            except TimeoutError:
-                yield ": keepalive\n\n"
-                continue
-            if event is None:
-                break
-            # readable is None => global reader (see everything); else a name set.
-            if readable is not None and event.lab not in readable:
-                continue
-            payload = LabEvent(
-                lab=event.lab, node=event.node, action=event.action, timestamp=event.timestamp
-            )
-            yield f"data: {payload.model_dump_json()}\n\n"
-    finally:
-        _ = task.cancel()
+    with broker.subscribe() as jobs:
+        tasks = [asyncio.create_task(relay_labs()), asyncio.create_task(relay_jobs(jobs))]
+        try:
+            yield ": connected\n\n"  # flush headers so EventSource fires `open`
+            while True:
+                if asyncio.get_event_loop().time() >= next_refresh:
+                    readable = await _resolve_readable(request, user)
+                    next_refresh = asyncio.get_event_loop().time() + _READABLE_TTL_SECONDS
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_SECONDS)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if event is None:
+                    break
+                # readable is None => global reader (see everything); else a name set.
+                if readable is not None and event.lab not in readable:
+                    continue
+                if isinstance(event, JobEvent):
+                    yield f"event: job\ndata: {event.model_dump_json()}\n\n"
+                    continue
+                payload = LabEvent(
+                    lab=event.lab, node=event.node, action=event.action, timestamp=event.timestamp
+                )
+                yield f"event: lab\ndata: {payload.model_dump_json()}\n\n"
+        finally:
+            for task in tasks:
+                _ = task.cancel()
 
 
 @router.get("/events")

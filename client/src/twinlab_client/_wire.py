@@ -40,6 +40,7 @@ from twinlab_client.models import (
     GroupSummary,
     Job,
     JobError,
+    JobEvent,
     JobKind,
     LabActionResponse,
     LabDetail,
@@ -603,6 +604,18 @@ def parse_lab_event(value: object) -> LabEvent:
         node=_get_opt_str(obj, "node", where),
         action=_get_str(obj, "action", where),
         timestamp=_get_str(obj, "timestamp", where),
+    )
+
+
+def parse_job_event(value: object) -> JobEvent:
+    where = "JobEvent"
+    obj = as_object(value, where)
+    return JobEvent(
+        lab=_get_str(obj, "lab", where),
+        job_id=_get_uuid(obj, "job_id", where),
+        kind=_get_literal(obj, "kind", where, JOB_KINDS),
+        status=_get_literal(obj, "status", where, JOB_STATUSES),
+        timestamp=_get_datetime(obj, "timestamp", where),
     )
 
 

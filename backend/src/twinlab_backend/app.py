@@ -21,6 +21,7 @@ from twinlab_backend.api.grants import router as grants_router
 from twinlab_backend.api.groups import router as groups_router
 from twinlab_backend.api.health import router as health_router
 from twinlab_backend.api.internal import router as internal_router
+from twinlab_backend.api.jobs import fleet_router as fleet_jobs_router
 from twinlab_backend.api.jobs import router as jobs_router
 from twinlab_backend.api.labs import router as labs_router
 from twinlab_backend.api.roles import router as roles_router
@@ -35,6 +36,7 @@ from twinlab_backend.result import Err
 from twinlab_backend.services import job_store
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.custom_config import load_builtins
+from twinlab_backend.services.job_events import JobEventBroker
 from twinlab_backend.services.runner_client import RunnerClient
 
 _HTTP_TIMEOUT_SECONDS = 30.0
@@ -79,12 +81,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # In-flight job tasks, keyed by job id — cancelled (then swept) at shutdown.
     job_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
+    # Job lifecycle events are born in-process; this fans them out to the open
+    # SSE streams (delta 16). Empty and cheap when nobody is listening.
+    job_events = JobEventBroker()
 
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         app.state.settings = settings
         app.state.builtin_library = builtin_library
         app.state.session_factory = session_factory
         app.state.job_tasks = job_tasks
+        app.state.job_events = job_events
         app.state.clab_client = ClabApiClient(
             client=client,
             base_url=settings.clab_api_url,
@@ -120,6 +126,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix=_API_PREFIX)
     app.include_router(labs_router, prefix=_API_PREFIX)
     app.include_router(jobs_router, prefix=_API_PREFIX)
+    app.include_router(fleet_jobs_router, prefix=_API_PREFIX)
     app.include_router(grants_router, prefix=_API_PREFIX)
     app.include_router(users_router, prefix=_API_PREFIX)
     app.include_router(groups_router, prefix=_API_PREFIX)

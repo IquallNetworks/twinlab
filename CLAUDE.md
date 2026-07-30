@@ -36,10 +36,11 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (fourteen deltas; delta 12 is the async job model, delta 13 the SSH
-jump, delta 14 the link table — approved 2026-07-30). Two non-compose
+backend now implements in full (sixteen deltas; delta 12 is the async job model, delta 13 the SSH
+jump, delta 14 the link table, delta 15 the cross-lab job listing and delta 16 job events on the
+SSE stream — 14/15/16 approved 2026-07-30). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 101 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 105 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -53,7 +54,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   server-driven canvas edges with oper-state styling — stable `link:<linkindex>` ids, animated
   impaired edges, client parse as fallback — and edge-click per-endpoint netem via the extracted
   `NetemForm`/`useSetNetem` in `components/lab/netem-form.tsx`, which invalidates BOTH the node
-  netem key and `['labs', name, 'links']`); still parked: test-suites rework, definition
+  netem key and `['labs', name, 'links']`), and **cross-lab jobs + SSE job events DONE
+  2026-07-30** (deltas 15/16: `lib/use-all-jobs.ts` is now ONE `GET /jobs` query instead of a
+  per-lab fan-out — partial failure stopped being a state — and `useLabEvents` listens to the two
+  NAMED events, so the jobs poll fell to a 15s fallback for the gap a reconnect leaves); still
+  parked: test-suites rework, definition
   input methods, scenarios, catalog endpoint, … — and the v1.0 release train
   (publish `twinlab-client` to PyPI + tag) goes LAST, after those land). Phase 1 (graphical
   identity):
@@ -74,9 +79,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `ssh -J twinlab-jump <user>@<ip>` or the ProxyCommand one-liner — NEVER bare `-J` with `-i`,
   which dies at the hop; the Account page teaches the same block); a **jobs center at `/jobs`**
   plus per-lab job history through one shared `JobsTable` (row → detail sheet with request/
-  result/error JSON; aggregation fans `useQueries` over per-lab `['jobs', name]` keys —
-  `lib/use-all-jobs.ts` — since there is no cross-lab jobs endpoint, polling 4s only while a
-  running job is visible). Long ops submit **202 async jobs** awaited via `waitJob`
+  result/error JSON; aggregation is one `GET /jobs` query keyed `['jobs', 'all', limit]`, under
+  the same `['jobs']` root as the per-lab lists so one invalidation refreshes either). Long ops submit **202 async jobs** awaited via `waitJob`
   (`src/lib/api.ts`); the frozen **test-suites** panel and netem/power/interfaces/custom-config
   live on the Operations tab. Phase 3 (topology view): a **Topology tab** renders the stored
   definition on a React Flow + dagre canvas — `lib/topology.ts` best-effort-parses netlab's link
@@ -140,7 +144,12 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   ASYNC JOBS** (contract delta 12): pre-accept checks stay synchronous, then the route returns
   **202 + a running Job** and the work runs in an in-process task; callers poll `GET
   /labs/{name}/jobs/{id}` (+ `GET .../jobs?limit=`, both `lab:read`, readable on a soft-deleted
-  lab so a destroy-with-remove job stays pollable; a revived name starts with no history). Jobs
+  lab so a destroy-with-remove job stays pollable; a revived name starts with no history) — or
+  watch the SSE stream's `job` events (delta 16, below). **`GET /jobs?limit=`** (delta 15) is the
+  cross-lab listing: recent jobs over every lab the caller may read, newest first, one indexed
+  query filtered by the events stream's readable-lab set (any authenticated user; no lab is named,
+  so nothing to hide behind). Jobs of REMOVED labs are excluded there, so the fleet list follows
+  `GET /labs` and a revived name keeps its empty history. Jobs
   persist in a `jobs` table; the partial unique index (one `running` row per lab) IS the operation
   mutex — a concurrent submit of ANY kind is 409 `job_in_flight`. Job failed = could-not-run (the
   error envelope on `job.error`); `config_failed`/`validation_failed` stay job successes. Startup/
@@ -212,9 +221,16 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   action path param). Node state carries a docker-vocabulary `state` (unknown upstream values 502
   loudly) and
   the management IP (`mgmt_ip`, from clab's `ipv4_address`) for a copy-paste `ssh` command. A
-  **Server-Sent Events** stream at `GET /events` (`lab:read`) relays clab-api's live lab events
-  (distilled to `{lab, node, action, timestamp}`), auth resolved up front so the long-lived
-  connection doesn't pin a DB session, so the frontend refreshes without polling. A **web terminal**
+  **Server-Sent Events** stream at `GET /events` (`lab:read`) carries TWO **named** events
+  (contract delta 16): `lab` relays clab-api's live container events (distilled to
+  `{lab, node, action, timestamp}`) and `job` announces a job's submit and terminal state
+  (`{lab, job_id, kind, status, timestamp}` — a poke, never the result/error, which stay on the
+  record). Job events are born in-process, so they travel over a deliberately LOSSY broker
+  (`services/job_events.py`, one bounded queue per open stream): a stream that stopped reading
+  drops events rather than stalling the job runner. Both are filtered to the caller's readable
+  labs, auth resolved up front so the long-lived connection doesn't pin a DB session. There is NO
+  replay (no Last-Event-ID), so a reconnect misses whatever happened while it was down — consumers
+  watching a running job keep a slow fallback poll. A **web terminal**
   WebSocket at `WS /labs/{lab_name}/nodes/{node_name}/terminal?protocol=ssh|shell` (`lab:terminal`)
   proxies clab-api's terminal-session stream: it authorizes off the handshake credentials *before*
   accept and releases the DB session before the relay (same rule as `/events`), creates a clab-api

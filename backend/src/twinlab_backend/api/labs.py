@@ -868,7 +868,7 @@ async def deploy_lab(
             skip_config_time=body.skip_config_time_checks,
         )
 
-    spawn_job(http_request, job.id, work)
+    spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)
 
 
@@ -976,7 +976,7 @@ async def configure_nodes(
             session_factory, runner, library, lab_name, skip_config_time=skip
         )
 
-    spawn_job(http_request, job.id, work)
+    spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)
 
 
@@ -1076,7 +1076,7 @@ async def run_test_suite(
     async def work() -> SuiteReport:
         return await _suite_run_job(session_factory, runner, library, lab_name, suite)
 
-    spawn_job(http_request, job.id, work)
+    spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)
 
 
@@ -1189,7 +1189,7 @@ async def destroy_lab(
     async def work() -> DestroyResponse:
         return await _destroy_job(session_factory, clab, lab_name, remove=remove)
 
-    spawn_job(http_request, job.id, work)
+    spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)
 
 

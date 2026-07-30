@@ -1,4 +1,5 @@
-"""Job-model contract WITHOUT deploys: submit/read/wait, hiding, history.
+"""Job-model contract WITHOUT deploys: submit/read/wait, hiding, history,
+the cross-lab listing and the stream's job events.
 
 Cheap job sources on an undeployed lab:
 
@@ -11,13 +12,18 @@ Cheap job sources on an undeployed lab:
 Real deploy/configure jobs live in test_labs_deploy.py behind the marker.
 """
 
+import asyncio
+import contextlib
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from contextlib import aclosing
 
 import pytest
 from twinlab_client import (
     DestroyResponse,
     Job,
+    JobEvent,
+    LabEvent,
     SuiteReport,
     TestExpectation,
     TestSuite,
@@ -133,6 +139,91 @@ async def test_job_list_is_newest_first(admin: TwinlabClient, make_lab: LabFacto
 
     listed_one = await admin.list_jobs(lab.name, limit=1)
     assert [job.id for job in listed_one] == [second.id]
+
+
+async def test_all_jobs_spans_labs_and_filters_by_readability(
+    admin: TwinlabClient, make_lab: LabFactory, make_user_client: UserClientFactory
+) -> None:
+    # Delta 15: the fleet view finds a job without being told which lab it is
+    # on, and is filtered like the events stream — an outsider sees nothing of
+    # this lab (silently, since the route names no lab to hide).
+    lab = await make_lab(None)
+    job = await _suite_run_job(admin, lab.name)
+    _ = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+
+    fleet = await admin.list_all_jobs(limit=200)
+    mine = [entry for entry in fleet if entry.id == job.id]
+    assert len(mine) == 1
+    assert mine[0].lab_name == lab.name
+    assert [entry.created_at for entry in fleet] == sorted(
+        (entry.created_at for entry in fleet), reverse=True
+    )
+
+    _, outsider = await make_user_client(None)
+    assert all(entry.lab_name != lab.name for entry in await outsider.list_all_jobs(limit=200))
+
+
+async def test_all_jobs_excludes_removed_labs(
+    admin: TwinlabClient, unique: Callable[[str], str]
+) -> None:
+    # The approved trade-off: the fleet list follows GET /labs, so a
+    # destroy-with-remove job leaves it when its lab record goes — while
+    # staying readable by id, which is how its terminal state is collected.
+    lab = await admin.create_lab(unique("lab"))
+    job = await admin.destroy_lab(lab.name, remove=True)
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+
+    assert all(entry.id != job.id for entry in await admin.list_all_jobs(limit=200))
+    assert (await admin.get_job(lab.name, job.id)).status == "succeeded"
+
+
+async def test_all_jobs_rejects_an_out_of_range_limit(admin: TwinlabClient) -> None:
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.list_all_jobs(limit=500)
+    assert excinfo.value.status_code == 422
+
+
+async def _job_events_for(
+    stream: AsyncGenerator[LabEvent | JobEvent], lab: str, count: int
+) -> list[JobEvent]:
+    collected: list[JobEvent] = []
+    async for event in stream:
+        if isinstance(event, JobEvent) and event.lab == lab:
+            collected.append(event)
+            if len(collected) == count:
+                return collected
+    raise AssertionError("event stream ended before the expected job events")
+
+
+async def test_job_events_announce_submit_and_completion(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    # Delta 16: the stream reports a job's submission and its terminal state,
+    # so a watcher never has to poll. No containers involved — a suite run on
+    # an undeployed lab is a real job with a real terminal state.
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    _ = await admin.put_test_suites(lab.name, _TRIVIAL_SUITES)
+
+    async with aclosing(admin.events()) as stream:
+        listener = asyncio.create_task(_job_events_for(stream, lab.name, 2))
+        try:
+            # The stream carries no subscription signal; let it establish
+            # before submitting, or the "running" event races the connection.
+            await asyncio.sleep(1.0)
+            job = await admin.run_test_suite(lab.name, "bb-jobs")
+            events = await asyncio.wait_for(asyncio.shield(listener), timeout=JOB_WAIT)
+        finally:
+            _ = listener.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                _ = await listener
+
+    assert [event.status for event in events] == ["running", "succeeded"]
+    assert {event.job_id for event in events} == {job.id}
+    assert {event.kind for event in events} == {"suite_run"}
+    # A poke, not a report: the record is what carries the outcome.
+    assert isinstance((await admin.get_job(lab.name, job.id)).result, SuiteReport)
 
 
 async def test_no_job_history_across_revival(admin: TwinlabClient, make_lab: LabFactory) -> None:

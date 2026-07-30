@@ -485,12 +485,17 @@ class LabLinks:
 
 @dataclass(frozen=True, slots=True)
 class LabEvent:
-    """One SSE payload from `GET /events`."""
+    """One container-lifecycle payload from `GET /events`, carried by the
+    named SSE event ``lab``."""
 
     lab: str
     node: str | None
     action: str  # "create" | "start" | "stop" | "kill" | "die" | "destroy" | ...
     timestamp: str
+
+
+# `JobEvent`, the stream's other payload, is defined with the job shapes below
+# (it is typed by JobKind/JobStatus).
 
 
 # --------------------------------------------------------------------------- #
@@ -619,6 +624,25 @@ class Job:
     error: JobError | None
     created_at: datetime
     finished_at: datetime | None  # None while running
+
+
+@dataclass(frozen=True, slots=True)
+class JobEvent:
+    """One job-lifecycle payload from `GET /events`, carried by the named SSE
+    event ``job``.
+
+    A POKE, not a report: it says which job changed and to what, never the
+    job's `result`/`error` — read those with `get_job`. Emitted at submit
+    (status "running") and again at the terminal state; `timestamp` is the
+    job's `created_at` / `finished_at` respectively.
+
+    NOT a durable log: the stream has no replay (see `TwinlabClient.events`)."""
+
+    lab: str
+    job_id: UUID
+    kind: JobKind
+    status: JobStatus
+    timestamp: datetime
 
 
 # --------------------------------------------------------------------------- #

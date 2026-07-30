@@ -20,6 +20,7 @@ from twinlab_client import (
     DestroyResponse,
     Duration,
     Job,
+    JobEvent,
     LabDetail,
     LabEvent,
     SuiteReport,
@@ -51,9 +52,9 @@ async def _deployed_lab(admin: TwinlabClient, make_lab: LabFactory) -> LabDetail
     return await admin.get_lab(lab.name)
 
 
-async def _first_event_for(stream: AsyncGenerator[LabEvent], lab: str) -> LabEvent:
+async def _first_event_for(stream: AsyncGenerator[LabEvent | JobEvent], lab: str) -> LabEvent:
     async for event in stream:
-        if event.lab == lab:
+        if isinstance(event, LabEvent) and event.lab == lab:
             return event
     raise AssertionError("event stream ended without a matching event")
 

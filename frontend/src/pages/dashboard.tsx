@@ -66,7 +66,7 @@ export function DashboardPage() {
   useDocumentTitle('Dashboard')
   const { data: me } = useQuery(meQueryOptions)
   const { data: labs, isPending: labsPending } = useQuery(labsQueryOptions)
-  const recentJobs = useAllJobs({ maxLabs: 8 })
+  const recentJobs = useAllJobs({ limit: 10 })
 
   const canManageUsers = me?.permissions.includes(PERM_USER_MANAGE) ?? false
   const canManageGroups = me?.permissions.includes(PERM_GROUP_MANAGE) ?? false
@@ -121,7 +121,6 @@ export function DashboardPage() {
               jobs={recentJobs.jobs}
               isPending={recentJobs.isPending}
               isError={recentJobs.isError}
-              failedLabs={recentJobs.failedLabs}
               showLab
               limit={10}
             />

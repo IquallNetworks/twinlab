@@ -241,6 +241,10 @@ export const api = {
     request(`/labs/${encodeURIComponent(name)}/jobs/${jobId}`, jobSchema),
   listJobs: (name: string, limit = 20) =>
     request(`/labs/${encodeURIComponent(name)}/jobs?limit=${limit}`, jobListSchema),
+  // Every readable lab's recent jobs in one query (each job names its lab).
+  // Excludes removed labs, so a destroy-with-remove leaves this list when its
+  // record does — that job is followed by id on its own lab route.
+  listAllJobs: (limit = 50) => request(`/jobs?limit=${limit}`, jobListSchema),
   nodeAction: (name: string, node: string, action: NodeAction) =>
     request(
       `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/${action}`,

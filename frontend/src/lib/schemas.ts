@@ -422,3 +422,14 @@ export const labEventSchema = z.object({
   timestamp: z.string(),
 })
 export type LabEvent = z.infer<typeof labEventSchema>
+
+// The stream's other payload (SSE event name `job`): a poke saying which job
+// changed and to what — the record is read back from the jobs endpoints.
+export const jobEventSchema = z.object({
+  lab: z.string(),
+  job_id: z.string(),
+  kind: z.enum(['deploy', 'configure', 'destroy', 'suite_run']),
+  status: z.enum(['running', 'succeeded', 'failed']),
+  timestamp: z.string(),
+})
+export type JobEvent = z.infer<typeof jobEventSchema>

@@ -16,12 +16,12 @@ const STATUS_FILTERS = ['all', 'running', 'succeeded', 'failed'] as const
 type StatusFilter = (typeof STATUS_FILTERS)[number]
 
 /** The job center: recent async operations across every visible lab, newest
- * first, polling while any running job is in view. Aggregated client-side —
- * there is no cross-lab jobs endpoint yet. */
+ * first. Served by one cross-lab query and refreshed by the stream's job
+ * events, with a slow fallback poll while a running job is in view. */
 export function JobsPage() {
   useDocumentTitle('Operations')
   const queryClient = useQueryClient()
-  const { jobs, isPending, isError, failedLabs } = useAllJobs({ live: true })
+  const { jobs, isPending, isError } = useAllJobs({ live: true, limit: 100 })
   const [status, setStatus] = useState<StatusFilter>('all')
   const filtered = status === 'all' ? jobs : jobs.filter((job) => job.status === status)
 
@@ -55,7 +55,6 @@ export function JobsPage() {
           jobs={filtered}
           isPending={isPending}
           isError={isError}
-          failedLabs={failedLabs}
           onRetry={() => void queryClient.invalidateQueries({ queryKey: ['jobs'] })}
           showLab
         />

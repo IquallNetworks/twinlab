@@ -74,6 +74,29 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     states unknown). 409 ``no_definition`` on a bare created record. (wire
     today: no link surface — the frontend guesses links from the raw
     definition and the netem tests guess interface names.)
+15. Cross-lab job listing (APPROVED 2026-07-30): ``GET /jobs`` serves recent
+    jobs across every lab the caller may read, newest first — the view the
+    per-lab ``GET /labs/{name}/jobs`` cannot give. Any authenticated user,
+    filtered per lab like ``/events`` (a global ``lab:read`` sees all);
+    ``?limit=`` (default 20, max 200). Same ``Job`` shape, which already
+    carries ``lab_name``. Jobs of SOFT-DELETED labs are EXCLUDED, so a
+    destroy-with-remove job leaves the fleet list when its lab does — its
+    terminal state is read by id through the per-lab route, which stays
+    readable on a removed lab (delta 12). (wire today: no cross-lab route —
+    the frontend fans one query out per lab and merges client-side.)
+16. Job events on the SSE stream (APPROVED 2026-07-30): ``GET /events`` gains
+    job lifecycle events, so job completion no longer has to be discovered by
+    polling (this LIFTS the deferral recorded in delta 12). Events become
+    NAMED: ``event: lab`` for today's container-lifecycle payload,
+    ``event: job`` for the new ``JobEvent`` — a poke carrying
+    ``{lab, job_id, kind, status, timestamp}`` and NOT the job's
+    result/error, which the caller reads with ``get_job``. One event when a
+    job is submitted (status "running") and one when it reaches a terminal
+    state. Filtered by the same readable-lab set as lab events. There is no
+    replay (no Last-Event-ID), so a reconnect can miss events and consumers
+    keep a slow fallback poll. (wire today: every event is unnamed — a
+    default-``message`` container event; naming them is the breaking part of
+    this delta.)
 
 Conventions:
 
@@ -604,12 +627,19 @@ class LabLinks:
 
 @dataclass(frozen=True, slots=True)
 class LabEvent:
-    """One SSE payload from `GET /events`."""
+    """One container-lifecycle payload from `GET /events`.
+
+    PROPOSAL (delta 16, APPROVED): carried by the NAMED SSE event ``lab``
+    (wire today: the unnamed default event)."""
 
     lab: str
     node: str | None
     action: str  # "create" | "start" | "stop" | "kill" | "die" | "destroy" | ...
     timestamp: str
+
+
+# The other `GET /events` payload, `JobEvent`, is PROPOSED in the Job shapes
+# section below (it is typed by JobKind/JobStatus, defined there).
 
 
 # --------------------------------------------------------------------------- #
@@ -745,6 +775,28 @@ class Job:
     error: JobError | None
     created_at: datetime
     finished_at: datetime | None  # None while running
+
+
+@dataclass(frozen=True, slots=True)
+class JobEvent:
+    """PROPOSED (delta 16, APPROVED, not served yet) one job-lifecycle
+    payload from `GET /events`, carried by the NAMED SSE event ``job``.
+
+    A POKE, not a report: it says which job changed and to what, never the
+    job's `result`/`error` — read those with `get_job` (they are typed by
+    kind and would fork the shape if duplicated here).
+
+    Emitted twice per job: at submit (status "running") and when it reaches a
+    terminal state. `timestamp` is the job's `created_at` / `finished_at`
+    respectively, so the event carries the same instant the record does.
+
+    NOT a durable log: there is no replay on reconnect (see `events`)."""
+
+    lab: str
+    job_id: UUID
+    kind: JobKind
+    status: JobStatus
+    timestamp: str
 
 
 # --------------------------------------------------------------------------- #
@@ -1159,6 +1211,18 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         history — jobs don't leak across incarnations)."""
         raise NotImplementedError
 
+    async def list_all_jobs(self, *, limit: int = 20) -> list[Job]:
+        """PROPOSED (delta 15, APPROVED, not served yet) GET /jobs?limit= —
+        recent jobs across every lab the caller may read, newest first (each
+        `Job` names its `lab_name`). Any authenticated user; the per-lab
+        filter is the same readable set `events` uses, so this never leaks a
+        lab's existence. `limit` is 1-200 (422 outside).
+
+        Jobs of REMOVED labs are excluded: a destroy-with-remove job drops
+        out of this list when its lab record does, and its terminal state is
+        read with `get_job`, which stays readable on a removed lab."""
+        raise NotImplementedError
+
     async def wait_job(
         self,
         lab_name: str,
@@ -1332,16 +1396,27 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # AsyncGenerator, not AsyncIterator (implementation finding): callers that
     # abandon the stream early need a deterministic close (aclose /
     # contextlib.aclosing) so the underlying connection is released.
-    def events(self) -> AsyncGenerator[LabEvent, None]:
+    def events(self) -> AsyncGenerator[LabEvent | JobEvent, None]:
         """GET /events (SSE) — any authenticated user; filtered to readable
         labs (set refreshes ~30 s, so a mid-stream grant lags up to that).
         Iterate with `async for`; keepalives are consumed, not yielded.
 
-        Container-lifecycle events only: deploy/destroy jobs surface node
-        create/start/stop here as a side effect, but configure and suite-run
-        jobs emit NOTHING — job completion is discovered by polling
-        `get_job`, never by this stream. (SSE job-status events are deferred
-        — recorded in ROADMAP.)"""
+        PROPOSED (delta 16, APPROVED) two payloads, discriminated by the SSE
+        event NAME and yielded as a union (match with `isinstance`):
+
+          ``lab`` -> LabEvent   container lifecycle, relayed from
+                                containerlab. A configure or suite-run job
+                                touches no container, so it emits none.
+          ``job`` -> JobEvent   a job was submitted or reached a terminal
+                                state — the signal that replaces polling.
+
+        NOT a durable log: the stream has no replay (no Last-Event-ID), so a
+        reconnect silently misses whatever happened while it was down. A
+        consumer that must not miss a completion still reads the record —
+        `wait_job` polls for exactly this reason.
+
+        (wire today: one unnamed event carrying the LabEvent payload;
+        completion is discovered by polling only.)"""
         raise NotImplementedError
 
     def terminal(

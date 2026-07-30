@@ -12,7 +12,9 @@ from twinlab_client import (
     DeployResponse,
     Duration,
     Job,
+    JobEvent,
     LabDetail,
+    LabEvent,
     LabNodeState,
     Principal,
     SshAccess,
@@ -591,9 +593,10 @@ async def test_ready_parses_503_as_degraded(make_client: ClientFactory) -> None:
 
 async def test_events_yields_events_and_skips_keepalives(make_client: ClientFactory) -> None:
     body = (
-        'data: {"lab": "lab1", "node": "r1", "action": "start", "timestamp": "t1"}\n\n'
+        'event: lab\ndata: {"lab": "lab1", "node": "r1", "action": "start", "timestamp": "t1"}\n\n'
         ": keepalive\n\n"
-        'data: {"lab": "lab1", "node": null, "action": "destroy", "timestamp": "t2"}\n\n'
+        'event: lab\ndata: {"lab": "lab1", "node": null, "action": "destroy",'
+        ' "timestamp": "t2"}\n\n'
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -602,6 +605,62 @@ async def test_events_yields_events_and_skips_keepalives(make_client: ClientFact
 
     async with make_client(handler) as client:
         events = [event async for event in client.events()]
-    assert [event.action for event in events] == ["start", "destroy"]
-    assert events[0].node == "r1"
-    assert events[1].node is None
+    assert [event for event in events if not isinstance(event, LabEvent)] == []
+    lab_events = [event for event in events if isinstance(event, LabEvent)]
+    assert [event.action for event in lab_events] == ["start", "destroy"]
+    assert lab_events[0].node == "r1"
+    assert lab_events[1].node is None
+
+
+async def test_events_discriminates_job_events_by_name(make_client: ClientFactory) -> None:
+    # The two payloads share one stream; the SSE event NAME is what tells them
+    # apart (delta 16), so a job event must never be parsed as a lab event.
+    body = (
+        'event: lab\ndata: {"lab": "lab1", "node": "r1", "action": "start", "timestamp": "t1"}\n\n'
+        f'event: job\ndata: {{"lab": "lab1", "job_id": "{_JOB_ID}", "kind": "deploy",'
+        ' "status": "succeeded", "timestamp": "2026-07-30T12:00:00Z"}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with make_client(handler) as client:
+        events = [event async for event in client.events()]
+    assert isinstance(events[0], LabEvent)
+    job = events[1]
+    assert isinstance(job, JobEvent)
+    assert job.job_id == UUID(_JOB_ID)
+    assert job.kind == "deploy"
+    assert job.status == "succeeded"
+    assert job.lab == "lab1"
+
+
+async def test_events_skips_unknown_event_names(make_client: ClientFactory) -> None:
+    # Forward compatibility: a shape this client has no parser for is skipped,
+    # not fatal — the server may add events without breaking older callers.
+    body = (
+        'event: horoscope\ndata: {"sign": "leo"}\n\n'
+        'event: lab\ndata: {"lab": "lab1", "node": "r1", "action": "start", "timestamp": "t1"}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with make_client(handler) as client:
+        events = [event async for event in client.events()]
+    assert len(events) == 1
+    assert isinstance(events[0], LabEvent)
+
+
+async def test_list_all_jobs_reads_the_fleet_route(make_client: ClientFactory) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=[_job_wire()])
+
+    async with make_client(handler) as client:
+        jobs = await client.list_all_jobs(limit=50)
+    assert seen[0].url.path == "/api/v1/jobs"
+    assert seen[0].url.params["limit"] == "50"
+    assert [job.lab_name for job in jobs] == ["lab1"]

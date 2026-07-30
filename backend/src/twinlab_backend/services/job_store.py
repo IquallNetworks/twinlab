@@ -100,6 +100,31 @@ async def list_jobs(session: AsyncSession, lab_id: uuid.UUID, *, limit: int) -> 
     return list((await session.scalars(stmt)).all())
 
 
+async def list_recent_jobs(
+    session: AsyncSession, *, lab_ids: set[uuid.UUID] | None, limit: int
+) -> list[tuple[Job, str]]:
+    """Recent jobs ACROSS labs, newest first, each paired with its lab's name
+    (the caller renders `lab_name` and has no lab in hand).
+
+    `lab_ids=None` means "every lab" — a caller holding lab:read globally;
+    an empty set means the caller can read none, which is an empty list, not
+    everything. Jobs of removed labs are excluded, so this list follows the
+    lab listing: a destroy-with-remove job leaves when its record does."""
+    if lab_ids is not None and not lab_ids:
+        return []
+    stmt = (
+        select(Job, Lab.name)
+        .join(Lab, Job.lab_id == Lab.id)
+        .where(Lab.deleted_at.is_(None))
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(limit)
+    )
+    if lab_ids is not None:
+        stmt = stmt.where(Job.lab_id.in_(lab_ids))
+    rows = (await session.execute(stmt)).all()
+    return [(row[0], row[1]) for row in rows]
+
+
 async def prune_finished(
     session: AsyncSession, lab_id: uuid.UUID, *, keep: int = KEEP_FINISHED
 ) -> None:

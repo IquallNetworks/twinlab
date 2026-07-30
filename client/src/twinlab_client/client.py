@@ -33,6 +33,7 @@ from twinlab_client.models import (
     Grant,
     GroupSummary,
     Job,
+    JobEvent,
     LabActionResponse,
     LabDetail,
     LabEvent,
@@ -490,6 +491,18 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         payload = await self._send_json("GET", f"/labs/{lab_name}/jobs", params={"limit": limit})
         return [_wire.parse_job(v) for v in _wire.as_list(payload, "Job[]")]
 
+    async def list_all_jobs(self, *, limit: int = 20) -> list[Job]:
+        """GET /jobs?limit= — recent jobs across every lab the caller may read,
+        newest first (each `Job` names its `lab_name`). Any authenticated user;
+        the readable-lab filter is the events stream's, so an unreadable lab is
+        invisible rather than an error. `limit` is 1-200.
+
+        Jobs of REMOVED labs are excluded: a destroy-with-remove job drops out
+        of this list when its lab record does, and its terminal state is read
+        with `get_job`, which stays readable on a removed lab."""
+        payload = await self._send_json("GET", "/jobs", params={"limit": limit})
+        return [_wire.parse_job(v) for v in _wire.as_list(payload, "Job[]")]
+
     async def wait_job(
         self,
         lab_name: str,
@@ -693,21 +706,30 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # Streams
     # ------------------------------------------------------------------ #
 
-    def events(self) -> AsyncGenerator[LabEvent]:
+    def events(self) -> AsyncGenerator[LabEvent | JobEvent]:
         """GET /events (SSE) — any authenticated user; filtered to readable
         labs (set refreshes ~30 s, so a mid-stream grant lags up to that).
         Iterate with `async for`; keepalives are consumed, not yielded.
 
-        Container-lifecycle events only: deploy/destroy jobs surface node
-        create/start/stop here as a side effect, but configure and suite-run
-        jobs emit NOTHING — job completion is discovered by polling
-        `get_job`, never by this stream.
+        Two payloads, discriminated by the SSE event NAME and yielded as a
+        union (match with `isinstance`):
+
+          ``lab`` -> LabEvent   container lifecycle, relayed from
+                                containerlab. A configure or suite-run job
+                                touches no container, so it emits none.
+          ``job`` -> JobEvent   a job was submitted or reached a terminal
+                                state.
+
+        NOT a durable log: the stream has no replay, so a reconnect silently
+        misses whatever happened while it was down. A caller that must not
+        miss a completion still reads the record — `wait_job` polls for
+        exactly this reason.
 
         When abandoning the stream early, close it deterministically (e.g.
         `contextlib.aclosing`) so the underlying connection is released."""
         return self._event_stream()
 
-    async def _event_stream(self) -> AsyncGenerator[LabEvent]:
+    async def _event_stream(self) -> AsyncGenerator[LabEvent | JobEvent]:
         # No read timeout: the stream idles between events (keepalive comments
         # keep the connection alive, not the read clock).
         timeout = httpx.Timeout(self._timeout, read=None)
@@ -716,19 +738,32 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
                 _ = await response.aread()
                 raise error_from_response(response)
             data_lines: list[str] = []
+            name = ""
             async for line in response.aiter_lines():
-                if line.startswith("data:"):
+                if line.startswith("event:"):
+                    name = line[6:].strip()
+                elif line.startswith("data:"):
                     data_lines.append(line[5:].lstrip())
                 elif line == "" and data_lines:
                     payload_text = "\n".join(data_lines)
                     data_lines = []
+                    event_name, name = name, ""
                     try:
                         payload: object = json.loads(payload_text)
                     except ValueError as exc:
                         raise TwinlabProtocolError(
                             "/events", f"non-JSON event: {payload_text[:80]!r}"
                         ) from exc
-                    yield _wire.parse_lab_event(payload)
+                    match event_name:
+                        case "lab":
+                            yield _wire.parse_lab_event(payload)
+                        case "job":
+                            yield _wire.parse_job_event(payload)
+                        case _:
+                            # An event we have no shape for: skip it rather
+                            # than fail the stream, so the server can add one
+                            # without breaking older clients.
+                            continue
                 # comments (": keepalive") and other SSE fields are consumed
 
     def terminal(

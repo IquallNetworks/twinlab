@@ -31,7 +31,6 @@ export function JobsTable({
   jobs,
   isPending,
   isError,
-  failedLabs = 0,
   onRetry,
   showLab = false,
   limit,
@@ -39,8 +38,6 @@ export function JobsTable({
   jobs: Job[]
   isPending: boolean
   isError: boolean
-  /** Aggregate views: how many labs' queries failed while others succeeded. */
-  failedLabs?: number
   onRetry?: () => void
   showLab?: boolean
   limit?: number
@@ -53,12 +50,6 @@ export function JobsTable({
 
   return (
     <>
-      {!isError && failedLabs > 0 && (
-        <p className="px-3 pt-2 text-xs text-destructive">
-          Couldn&apos;t load operations for {failedLabs} {failedLabs === 1 ? 'lab' : 'labs'} — the
-          list is partial.
-        </p>
-      )}
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">

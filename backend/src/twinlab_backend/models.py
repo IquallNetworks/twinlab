@@ -466,10 +466,27 @@ class LabLinksResponse(BaseModel):
 
 
 class LabEvent(BaseModel):
-    """A lab lifecycle event relayed from clab-api as the SSE payload; the frontend
-    invalidates the affected lab's queries on each one."""
+    """A lab lifecycle event relayed from clab-api, carried by the SSE stream's
+    named `lab` event; the frontend invalidates the affected lab's queries on
+    each one."""
 
     lab: str
     node: str | None
     action: str  # container action: create | start | stop | kill | die | destroy | …
     timestamp: str
+
+
+class JobEvent(BaseModel):
+    """A job lifecycle event (contract delta 16), carried by the SSE stream's
+    named `job` event: one at submit (status "running"), one at the terminal
+    state.
+
+    A POKE, not a report — no result/error, which are typed by kind and read
+    with `GET /labs/{lab}/jobs/{job_id}`. `timestamp` is the job's created_at
+    or finished_at, so the event carries the same instant the record does."""
+
+    lab: str
+    job_id: uuid.UUID
+    kind: JobKind
+    status: JobStatus
+    timestamp: datetime

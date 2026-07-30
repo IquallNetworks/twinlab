@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { CodeEditor } from '@/components/code-editor'
 import { api } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { customConfigQueryOptions } from '@/lib/queries'
 import type { BuiltinTemplate } from '@/lib/schemas'
 
@@ -79,7 +80,7 @@ function TemplatesEditor({ name, filesetJson }: { name: string; filesetJson: str
       toast.success('Saved custom config')
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to save templates'),
+    onError: (err) => toastError(err, 'Failed to save templates'),
   })
 
   function onSave() {

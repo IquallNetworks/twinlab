@@ -23,6 +23,7 @@ import {
   PERM_LAB_DESTROY,
   PERM_LAB_EDIT,
 } from '@/lib/lab-permissions'
+import { toastError } from '@/lib/error-toast'
 import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
 import { configureResponseSchema, type LabDetail } from '@/lib/schemas'
 
@@ -56,7 +57,7 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
         toast.success(`Configured ${result.lab_name} (${result.configuration.length} nodes)`)
       }
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Configure failed'),
+    onError: (err) => toastError(err, 'Configure failed'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
   })
 
@@ -67,7 +68,7 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
       toast.success(`Destroyed ${name}`)
       await navigate({ to: '/labs' })
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Destroy failed'),
+    onError: (err) => toastError(err, 'Destroy failed'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
   })
 
@@ -78,7 +79,7 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
       toast.success(`Deleted ${name}`)
       await navigate({ to: '/labs' })
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+    onError: (err) => toastError(err, 'Delete failed'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
   })
 

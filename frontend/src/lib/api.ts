@@ -141,6 +141,13 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   logout: () => requestVoid('/auth/logout', { method: 'POST' }),
+  // Self-service change: needs the current password (403 invalid_credentials if
+  // wrong). Keeps THIS session and revokes the user's others, so no re-login.
+  changePassword: (currentPassword: string, newPassword: string) =>
+    requestVoid('/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
 
   listUsers: () => request('/users', userListSchema),
   createUser: (input: CreateUserInput) =>

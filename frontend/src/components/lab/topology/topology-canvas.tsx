@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
 
-import { CurrentImpairments, NetemForm, useSetNetem } from '@/components/lab/netem-form'
+import { LinkImpairment } from '@/components/lab/link-impairment'
 import { NodeConnectDrawer } from '@/components/lab/node-connect-drawer'
 import { NodeControls } from '@/components/lab/node-controls'
 import { Badge } from '@/components/ui/badge'
@@ -32,7 +32,7 @@ import {
   PERM_LAB_TERMINAL,
 } from '@/lib/lab-permissions'
 import { labLinksQueryOptions, nodeNetemQueryOptions } from '@/lib/queries'
-import type { LabDetail, LabLink, LinkEndpoint, LinkOperState } from '@/lib/schemas'
+import type { LabDetail, LabLink, LinkOperState } from '@/lib/schemas'
 import type { ParsedTopology } from '@/lib/topology'
 
 import { DeviceNode } from './device-node'
@@ -235,54 +235,6 @@ function buildGraph(
 type Selection = { kind: 'node'; id: string } | { kind: 'link'; index: number }
 
 const LINK_ID = /^link:(\d+)/
-
-/** One endpoint's impairment controls inside the link panel: the current
- * impairment on exactly this interface, plus the set form when permitted.
- * Needs a live namespace, so not-running endpoints get the no-actions copy. */
-function EndpointNetem({
-  name,
-  endpoint,
-  running,
-  canConfigure,
-}: {
-  name: string
-  endpoint: LinkEndpoint
-  running: boolean
-  canConfigure: boolean
-}) {
-  const [resetting, setResetting] = useState<string | null>(null)
-  const reset = useSetNetem(name)
-  if (!running) {
-    return <span className="text-muted-foreground text-xs">Not running — no impairment control.</span>
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      <CurrentImpairments
-        name={name}
-        node={endpoint.node}
-        enabled
-        interfaceFilter={endpoint.interface}
-        onReset={(iface) => {
-          setResetting(iface)
-          reset.mutate(
-            { node: endpoint.node, input: { interface: iface } },
-            { onSettled: () => setResetting(null) },
-          )
-        }}
-        resetting={resetting}
-      />
-      {canConfigure ? (
-        <NetemForm
-          name={name}
-          node={endpoint.node}
-          iface={endpoint.interface}
-          canConfigure
-          idPrefix={`edge-${endpoint.node}-${endpoint.interface}`}
-        />
-      ) : null}
-    </div>
-  )
-}
 
 function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopology }) {
   const { resolvedTheme } = useTheme()
@@ -555,12 +507,11 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
                 {selectedLink.oper_state}
               </Badge>
             </div>
-            {selectedLink.endpoints.map((endpoint) => (
-              <div
-                key={`${endpoint.node}:${endpoint.interface}`}
-                className="flex flex-col gap-2 border-t pt-2"
-              >
-                <div className="flex items-center gap-2">
+            {/* Endpoints are read-only facts; shaping them is one control
+                below, bidirectional unless the user opens Advanced. */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-2">
+              {selectedLink.endpoints.map((endpoint) => (
+                <div key={`${endpoint.node}:${endpoint.interface}`} className="flex items-center gap-2">
                   <span className="font-mono text-xs font-medium">
                     {endpoint.node}:{endpoint.interface}
                   </span>
@@ -579,16 +530,16 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
                     {endpoint.state ?? 'unknown'}
                   </Badge>
                 </div>
-                <EndpointNetem
-                  name={lab.name}
-                  endpoint={endpoint}
-                  running={
-                    lab.nodes.find((node) => node.name === endpoint.node)?.state === 'running'
-                  }
-                  canConfigure={can(PERM_LAB_CONFIGURE)}
-                />
-              </div>
-            ))}
+              ))}
+            </div>
+            <div className="border-t pt-2">
+              <LinkImpairment
+                name={lab.name}
+                link={selectedLink}
+                nodes={lab.nodes}
+                canConfigure={can(PERM_LAB_CONFIGURE)}
+              />
+            </div>
           </div>
         </Panel>
       )}

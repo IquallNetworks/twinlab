@@ -42,6 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api, waitJob } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { formatDateTime } from '@/lib/format'
 import { labsQueryOptions, meQueryOptions } from '@/lib/queries'
 import { useDocumentTitle } from '@/lib/use-document-title'
@@ -83,7 +84,7 @@ function CreateLabDialog({
       onOpenChange(false)
       await navigate({ to: '/labs/$name', params: { name: lab.name } })
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Create failed'),
+    onError: (err) => toastError(err, 'Create failed'),
   })
 
   const form = useForm({
@@ -175,7 +176,7 @@ function DeleteLabAction({ name }: { name: string }) {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
       toast.success(`Deleted ${name}`)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+    onError: (err) => toastError(err, 'Delete failed'),
   })
 
   return (

@@ -1,7 +1,9 @@
+import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Download, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import {
   AlertDialog,
@@ -14,10 +16,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import { FieldError } from '@/components/field-error'
+import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -36,8 +41,9 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { api } from '@/lib/api'
+import { ApiError, api } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
+import { toastError } from '@/lib/error-toast'
 import { formatDateTime } from '@/lib/format'
 import { apiKeysQueryOptions, sshAccessQueryOptions, sshKeysQueryOptions } from '@/lib/queries'
 import { JUMP_HOST_ALIAS, jumpCoordinates, sshConfigBlock } from '@/lib/ssh'
@@ -115,6 +121,165 @@ function DeleteKeyAction({
   )
 }
 
+// The 8-character floor mirrors the server's own `new_password` constraint;
+// confirm-match is ours (the wire takes a single new password).
+const changePasswordSchema = z
+  .object({
+    current: z.string().min(1, 'Enter your current password'),
+    next: z.string().min(8, 'Password must be at least 8 characters'),
+    confirm: z.string(),
+  })
+  .refine((value) => value.next === value.confirm, {
+    message: 'Passwords do not match',
+    path: ['confirm'],
+  })
+
+/** Self-service password change. The current password is required, and the
+ * change keeps THIS session while revoking the user's others — so it ends with
+ * a toast, not a redirect to /login. */
+function PasswordCard() {
+  const [open, setOpen] = useState(false)
+  // Only the server can judge the current password; a 403 belongs on that field
+  // rather than in a toast the user has to map back to an input.
+  const [currentError, setCurrentError] = useState<string | null>(null)
+
+  const change = useMutation({
+    mutationFn: (value: z.infer<typeof changePasswordSchema>) =>
+      api.changePassword(value.current, value.next),
+    onSuccess: () => {
+      toast.success('Password changed — your other sessions were signed out')
+      setOpen(false)
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 403) {
+        setCurrentError(err.message)
+        return
+      }
+      toastError(err, 'Could not change password')
+    },
+  })
+
+  const form = useForm({
+    defaultValues: { current: '', next: '', confirm: '' },
+    validators: { onSubmit: changePasswordSchema },
+    onSubmit: ({ value }) => change.mutate(value),
+  })
+
+  function onOpenChange(next: boolean) {
+    setOpen(next)
+    if (!next) {
+      form.reset()
+      setCurrentError(null)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">Password</CardTitle>
+        <Dialog open={open} onOpenChange={onOpenChange}>
+          <DialogTrigger asChild>
+            <Button variant="outline" size="sm">
+              Change password
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                void form.handleSubmit()
+              }}
+            >
+              <DialogHeader>
+                <DialogTitle>Change password</DialogTitle>
+                <DialogDescription>
+                  Confirm your current password. You stay signed in here; your other sessions are
+                  signed out.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="flex flex-col gap-4 py-4">
+                <form.Field name="current">
+                  {(field) => (
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor={field.name}>Current password</Label>
+                      <PasswordInput
+                        id={field.name}
+                        autoComplete="current-password"
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(e) => {
+                          setCurrentError(null) // the server verdict is stale once it's retyped
+                          field.handleChange(e.target.value)
+                        }}
+                        aria-invalid={currentError !== null}
+                      />
+                      <FieldError errors={field.state.meta.errors} />
+                      {currentError !== null ? (
+                        <p className="text-destructive text-sm">{currentError}</p>
+                      ) : null}
+                    </div>
+                  )}
+                </form.Field>
+
+                <form.Field name="next">
+                  {(field) => (
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor={field.name}>New password</Label>
+                      <PasswordInput
+                        id={field.name}
+                        autoComplete="new-password"
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(e) => field.handleChange(e.target.value)}
+                      />
+                      <FieldError errors={field.state.meta.errors} />
+                    </div>
+                  )}
+                </form.Field>
+
+                <form.Field name="confirm">
+                  {(field) => (
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor={field.name}>Confirm new password</Label>
+                      <PasswordInput
+                        id={field.name}
+                        autoComplete="new-password"
+                        value={field.state.value}
+                        onBlur={field.handleBlur}
+                        onChange={(e) => field.handleChange(e.target.value)}
+                      />
+                      <FieldError errors={field.state.meta.errors} />
+                    </div>
+                  )}
+                </form.Field>
+              </div>
+
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button type="button" variant="outline">
+                    Cancel
+                  </Button>
+                </DialogClose>
+                <Button type="submit" disabled={change.isPending}>
+                  {change.isPending ? 'Changing…' : 'Change password'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent>
+        <p className="text-muted-foreground text-sm">
+          The password you sign in with. API keys and SSH keys are separate credentials and are not
+          affected by a change here.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 function ApiKeysCard() {
   const queryClient = useQueryClient()
   const { data: keys, isPending, isError, error } = useQuery(apiKeysQueryOptions)
@@ -128,7 +293,7 @@ function ApiKeysCard() {
       await queryClient.invalidateQueries({ queryKey: apiKeysQueryOptions.queryKey })
       setSecret(created.key)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Create failed'),
+    onError: (err) => toastError(err, 'Create failed'),
   })
 
   const del = useMutation({
@@ -137,7 +302,7 @@ function ApiKeysCard() {
       await queryClient.invalidateQueries({ queryKey: apiKeysQueryOptions.queryKey })
       toast.success('API key revoked')
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Revoke failed'),
+    onError: (err) => toastError(err, 'Revoke failed'),
   })
 
   function onOpenChange(next: boolean) {
@@ -172,6 +337,7 @@ function ApiKeysCard() {
                   <Label htmlFor="api-key-name">Name</Label>
                   <Input
                     id="api-key-name"
+                    maxLength={64}
                     value={name}
                     autoComplete="off"
                     placeholder="ci-runner"
@@ -274,7 +440,7 @@ function RegisterSshKeyDialog() {
       toast.success(`Registered ${key.name} (${key.fingerprint})`)
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Register failed'),
+    onError: (err) => toastError(err, 'Register failed'),
   })
 
   function onOpenChange(next: boolean) {
@@ -305,6 +471,7 @@ function RegisterSshKeyDialog() {
             <Label htmlFor="ssh-key-name">Name</Label>
             <Input
               id="ssh-key-name"
+              maxLength={64}
               value={name}
               autoComplete="off"
               placeholder="laptop"
@@ -315,6 +482,7 @@ function RegisterSshKeyDialog() {
             <Label htmlFor="ssh-key-public">Public key</Label>
             <Textarea
               id="ssh-key-public"
+              maxLength={16384}
               className="min-h-24 font-mono text-xs"
               placeholder="ssh-ed25519 AAAA… user@host"
               value={publicKey}
@@ -353,7 +521,7 @@ function GenerateSshKeyDialog() {
       await queryClient.invalidateQueries({ queryKey: sshKeysQueryOptions.queryKey })
       setPrivateKey(generated.private_key)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Generate failed'),
+    onError: (err) => toastError(err, 'Generate failed'),
   })
 
   function onOpenChange(next: boolean) {
@@ -385,6 +553,7 @@ function GenerateSshKeyDialog() {
               <Label htmlFor="ssh-gen-name">Name</Label>
               <Input
                 id="ssh-gen-name"
+                maxLength={64}
                 value={name}
                 autoComplete="off"
                 placeholder="laptop"
@@ -437,7 +606,7 @@ function SshKeysCard() {
       await queryClient.invalidateQueries({ queryKey: sshKeysQueryOptions.queryKey })
       toast.success('SSH key deleted')
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+    onError: (err) => toastError(err, 'Delete failed'),
   })
 
   return (
@@ -531,13 +700,15 @@ function SshKeysCard() {
   )
 }
 
-/** Self-service credentials: API keys (Bearer) and SSH keys for the jump host.
- * No permission gate — every authenticated user manages their own. */
+/** Self-service credentials: the sign-in password, API keys (Bearer) and SSH
+ * keys for the jump host. No permission gate — every authenticated user manages
+ * their own. */
 export function AccountPage() {
   useDocumentTitle('Account')
   return (
     <div className="flex flex-col gap-6">
       <h1 className="font-heading text-2xl font-semibold">Account</h1>
+      <PasswordCard />
       <ApiKeysCard />
       <SshKeysCard />
     </div>

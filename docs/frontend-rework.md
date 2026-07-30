@@ -263,3 +263,13 @@ Frontend-driven wants that surfaced in this roadmap:
 - **Deployed-definition snapshot** — enables "definition drifted since deploy" hints.
 - **Server-side topology layout** — a layout field on the lab record, so a manually arranged
   topology is shared across users/browsers (today it persists per browser in localStorage).
+- **Self password change on the Account page** — **DONE 2026-07-30** (frontend-only; no contract
+  change). A Password card heads the Account page with a TanStack Form dialog over
+  `PUT /auth/password` (`api.changePassword`): current + new + confirm, zod-validated with the
+  server's own 8-character floor and a confirm-match refinement. The current password can only be
+  judged by the server, so a **403 `invalid_credentials` renders inline on that field** (cleared on
+  retype) instead of as a toast the user has to map back to an input; every other failure goes
+  through `toastError`. The change keeps the calling session and revokes the user's others, so it
+  ends in a toast saying so — no redirect to `/login`. Wire behavior verified live against the
+  stack: wrong current → 403, short new → 422, valid → 204 with the session still authenticated,
+  old password refused at login.

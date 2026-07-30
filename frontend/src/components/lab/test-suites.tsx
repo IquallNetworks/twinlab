@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { api, waitJob } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { formatDateTime, testStatusBadgeVariant } from '@/lib/format'
 import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
 import { suiteReportSchema, type SuiteReport, type TestSuite } from '@/lib/schemas'
@@ -149,7 +150,7 @@ function SuitesEditor({ name, suitesJson }: { name: string; suitesJson: string }
       toast.success('Saved test suites')
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to save suites'),
+    onError: (err) => toastError(err, 'Failed to save suites'),
   })
 
   function onSave() {
@@ -237,7 +238,7 @@ export function TestSuites({
       if (ok) toast.success(message)
       else toast.error(message)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Run failed'),
+    onError: (err) => toastError(err, 'Run failed'),
     onSettled: () => {
       setRunning(null)
       void queryClient.invalidateQueries({ queryKey: ['jobs', name] })

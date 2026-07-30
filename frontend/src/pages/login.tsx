@@ -1,17 +1,18 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { FieldError } from '@/components/field-error'
 import { IdentitySwitcher, ThemeToggle } from '@/components/identity-switcher'
+import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Wordmark } from '@/components/wordmark'
 import { api } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { meQueryOptions } from '@/lib/queries'
 import { useDocumentTitle } from '@/lib/use-document-title'
 
@@ -31,7 +32,7 @@ export function LoginPage() {
       queryClient.setQueryData(meQueryOptions.queryKey, info)
       await navigate({ to: '/' })
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Login failed'),
+    onError: (err) => toastError(err, 'Login failed'),
   })
 
   const form = useForm({
@@ -91,10 +92,9 @@ export function LoginPage() {
                 {(field) => (
                   <div className="flex flex-col gap-2">
                     <Label htmlFor={field.name}>Password</Label>
-                    <Input
+                    <PasswordInput
                       id={field.name}
                       name={field.name}
-                      type="password"
                       autoComplete="current-password"
                       value={field.state.value}
                       onBlur={field.handleBlur}

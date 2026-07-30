@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 
 import { IdentitySwitcher, ThemeToggle } from '@/components/identity-switcher'
 import { LabStatusBadge } from '@/components/lab/status-badge'
+import { PasswordInput } from '@/components/password-input'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -63,6 +64,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Wordmark } from '@/components/wordmark'
+import { ApiError } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { jobStatusBadgeVariant } from '@/lib/format'
 import { IDENTITY_LABELS, useIdentity } from '@/lib/identity'
 import { useDocumentTitle } from '@/lib/use-document-title'
@@ -194,6 +197,10 @@ export function StyleguidePage() {
           <div className="flex flex-col gap-2">
             <Label htmlFor="sg-name">Lab name</Label>
             <Input id="sg-name" className="font-mono" placeholder="mpls-l3vpn" />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="sg-password">Password</Label>
+            <PasswordInput id="sg-password" defaultValue="hunter2-but-longer" />
           </div>
           <div className="flex flex-col gap-2">
             <Label>Device</Label>
@@ -345,7 +352,17 @@ export function StyleguidePage() {
           </Button>
           <Button
             variant="outline"
-            onClick={() => toast.error('job_in_flight: another operation is running on this lab')}
+            onClick={() =>
+              // The real error path: message + Copy action carrying the wire
+              // facts (status/code/extras) for a paste-able report.
+              toastError(
+                new ApiError(409, 'another operation is running on this lab', 'job_in_flight', {
+                  job_id: '0198f2ab-demo',
+                  kind: 'deploy',
+                }),
+                'Operation failed',
+              )
+            }
           >
             Error toast
           </Button>

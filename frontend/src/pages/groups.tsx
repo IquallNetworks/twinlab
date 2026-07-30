@@ -38,6 +38,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { groupsQueryOptions, principalsQueryOptions, rolesQueryOptions } from '@/lib/queries'
 import { globalRoles } from '@/lib/roles'
 import type { GroupSummary } from '@/lib/schemas'
@@ -57,7 +58,10 @@ function CreateGroupDialog() {
   const queryClient = useQueryClient()
 
   const create = useMutation({
-    mutationFn: () => api.createGroup(name, description),
+    // Trimmed on the way out, like the other name forms: the server's
+    // min_length=1 accepts a lone space, so only the client can keep a
+    // whitespace-only group name out of the catalog.
+    mutationFn: () => api.createGroup(name.trim(), description.trim()),
     onSuccess: async (group) => {
       await queryClient.invalidateQueries({ queryKey: groupsQueryOptions.queryKey })
       toast.success(`Created group ${group.name}`)
@@ -65,7 +69,7 @@ function CreateGroupDialog() {
       setName('')
       setDescription('')
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not create group'),
+    onError: (err) => toastError(err, 'Could not create group'),
   })
 
   return (
@@ -81,12 +85,18 @@ function CreateGroupDialog() {
         <div className="flex flex-col gap-4 py-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="group-name">Name</Label>
-            <Input id="group-name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Input
+              id="group-name"
+              maxLength={64}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="group-desc">Description</Label>
             <Input
               id="group-desc"
+              maxLength={255}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
@@ -98,7 +108,7 @@ function CreateGroupDialog() {
               Cancel
             </Button>
           </DialogClose>
-          <Button onClick={() => create.mutate()} disabled={name === '' || create.isPending}>
+          <Button onClick={() => create.mutate()} disabled={name.trim() === '' || create.isPending}>
             {create.isPending ? 'Creating…' : 'Create'}
           </Button>
         </DialogFooter>
@@ -120,7 +130,7 @@ function EditMembersDialog({ group }: { group: GroupSummary }) {
       toast.success(`Updated members of ${group.name}`)
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not update members'),
+    onError: (err) => toastError(err, 'Could not update members'),
   })
 
   return (
@@ -187,7 +197,7 @@ function EditGroupRolesDialog({ group }: { group: GroupSummary }) {
       toast.success(`Updated roles for ${group.name}`)
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not update roles'),
+    onError: (err) => toastError(err, 'Could not update roles'),
   })
 
   return (
@@ -248,7 +258,7 @@ function DeleteGroupButton({ group }: { group: GroupSummary }) {
       await queryClient.invalidateQueries({ queryKey: groupsQueryOptions.queryKey })
       toast.success(`Deleted group ${group.name}`)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not delete group'),
+    onError: (err) => toastError(err, 'Could not delete group'),
   })
   return (
     <AlertDialog>

@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { labInterfacesQueryOptions, labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import type { FreezeAction, LifecycleAction } from '@/lib/schemas'
 
@@ -29,7 +30,7 @@ export function LabLifecycleControls({ name }: { name: string }) {
       await invalidate()
       toast.success(result.message)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Action failed'),
+    onError: (err) => toastError(err, 'Action failed'),
   })
 
   // Whole-lab freeze fans pause/unpause out over the nodes (non-atomic).
@@ -39,13 +40,13 @@ export function LabLifecycleControls({ name }: { name: string }) {
       await invalidate()
       toast.success(result.message)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Action failed'),
+    onError: (err) => toastError(err, 'Action failed'),
   })
 
   const save = useMutation({
     mutationFn: () => api.saveLabConfig(name),
     onSuccess: (result) => toast.success(result.message || `Saved config for ${name}`),
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Save failed'),
+    onError: (err) => toastError(err, 'Save failed'),
   })
 
   const busy = action.isPending || freeze.isPending || save.isPending

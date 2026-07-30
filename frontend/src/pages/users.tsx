@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { FieldError } from '@/components/field-error'
+import { PasswordInput } from '@/components/password-input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -30,6 +31,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { rolesQueryOptions, usersQueryOptions } from '@/lib/queries'
 import { globalRoles } from '@/lib/roles'
 import type { UserSummary } from '@/lib/schemas'
@@ -93,7 +95,7 @@ function CreateUserDialog() {
       toast.success(`Created user ${user.username}`)
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not create user'),
+    onError: (err) => toastError(err, 'Could not create user'),
   })
 
   const form = useForm({
@@ -148,9 +150,8 @@ function CreateUserDialog() {
               {(field) => (
                 <div className="flex flex-col gap-2">
                   <Label htmlFor={field.name}>Password</Label>
-                  <Input
+                  <PasswordInput
                     id={field.name}
-                    type="password"
                     autoComplete="new-password"
                     value={field.state.value}
                     onBlur={field.handleBlur}
@@ -212,7 +213,7 @@ function EditRolesDialog({ user }: { user: UserSummary }) {
       toast.success(`Updated roles for ${user.username}`)
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not update roles'),
+    onError: (err) => toastError(err, 'Could not update roles'),
   })
 
   return (

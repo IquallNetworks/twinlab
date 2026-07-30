@@ -29,6 +29,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, ApiError } from '@/lib/api'
 import { emitBuildDoc, emptyBuildDoc, parseBuildDoc } from '@/lib/build-doc'
+import { toastError } from '@/lib/error-toast'
 import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
 import { labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import type { LabDetail } from '@/lib/schemas'
@@ -138,7 +139,7 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
     },
     onError: (err) => {
       if (err instanceof ApiError && err.code === 'netlab_invalid') setSaveError(err)
-      else toast.error(err instanceof Error ? err.message : 'Save failed')
+      else toastError(err, 'Save failed')
     },
   })
 

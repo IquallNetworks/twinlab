@@ -29,6 +29,7 @@ import {
   principalsQueryOptions,
   rolesQueryOptions,
 } from '@/lib/queries'
+import { toastError } from '@/lib/error-toast'
 import { labRoles } from '@/lib/roles'
 import type { Principal } from '@/lib/schemas'
 
@@ -62,7 +63,7 @@ export function LabAccess({ name, owner }: { name: string; owner: Principal | nu
       setRole('')
       toast.success('Access granted')
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Grant failed'),
+    onError: (err) => toastError(err, 'Grant failed'),
   })
 
   const removeGrant = useMutation({
@@ -71,7 +72,7 @@ export function LabAccess({ name, owner }: { name: string; owner: Principal | nu
       await invalidateGrants()
       toast.success('Access removed')
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not remove access'),
+    onError: (err) => toastError(err, 'Could not remove access'),
   })
 
   const transfer = useMutation({
@@ -84,7 +85,7 @@ export function LabAccess({ name, owner }: { name: string; owner: Principal | nu
       setNewOwner('')
       toast.success('Ownership transferred')
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Transfer failed'),
+    onError: (err) => toastError(err, 'Transfer failed'),
   })
 
   const canAdd = principalId !== '' && role !== '' && !addGrant.isPending

@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { api, waitJob } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { labInterfacesQueryOptions, labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import { deployResponseSchema } from '@/lib/schemas'
 
@@ -59,7 +60,7 @@ export function DeployDialog({
       }
       setOpen(false)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Deploy failed'),
+    onError: (err) => toastError(err, 'Deploy failed'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
   })
 

@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { api } from '@/lib/api'
+import { toastError } from '@/lib/error-toast'
 import { labInterfacesQueryOptions, labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import type { NodeAction } from '@/lib/schemas'
 
@@ -46,7 +47,7 @@ export function NodeControls({
       ])
       toast.success(result.message)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Action failed'),
+    onError: (err) => toastError(err, 'Action failed'),
   })
 
   return (

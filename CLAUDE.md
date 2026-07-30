@@ -46,9 +46,14 @@ it, and contract changes go through review.
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
 
-- **`frontend/`** — Vite + React + TypeScript (pnpm). **A working prototype on the v1.0 wire**
-  (step 1 of the two-step frontend rework; step 2 — a from-zero rebuild — is still ahead, so
-  polish is deliberately deferred). Its dev server proxies `/api/v1` to the
+- **`frontend/`** — Vite + React + TypeScript (pnpm). **A working prototype on the v1.0 wire,
+  being rebuilt in place** (step 2 of the frontend rework, phased in `docs/frontend-rework.md`;
+  Phase 1 — graphical identity — is done: identities are CSS token packs keyed off
+  `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk + IBM Plex
+  Mono, faint line-grid canvas) is the chosen design system and Blueprint is shelved-but-
+  selectable; the twin-diamond wordmark is the logo; header chrome has its own `--id-header-*`
+  tokens; fonts are self-hosted @fontsource (OFL); shell, login and labs list are rebuilt on it
+  and a dev-only `/styleguide` gallery renders every primitive). Its dev server proxies `/api/v1` to the
   backend (`VITE_PROXY_TARGET`, default `http://localhost:8000`). UI stack: **shadcn/ui** (radix
   base) on Tailwind v4, the **TanStack** family (Query for data, Router in code-based mode for
   routing, Form for forms) and **zod** for validation. It covers the current backend scope —

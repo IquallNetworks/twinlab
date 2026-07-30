@@ -1,12 +1,13 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { FieldError } from '@/components/field-error'
+import { LabStatusBadge } from '@/components/lab/status-badge'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,7 +19,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -42,7 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api, waitJob } from '@/lib/api'
-import { formatDateTime, statusBadgeVariant } from '@/lib/format'
+import { formatDateTime } from '@/lib/format'
 import { labsQueryOptions, meQueryOptions } from '@/lib/queries'
 
 const PERM_LAB_CREATE = 'lab:create'
@@ -96,7 +96,10 @@ function CreateLabDialog() {
       }}
     >
       <DialogTrigger asChild>
-        <Button>New lab</Button>
+        <Button>
+          <Plus className="size-4" />
+          New lab
+        </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <form
@@ -107,7 +110,7 @@ function CreateLabDialog() {
           }}
         >
           <DialogHeader>
-            <DialogTitle>New lab</DialogTitle>
+            <DialogTitle className="font-heading">New lab</DialogTitle>
             <DialogDescription>
               Name the lab. You author its netlab definition and deploy it from the lab page — the
               name is its durable identity.
@@ -174,7 +177,7 @@ function DeleteLabAction({ name }: { name: string }) {
         <Button
           variant="ghost"
           size="icon"
-          className="text-muted-foreground hover:text-destructive size-8"
+          className="size-8 text-muted-foreground hover:text-destructive"
           disabled={del.isPending}
           title={`Delete ${name}`}
         >
@@ -211,79 +214,96 @@ export function LabsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Labs</h1>
+      <div className="flex items-end justify-between">
+        <div className="flex items-baseline gap-3">
+          <h1 className="font-heading text-2xl font-semibold">Labs</h1>
+          {labs && (
+            <span className="font-mono text-xs text-muted-foreground">
+              {labs.length} {labs.length === 1 ? 'record' : 'records'}
+            </span>
+          )}
+        </div>
         {canCreate && <CreateLabDialog />}
       </div>
 
       {isError ? (
-        <p className="text-destructive text-sm">
+        <p className="text-sm text-destructive">
           {error instanceof Error ? error.message : 'Failed to load labs'}
         </p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Owner</TableHead>
-              <TableHead>Nodes</TableHead>
-              <TableHead>Created</TableHead>
-              {anyDeletable && <TableHead className="w-0 text-right">Actions</TableHead>}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isPending ? (
-              Array.from({ length: 3 }).map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={colCount}>
-                    <Skeleton className="h-6 w-full" />
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : labs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={colCount} className="text-muted-foreground text-center">
-                  No labs yet.
-                </TableCell>
+        <div className="border bg-card/60">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Name</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Owner</TableHead>
+                <TableHead>Nodes</TableHead>
+                <TableHead>Created</TableHead>
+                {anyDeletable && <TableHead className="w-0 text-right">Actions</TableHead>}
               </TableRow>
-            ) : (
-              labs.map((lab) => (
-                <TableRow key={lab.name}>
-                  <TableCell className="font-medium">
-                    <Link
-                      to="/labs/$name"
-                      params={{ name: lab.name }}
-                      className="hover:underline"
-                    >
-                      {lab.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={statusBadgeVariant(lab.status)}>{lab.status}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    {lab.owner?.name ?? <span className="text-muted-foreground">—</span>}
-                  </TableCell>
-                  <TableCell>
-                    {/* running / present containers; 0/0 until deployed */}
-                    {lab.nodes_running}/{lab.nodes}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDateTime(lab.created_at)}
-                  </TableCell>
-                  {anyDeletable && (
-                    <TableCell className="text-right">
-                      {lab.permissions.includes(PERM_LAB_DESTROY) && (
-                        <DeleteLabAction name={lab.name} />
-                      )}
+            </TableHeader>
+            <TableBody>
+              {isPending ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell colSpan={colCount}>
+                      <Skeleton className="h-6 w-full" />
                     </TableCell>
-                  )}
+                  </TableRow>
+                ))
+              ) : labs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={colCount} className="py-10 text-center text-muted-foreground">
+                    <span className="font-mono text-xs tracking-wide uppercase">no lab records</span>
+                    {canCreate && (
+                      <span className="mt-1 block text-sm">
+                        Create one, author its netlab definition, then deploy.
+                      </span>
+                    )}
+                  </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : (
+                labs.map((lab) => (
+                  <TableRow key={lab.name}>
+                    <TableCell>
+                      <Link
+                        to="/labs/$name"
+                        params={{ name: lab.name }}
+                        className="font-mono text-sm font-medium hover:text-primary hover:underline"
+                      >
+                        {lab.name}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <LabStatusBadge status={lab.status} />
+                    </TableCell>
+                    <TableCell>
+                      {lab.owner?.name ?? <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {/* running / present containers; 0/0 until deployed */}
+                      <span className={lab.nodes_running > 0 ? 'text-primary' : undefined}>
+                        {lab.nodes_running}
+                      </span>
+                      <span className="text-muted-foreground">/{lab.nodes}</span>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {formatDateTime(lab.created_at)}
+                    </TableCell>
+                    {anyDeletable && (
+                      <TableCell className="text-right">
+                        {lab.permissions.includes(PERM_LAB_DESTROY) && (
+                          <DeleteLabAction name={lab.name} />
+                        )}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   )

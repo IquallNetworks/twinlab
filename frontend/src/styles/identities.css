@@ -1,0 +1,185 @@
+/* The identity packs (docs/frontend-rework.md).
+ *
+ * Bake-off outcome: SCHEMATIC is the working default; BLUEPRINT is shelved
+ * but kept selectable for reconsideration after the full rework; Control
+ * Room and Indigo were cut (git history has them). The two packs share a
+ * language — ink-blue-tinted neutrals, a faint line-grid canvas, IBM Plex
+ * Mono data, restrained 2px radius — and differ on voice: Schematic is
+ * dark-first with Space Grotesk and an amber signal accent; Blueprint is
+ * light-first with IBM Plex Serif headings and ink-blue primary (its dark
+ * theme is a slate cyanotype).
+ *
+ * Each pack defines the FULL shadcn token set for both themes, plus the
+ * identity-scoped extras (--id-*): fonts, background motif, shell width.
+ * Selection is <html data-identity="...">; dark/light stays next-themes'
+ * .dark class. Schematic doubles as the :root fallback so an unstamped
+ * document still renders coherently.
+ */
+
+/* Shared aliases: charts/sidebar are unused surfaces for now — pin them to
+ * the pack's core tokens so every identity stays complete. Header tokens
+ * default to a translucent page surface; a pack may restyle the chrome
+ * independently of the body (e.g. a dark header over a light page). */
+html[data-identity],
+:root {
+    --id-header-bg: color-mix(in oklab, var(--background) 85%, transparent);
+    --id-header-fg: var(--foreground);
+    --id-header-muted: var(--muted-foreground);
+    --id-header-border: var(--border);
+    --chart-1: var(--primary);
+    --chart-2: var(--muted-foreground);
+    --chart-3: var(--secondary-foreground);
+    --chart-4: var(--accent-foreground);
+    --chart-5: var(--destructive);
+    --sidebar: var(--card);
+    --sidebar-foreground: var(--foreground);
+    --sidebar-primary: var(--primary);
+    --sidebar-primary-foreground: var(--primary-foreground);
+    --sidebar-accent: var(--accent);
+    --sidebar-accent-foreground: var(--accent-foreground);
+    --sidebar-border: var(--border);
+    --sidebar-ring: var(--ring);
+}
+
+/* ================================================================
+ * SCHEMATIC — sober engineering ink, dark-first.
+ * Blue-black ink, one amber "signal" accent, faint line-grid canvas,
+ * Space Grotesk UI over IBM Plex Mono data.
+ * ================================================================ */
+:root,
+html[data-identity='schematic'] {
+    --id-font-sans: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+    --id-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --id-font-heading: var(--id-font-sans);
+    --id-shell-max: 72rem;
+    --radius: 0.125rem;
+
+    --background: oklch(0.97 0.004 255);
+    --foreground: oklch(0.25 0.02 260);
+    --card: oklch(0.995 0.002 255);
+    --card-foreground: oklch(0.25 0.02 260);
+    --popover: oklch(0.995 0.002 255);
+    --popover-foreground: oklch(0.25 0.02 260);
+    --primary: oklch(0.7 0.13 70);
+    --primary-foreground: oklch(0.22 0.04 75);
+    --secondary: oklch(0.93 0.01 255);
+    --secondary-foreground: oklch(0.25 0.02 260);
+    --muted: oklch(0.94 0.008 255);
+    --muted-foreground: oklch(0.48 0.02 260);
+    --accent: oklch(0.91 0.012 255);
+    --accent-foreground: oklch(0.25 0.02 260);
+    --destructive: oklch(0.54 0.19 27);
+    --border: oklch(0.86 0.012 255);
+    --input: oklch(0.86 0.012 255);
+    --ring: oklch(0.7 0.13 70);
+
+    --id-pattern:
+        linear-gradient(oklch(0.3 0.05 260 / 5%) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(0.3 0.05 260 / 5%) 1px, transparent 1px);
+    --id-pattern-size:
+        24px 24px,
+        24px 24px;
+}
+
+.dark,
+html[data-identity='schematic'].dark {
+    --background: oklch(0.18 0.015 258);
+    --foreground: oklch(0.92 0.008 255);
+    --card: oklch(0.22 0.016 258);
+    --card-foreground: oklch(0.92 0.008 255);
+    --popover: oklch(0.22 0.016 258);
+    --popover-foreground: oklch(0.92 0.008 255);
+    --primary: oklch(0.78 0.13 75);
+    --primary-foreground: oklch(0.2 0.03 75);
+    --secondary: oklch(0.28 0.018 258);
+    --secondary-foreground: oklch(0.92 0.008 255);
+    --muted: oklch(0.26 0.016 258);
+    --muted-foreground: oklch(0.67 0.015 255);
+    --accent: oklch(0.3 0.02 258);
+    --accent-foreground: oklch(0.92 0.008 255);
+    --destructive: oklch(0.66 0.18 25);
+    --border: oklch(0.32 0.018 258);
+    --input: oklch(0.32 0.018 258);
+    --ring: oklch(0.74 0.11 75);
+
+    --id-pattern:
+        linear-gradient(oklch(0.92 0.008 255 / 3.5%) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(0.92 0.008 255 / 3.5%) 1px, transparent 1px);
+    --id-pattern-size:
+        24px 24px,
+        24px 24px;
+}
+
+/* ================================================================
+ * BLUEPRINT — restrained engineering drawing, light-first.
+ * Desaturated ink on neutral paper, whisper-faint grid, IBM Plex
+ * Serif headings. Dark theme = slate cyanotype.
+ * ================================================================ */
+html[data-identity='blueprint'] {
+    --id-font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    --id-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --id-font-heading: 'IBM Plex Serif', ui-serif, serif;
+    --id-shell-max: 72rem;
+    --radius: 0.125rem;
+
+    --background: oklch(0.972 0.004 95);
+    --foreground: oklch(0.3 0.05 262);
+    --card: oklch(0.99 0.002 95);
+    --card-foreground: oklch(0.3 0.05 262);
+    --popover: oklch(0.99 0.002 95);
+    --popover-foreground: oklch(0.3 0.05 262);
+    --primary: oklch(0.42 0.09 262);
+    --primary-foreground: oklch(0.97 0.003 95);
+    --secondary: oklch(0.92 0.01 255);
+    --secondary-foreground: oklch(0.3 0.05 262);
+    --muted: oklch(0.93 0.006 100);
+    --muted-foreground: oklch(0.5 0.03 262);
+    --accent: oklch(0.9 0.012 255);
+    --accent-foreground: oklch(0.3 0.05 262);
+    --destructive: oklch(0.52 0.16 30);
+    --border: oklch(0.84 0.015 260);
+    --input: oklch(0.84 0.015 260);
+    --ring: oklch(0.42 0.09 262);
+
+    --id-pattern:
+        linear-gradient(oklch(0.42 0.09 262 / 4.5%) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(0.42 0.09 262 / 4.5%) 1px, transparent 1px);
+    --id-pattern-size:
+        24px 24px,
+        24px 24px;
+}
+
+html[data-identity='blueprint'].dark {
+    --background: oklch(0.26 0.035 255);
+    --foreground: oklch(0.94 0.01 240);
+    --card: oklch(0.3 0.035 255);
+    --card-foreground: oklch(0.94 0.01 240);
+    --popover: oklch(0.3 0.035 255);
+    --popover-foreground: oklch(0.94 0.01 240);
+    --primary: oklch(0.87 0.05 225);
+    --primary-foreground: oklch(0.26 0.045 255);
+    --secondary: oklch(0.36 0.035 253);
+    --secondary-foreground: oklch(0.94 0.01 240);
+    --muted: oklch(0.34 0.03 255);
+    --muted-foreground: oklch(0.74 0.02 240);
+    --accent: oklch(0.38 0.035 252);
+    --accent-foreground: oklch(0.94 0.01 240);
+    --destructive: oklch(0.71 0.14 30);
+    --border: oklch(1 0 0 / 16%);
+    --input: oklch(1 0 0 / 13%);
+    --ring: oklch(0.87 0.05 225);
+
+    --id-pattern:
+        linear-gradient(oklch(1 0 0 / 4%) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(1 0 0 / 4%) 1px, transparent 1px);
+    --id-pattern-size:
+        24px 24px,
+        24px 24px;
+}
+
+/* Headings carry the pack's heading voice (serif in Blueprint; a no-op
+ * where heading = sans). */
+h1,
+h2 {
+    font-family: var(--font-heading);
+}

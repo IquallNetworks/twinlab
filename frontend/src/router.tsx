@@ -13,6 +13,7 @@ import { GroupsPage } from '@/pages/groups'
 import { LabDetailPage } from '@/pages/lab-detail'
 import { LabsPage } from '@/pages/labs'
 import { LoginPage } from '@/pages/login'
+import { StyleguidePage } from '@/pages/styleguide'
 import { UsersPage } from '@/pages/users'
 
 export const queryClient = new QueryClient()
@@ -87,6 +88,13 @@ const accountRoute = createRoute({
   component: AccountPage,
 })
 
+// Phase-1 bake-off gallery; the component renders a stub outside dev builds.
+const styleguideRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/styleguide',
+  component: StyleguidePage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authRoute.addChildren([
@@ -96,6 +104,7 @@ const routeTree = rootRoute.addChildren([
     usersRoute,
     groupsRoute,
     accountRoute,
+    styleguideRoute,
   ]),
 ])
 

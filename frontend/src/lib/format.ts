@@ -43,3 +43,28 @@ export function formatDateTime(iso: string): string {
 export function formatDuration(duration: Duration | null): string {
   return duration ? `${duration.value} ${duration.unit}` : '—'
 }
+
+/** Compact "how long ago" for feeds ("12s", "3m", "2h", "5d"). */
+export function formatRelativeTime(epochMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.round((nowMs - epochMs) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.round(hours / 24)}d`
+}
+
+/** Elapsed wall time between two instants ("0:42", "12:05", "1:03:20").
+ * Client/server clock skew is clamped to zero. */
+export function formatElapsed(fromIso: string, toMs: number): string {
+  const from = new Date(fromIso).getTime()
+  if (Number.isNaN(from)) return '—'
+  const total = Math.max(0, Math.floor((toMs - from) / 1000))
+  const seconds = total % 60
+  const minutes = Math.floor(total / 60) % 60
+  const hours = Math.floor(total / 3600)
+  const mm = hours > 0 ? String(minutes).padStart(2, '0') : String(minutes)
+  const ss = String(seconds).padStart(2, '0')
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`
+}

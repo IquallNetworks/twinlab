@@ -40,6 +40,7 @@ import { api } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { formatDateTime } from '@/lib/format'
 import { apiKeysQueryOptions, sshAccessQueryOptions, sshKeysQueryOptions } from '@/lib/queries'
+import { JUMP_HOST_ALIAS, jumpCoordinates, sshConfigBlock } from '@/lib/ssh'
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   return (
@@ -448,18 +449,35 @@ function SshKeysCard() {
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {access?.enabled && access.host !== null && access.port !== null && access.user !== null ? (
-          <p className="text-muted-foreground text-sm">
-            Registered keys open SSH access to your labs&apos; nodes through the jump host:{' '}
-            <code className="font-mono text-xs">
-              ssh -J {access.user}@{access.host}:{access.port} &lt;node-user&gt;@&lt;node-ip&gt;
-            </code>
-          </p>
-        ) : (
-          <p className="text-muted-foreground text-sm">
-            This deployment does not advertise a jump host.
-          </p>
-        )}
+        {(() => {
+          // The recipe must route the identity through the hop: a bare
+          // `ssh -i key -J jump@host ip` FAILS (-i never reaches the -J hop),
+          // so we teach the ssh_config block + alias form instead.
+          const jump = jumpCoordinates(access)
+          return jump ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-muted-foreground">
+                Registered keys open SSH access to your labs&apos; nodes through the jump host. Add
+                this once to <code className="font-mono text-xs">~/.ssh/config</code> (point{' '}
+                <code className="font-mono text-xs">IdentityFile</code> at your key), then{' '}
+                <code className="font-mono text-xs">
+                  ssh -J {JUMP_HOST_ALIAS} &lt;node-user&gt;@&lt;node-ip&gt;
+                </code>
+                :
+              </p>
+              <div className="flex items-start gap-2">
+                <pre className="flex-1 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+                  {sshConfigBlock(jump)}
+                </pre>
+                <CopyButton value={sshConfigBlock(jump)} label="config block" />
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              This deployment does not advertise a jump host.
+            </p>
+          )
+        })()}
 
         {isPending ? (
           <p className="text-muted-foreground text-sm">Loading…</p>
@@ -517,7 +535,7 @@ function SshKeysCard() {
 export function AccountPage() {
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold">Account</h1>
+      <h1 className="font-heading text-2xl font-semibold">Account</h1>
       <ApiKeysCard />
       <SshKeysCard />
     </div>

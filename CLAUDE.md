@@ -46,37 +46,37 @@ it, and contract changes go through review.
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
 
-- **`frontend/`** — Vite + React + TypeScript (pnpm). **A working prototype on the v1.0 wire,
-  being rebuilt in place** (step 2 of the frontend rework, phased in `docs/frontend-rework.md`;
-  Phase 1 — graphical identity — is done: identities are CSS token packs keyed off
-  `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk + IBM Plex
-  Mono, faint line-grid canvas) is the chosen design system and Blueprint is shelved-but-
-  selectable; the twin-diamond wordmark is the logo; header chrome has its own `--id-header-*`
-  tokens; fonts are self-hosted @fontsource (OFL); shell, login and labs list are rebuilt on it
-  and a dev-only `/styleguide` gallery renders every primitive). Its dev server proxies `/api/v1` to the
-  backend (`VITE_PROXY_TARGET`, default `http://localhost:8000`). UI stack: **shadcn/ui** (radix
-  base) on Tailwind v4, the **TanStack** family (Query for data, Router in code-based mode for
-  routing, Form for forms) and **zod** for validation. It covers the current backend scope —
-  cookie-session **login**, **user management** (`/users`: list, create, edit roles), an
-  **account page** (`/account`: self-service API keys and SSH keys — register / server-side
-  generate with one-time private-key reveal + download / delete, plus the advertised jump
-  coordinates), and **lab management** mirroring the lifecycle split: `/labs` list (owner,
-  running/total nodes, created/deploying/deployed/destroyed badges) with a create-record dialog
-  (name only), and `/labs/$name` detail where the definition is authored (edit-definition handles
-  the null definition of a fresh record) and deployed — deploy/configure/destroy/delete/suite-run
-  submit **202 async jobs** and await them via a `waitJob` poll helper (`src/lib/api.ts`), a
-  failed job's error envelope landing in the toast; an **Operations card** lists recent jobs.
-  Plus whole-lab and per-node start/stop/restart, save-config, per-node logs, a live interface
-  inventory (short-name keyed), per-node netem impairment ({value, unit} durations, REPLACE
-  semantics — reset = set with only the interface), a per-node **web console** (xterm.js over
-  the terminal WebSocket), a **ProxyJump copy command** per node when `GET /ssh-access` is
-  enabled, and the **test-suites** panel (runs are jobs; `config_time_status` tri-state banner).
-  Auth gate: a pathless layout route resolves `GET /auth/me` in `beforeLoad` and redirects to `/login`
-  on 401; action buttons are gated on the caller's permissions. Live updates: `useLabEvents`
-  (mounted in `AppShell`) subscribes to the `/events` SSE stream and invalidates the `['labs']`
-  and `['jobs']` query trees on each event, so lab state refreshes without polling. API access
-  goes through a typed, zod-parsed fetch client (`src/lib/api.ts`) that raises the
-  `{code, message, extras}` envelope as `ApiError`. Gates: `pnpm typecheck` + `pnpm build`.
+- **`frontend/`** — Vite + React + TypeScript (pnpm). **Being rebuilt in place on the v1.0 wire**
+  (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–2 done**, next
+  is Phase 3 — the topology view). Phase 1 (graphical identity): identities are CSS token packs
+  keyed off `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk +
+  IBM Plex Mono, faint line-grid canvas) is the chosen design system and Blueprint is
+  shelved-but-selectable; the twin-diamond wordmark is the logo; header chrome has its own
+  `--id-header-*` tokens; fonts are self-hosted @fontsource (OFL); a dev-only `/styleguide`
+  gallery renders every primitive. Phase 2 (IA + role-tailored surfaces): a **role-aware
+  dashboard at `/`** (fleet stat tiles, recent operations across labs, recently-updated labs
+  linking each caller to their tab, session-scoped SSE **activity feed** — module ring buffer in
+  `lib/lab-event-store.ts`, no server history — and an admin card whose queries are
+  permission-gated); **lab detail is routed tabs** under `/labs/$name` (layout route; children
+  overview/nodes/operations/access; the index redirects role-aware via
+  `defaultLabTab(lab.permissions)` — authors land on Overview, pure consumers on Nodes; Access
+  renders only with `lab:grant`); a per-node **Connect drawer** (mgmt IP, web console + logs
+  launchers, and SSH guidance from `lib/ssh.ts`: the `~/.ssh/config` `Host twinlab-jump` block +
+  `ssh -J twinlab-jump <user>@<ip>` or the ProxyCommand one-liner — NEVER bare `-J` with `-i`,
+  which dies at the hop; the Account page teaches the same block); a **jobs center at `/jobs`**
+  plus per-lab job history through one shared `JobsTable` (row → detail sheet with request/
+  result/error JSON; aggregation fans `useQueries` over per-lab `['jobs', name]` keys —
+  `lib/use-all-jobs.ts` — since there is no cross-lab jobs endpoint, polling 4s only while a
+  running job is visible). Long ops submit **202 async jobs** awaited via `waitJob`
+  (`src/lib/api.ts`); the frozen **test-suites** panel and netem/power/interfaces/custom-config
+  live on the Operations tab. UI stack: **shadcn/ui** (radix base) on Tailwind v4, the
+  **TanStack** family (Query, Router in code-based mode, Form) and **zod**. Auth gate: a pathless
+  layout route resolves `GET /auth/me` in `beforeLoad`, redirects to `/login` on 401; actions
+  gate on the caller's permissions. `useLabEvents` records SSE events to the activity store and
+  invalidates the `['labs']`/`['jobs']` query roots. API access goes through the typed,
+  zod-parsed client (`src/lib/api.ts`) raising the `{code, message, extras}` envelope as
+  `ApiError`; dev server proxies `/api/v1` (`VITE_PROXY_TARGET`, default
+  `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build`.
 - **`backend/`** — FastAPI (uv, **Python 3.14**, ids are stdlib **UUIDv7**). Turns a declarative
   netlab definition into a running lab: runs `netlab create` to generate a containerlab topology,
   then deploys it through the clab-api server (piped inline as `topologyContent`). Config push is

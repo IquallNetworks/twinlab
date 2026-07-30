@@ -261,19 +261,27 @@ export function UsersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Users</h1>
+      <div className="flex items-end justify-between">
+        <div className="flex items-baseline gap-3">
+          <h1 className="font-heading text-2xl font-semibold">Users</h1>
+          {users && (
+            <span className="font-mono text-xs text-muted-foreground">
+              {users.length} {users.length === 1 ? 'account' : 'accounts'}
+            </span>
+          )}
+        </div>
         <CreateUserDialog />
       </div>
 
       {isError ? (
-        <p className="text-destructive text-sm">
+        <p className="text-sm text-destructive">
           {error instanceof Error ? error.message : 'Failed to load users'}
         </p>
       ) : (
+        <div className="border bg-card/60">
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead>Username</TableHead>
               <TableHead>Roles</TableHead>
               <TableHead>Status</TableHead>
@@ -291,14 +299,14 @@ export function UsersPage() {
               ))
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-muted-foreground text-center">
-                  No users yet.
+                <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                  <span className="font-mono text-xs tracking-wide uppercase">no users</span>
                 </TableCell>
               </TableRow>
             ) : (
               users.map((user) => (
                 <TableRow key={user.id}>
-                  <TableCell className="font-medium">{user.username}</TableCell>
+                  <TableCell className="font-mono text-sm font-medium">{user.username}</TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {user.roles.length === 0 ? (
@@ -329,6 +337,7 @@ export function UsersPage() {
             )}
           </TableBody>
         </Table>
+        </div>
       )}
     </div>
   )

@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
+import { recordLabEvent } from '@/lib/lab-event-store'
 import { labEventSchema } from '@/lib/schemas'
 
 // Coalesce bursts (a deploy emits create/start/… in quick succession) into one
@@ -26,7 +27,10 @@ export function useLabEvents(): void {
       } catch {
         return
       }
-      if (!labEventSchema.safeParse(data).success) return
+      const parsed = labEventSchema.safeParse(data)
+      if (!parsed.success) return
+      // The activity log wants every event, so record before the debounce.
+      recordLabEvent(parsed.data)
       clearTimeout(timer)
       timer = setTimeout(() => {
         void queryClient.invalidateQueries({ queryKey: ['labs'] })

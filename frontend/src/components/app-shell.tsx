@@ -18,10 +18,19 @@ const PERM_GROUP_MANAGE = 'group:manage'
 const HEADER_GHOST =
   'text-(--id-header-fg) hover:text-(--id-header-fg) hover:bg-[color-mix(in_oklab,var(--id-header-fg)_12%,transparent)]'
 
-function NavLink({ to, children }: { to: LinkProps['to']; children: string }) {
+function NavLink({
+  to,
+  exact = false,
+  children,
+}: {
+  to: LinkProps['to']
+  exact?: boolean
+  children: string
+}) {
   return (
     <Link
       to={to}
+      activeOptions={{ exact }}
       className="border-b-2 border-transparent pt-0.5 text-(--id-header-muted) transition-colors hover:text-(--id-header-fg) data-[status=active]:border-primary data-[status=active]:text-(--id-header-fg)"
     >
       {children}
@@ -53,11 +62,15 @@ export function AppShell() {
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-40 border-b border-(--id-header-border) bg-(--id-header-bg) text-(--id-header-fg) backdrop-blur">
         <div className="mx-auto flex h-14 max-w-[var(--id-shell-max,72rem)] items-center gap-6 px-4">
-          <Link to="/labs" aria-label="Twinlab home">
+          <Link to="/" aria-label="Twinlab home">
             <Wordmark />
           </Link>
           <nav className="flex items-center gap-4 text-sm">
+            <NavLink to="/" exact>
+              Dashboard
+            </NavLink>
             <NavLink to="/labs">Labs</NavLink>
+            <NavLink to="/jobs">Jobs</NavLink>
             {canManageUsers && <NavLink to="/users">Users</NavLink>}
             {canManageGroups && <NavLink to="/groups">Groups</NavLink>}
             {/* Self-service credentials — no permission gate. */}

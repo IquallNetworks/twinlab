@@ -7,10 +7,17 @@ import {
 } from '@tanstack/react-router'
 
 import { AppShell } from '@/components/app-shell'
-import { meQueryOptions } from '@/lib/queries'
+import { defaultLabTab } from '@/lib/lab-permissions'
+import { labQueryOptions, meQueryOptions } from '@/lib/queries'
 import { AccountPage } from '@/pages/account'
+import { DashboardPage } from '@/pages/dashboard'
 import { GroupsPage } from '@/pages/groups'
-import { LabDetailPage } from '@/pages/lab-detail'
+import { JobsPage } from '@/pages/jobs'
+import { AccessTab } from '@/pages/lab/access-tab'
+import { LabDetailLayout } from '@/pages/lab/lab-detail-layout'
+import { NodesTab } from '@/pages/lab/nodes-tab'
+import { OperationsTab } from '@/pages/lab/operations-tab'
+import { OverviewTab } from '@/pages/lab/overview-tab'
 import { LabsPage } from '@/pages/labs'
 import { LoginPage } from '@/pages/login'
 import { StyleguidePage } from '@/pages/styleguide'
@@ -48,9 +55,7 @@ const authRoute = createRoute({
 const indexRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/',
-  beforeLoad: () => {
-    throw redirect({ to: '/labs' })
-  },
+  component: DashboardPage,
 })
 
 const labsRoute = createRoute({
@@ -59,6 +64,8 @@ const labsRoute = createRoute({
   component: LabsPage,
 })
 
+// /labs/$name is a layout: the tab pages are child routes so views deep-link
+// and survive reload; the layout owns the lab query and its error states.
 const labDetailRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/labs/$name',
@@ -67,8 +74,72 @@ const labDetailRoute = createRoute({
 
 function LabDetailRouteComponent() {
   const { name } = labDetailRoute.useParams()
-  return <LabDetailPage name={name} />
+  return <LabDetailLayout name={name} />
 }
+
+// Role-aware landing: authors/operators open Overview, pure consumers open
+// Nodes (connect, not authoring). Needs the lab loaded to read permissions —
+// the same fetch the layout needs anyway, so it's cached, not extra.
+const labIndexRoute = createRoute({
+  getParentRoute: () => labDetailRoute,
+  path: '/',
+  beforeLoad: async ({ context, params }) => {
+    let tab: 'overview' | 'nodes' = 'overview'
+    try {
+      const lab = await context.queryClient.ensureQueryData(labQueryOptions(params.name))
+      tab = defaultLabTab(lab.permissions)
+    } catch {
+      // 404/error: land on Overview and let the layout render its error state.
+    }
+    throw redirect(
+      tab === 'nodes'
+        ? { to: '/labs/$name/nodes', params: { name: params.name } }
+        : { to: '/labs/$name/overview', params: { name: params.name } },
+    )
+  },
+})
+
+const labOverviewRoute = createRoute({
+  getParentRoute: () => labDetailRoute,
+  path: '/overview',
+  component: function LabOverviewRouteComponent() {
+    const { name } = labOverviewRoute.useParams()
+    return <OverviewTab name={name} />
+  },
+})
+
+const labNodesRoute = createRoute({
+  getParentRoute: () => labDetailRoute,
+  path: '/nodes',
+  component: function LabNodesRouteComponent() {
+    const { name } = labNodesRoute.useParams()
+    return <NodesTab name={name} />
+  },
+})
+
+const labOperationsRoute = createRoute({
+  getParentRoute: () => labDetailRoute,
+  path: '/operations',
+  component: function LabOperationsRouteComponent() {
+    const { name } = labOperationsRoute.useParams()
+    return <OperationsTab name={name} />
+  },
+})
+
+const labAccessRoute = createRoute({
+  getParentRoute: () => labDetailRoute,
+  path: '/access',
+  component: function LabAccessRouteComponent() {
+    const { name } = labAccessRoute.useParams()
+    return <AccessTab name={name} />
+  },
+})
+
+const jobsRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/jobs',
+  component: JobsPage,
+})
 
 const usersRoute = createRoute({
   getParentRoute: () => authRoute,
@@ -100,7 +171,14 @@ const routeTree = rootRoute.addChildren([
   authRoute.addChildren([
     indexRoute,
     labsRoute,
-    labDetailRoute,
+    labDetailRoute.addChildren([
+      labIndexRoute,
+      labOverviewRoute,
+      labNodesRoute,
+      labOperationsRoute,
+      labAccessRoute,
+    ]),
+    jobsRoute,
     usersRoute,
     groupsRoute,
     accountRoute,

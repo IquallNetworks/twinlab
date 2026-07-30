@@ -104,6 +104,17 @@ stays a selectable pack for reconsideration after the full rework. The twin-diam
 admin, and a viewer each have a coherent path; `pnpm typecheck` + `pnpm build` green; live smoke
 against the stack.
 
+**Outcome (2026-07-30): DONE.** Dashboard landed at `/` (user-chosen) with fleet tiles, cross-lab
+recent operations, a session-scoped SSE activity feed (module ring buffer — no server history
+endpoint), and a permission-gated admin card. Lab detail became routed tabs
+(overview/nodes/operations/access) with a role-aware index redirect (`defaultLabTab`); frozen
+test-suites + custom-config sit on Operations (user-chosen). The per-node Connect drawer and the
+Account page both serve the corrected SSH guidance from `lib/ssh.ts` (ssh_config block /
+ProxyCommand — the bare `-J` copy command is gone). Jobs: one shared `JobsTable` powers `/jobs`
+and the per-lab history; aggregation is client-side `useQueries` over per-lab keys with polling
+only while a running job is visible — the cross-lab jobs endpoint stays a parked backend item.
+New ui primitives: tabs + sheet (zero new npm deps — the radix-ui monolith covers both).
+
 ### Phase 3 — topology view (read-only)
 
 - React Flow canvas on the lab's Topology tab: nodes + links parsed **client-side** from the

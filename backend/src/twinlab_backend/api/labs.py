@@ -74,6 +74,7 @@ from twinlab_backend.services.clab_api import (
     ClabApiError,
     DeployedLab,
     NodeInfo,
+    bare_mgmt_ip,
 )
 from twinlab_backend.services.clab_api import NetemImpairment as ClabNetemImpairment
 from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfaces
@@ -190,7 +191,7 @@ def _container_state(node: NodeInfo) -> ContainerState:
 def _to_node_state(node: NodeInfo) -> LabNodeState:
     # clab reports the mgmt address as CIDR; expose the bare IP so the UI can
     # build an `ssh <ip>` command without every consumer stripping the mask.
-    mgmt_ip = node.ipv4_address.split("/", 1)[0]
+    mgmt_ip = bare_mgmt_ip(node.ipv4_address)
     return LabNodeState(
         name=node.node_name,
         container=node.container_name,

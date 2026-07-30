@@ -43,6 +43,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -52,6 +60,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Wordmark } from '@/components/wordmark'
 import { jobStatusBadgeVariant } from '@/lib/format'
@@ -300,6 +309,35 @@ export function StyleguidePage() {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button variant="outline">Open sheet</Button>
+            </SheetTrigger>
+            <SheetContent>
+              <SheetHeader>
+                <SheetTitle>Connect — pe1</SheetTitle>
+                <SheetDescription>Slide-over drawer for per-node detail surfaces.</SheetDescription>
+              </SheetHeader>
+              <div className="px-4">
+                <Tabs defaultValue="config">
+                  <TabsList>
+                    <TabsTrigger value="config">ssh_config</TabsTrigger>
+                    <TabsTrigger value="proxy">ProxyCommand</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="config">
+                    <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+                      {'Host twinlab-jump\n  HostName lab.example\n  Port 2222\n  User jump'}
+                    </pre>
+                  </TabsContent>
+                  <TabsContent value="proxy">
+                    <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+                      ssh -o ProxyCommand=&apos;…&apos; admin@10.77.4.101
+                    </pre>
+                  </TabsContent>
+                </Tabs>
+              </div>
+            </SheetContent>
+          </Sheet>
           <Button variant="outline" onClick={() => toast.success('Deploy succeeded — 4/4 nodes up')}>
             Success toast
           </Button>

@@ -277,19 +277,27 @@ export function GroupsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Groups</h1>
+      <div className="flex items-end justify-between">
+        <div className="flex items-baseline gap-3">
+          <h1 className="font-heading text-2xl font-semibold">Groups</h1>
+          {groups && (
+            <span className="font-mono text-xs text-muted-foreground">
+              {groups.length} {groups.length === 1 ? 'group' : 'groups'}
+            </span>
+          )}
+        </div>
         <CreateGroupDialog />
       </div>
 
       {isError ? (
-        <p className="text-destructive text-sm">
+        <p className="text-sm text-destructive">
           {error instanceof Error ? error.message : 'Failed to load groups'}
         </p>
       ) : (
+        <div className="border bg-card/60">
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead>Name</TableHead>
               <TableHead>Members</TableHead>
               <TableHead>Roles</TableHead>
@@ -307,14 +315,14 @@ export function GroupsPage() {
               ))
             ) : groups.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-muted-foreground text-center">
-                  No groups yet.
+                <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                  <span className="font-mono text-xs tracking-wide uppercase">no groups</span>
                 </TableCell>
               </TableRow>
             ) : (
               groups.map((group) => (
                 <TableRow key={group.id}>
-                  <TableCell className="font-medium">
+                  <TableCell className="font-mono text-sm font-medium">
                     {group.name}
                     {group.description && (
                       <div className="text-muted-foreground text-xs">{group.description}</div>
@@ -352,6 +360,7 @@ export function GroupsPage() {
             )}
           </TableBody>
         </Table>
+        </div>
       )}
     </div>
   )

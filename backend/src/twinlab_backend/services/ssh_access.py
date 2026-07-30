@@ -14,7 +14,7 @@ from twinlab_backend.auth import ssh_keys
 from twinlab_backend.auth.service import permitted_lab_names
 from twinlab_backend.db.models import Lab
 from twinlab_backend.result import Err, Ok, Result
-from twinlab_backend.services.clab_api import ClabApiClient, ClabApiError
+from twinlab_backend.services.clab_api import ClabApiClient, ClabApiError, bare_mgmt_ip
 
 
 def render_authorized_keys_line(
@@ -54,10 +54,10 @@ async def authorized_keys_for(
     if isinstance(inventory, Err):
         return inventory
     node_ips = sorted(
-        node.ipv4_address.split("/", 1)[0]
+        ip
         for lab_name, nodes in inventory.value.items()
         if lab_name in lab_names
         for node in nodes
-        if node.ipv4_address
+        if (ip := bare_mgmt_ip(node.ipv4_address))
     )
     return Ok(render_authorized_keys_line(key.algorithm, key.key_b64, key.user.username, node_ips))

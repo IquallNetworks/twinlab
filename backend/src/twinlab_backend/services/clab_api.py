@@ -43,6 +43,15 @@ class NodeInfo:
     ipv4_address: str
 
 
+def bare_mgmt_ip(ipv4_address: str) -> str:
+    """The bare management IP from clab's CIDR `ipv4_address`, or "" when the
+    node has none. A stopped container reports the literal "N/A" — naive
+    prefix-stripping turns that into "N", so it must be treated as absent."""
+    if ipv4_address in ("", "N/A"):
+        return ""
+    return ipv4_address.split("/", 1)[0]
+
+
 @dataclass(frozen=True, slots=True)
 class DeployedLab:
     name: str
@@ -527,6 +536,10 @@ class ClabApiClient:
         resp = sent.value
         if resp.status_code != HTTPStatus.OK:
             return Err(ClabApiError(f"interfaces rejected: {resp.text}", resp.status_code))
+        # clab-api serialises "no reporting nodes" (e.g. every container
+        # stopped) as a JSON null, not an empty array.
+        if resp.content in (b"", b"null"):
+            return Ok(())
         try:
             parsed = _NodeInterfacesList.validate_json(resp.content)
         except ValidationError as exc:

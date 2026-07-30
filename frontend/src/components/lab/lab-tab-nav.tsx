@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 
-import { PERM_LAB_GRANT } from '@/lib/lab-permissions'
+import { PERM_LAB_EDIT, PERM_LAB_GRANT } from '@/lib/lab-permissions'
 
 // Router Links styled as tabs (not radix Tabs): tab state lives in the URL, so
 // views deep-link, survive reload, and preload on intent like any route. The
@@ -20,6 +20,11 @@ export function LabTabNav({ name, permissions }: { name: string; permissions: st
       <Link to="/labs/$name/topology" params={{ name }} className={TAB_LINK}>
         Topology
       </Link>
+      {permissions.includes(PERM_LAB_EDIT) && (
+        <Link to="/labs/$name/build" params={{ name }} className={TAB_LINK}>
+          Build
+        </Link>
+      )}
       <Link to="/labs/$name/nodes" params={{ name }} className={TAB_LINK}>
         Nodes
       </Link>

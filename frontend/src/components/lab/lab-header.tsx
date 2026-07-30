@@ -3,7 +3,6 @@ import { useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { DeployDialog } from '@/components/lab/deploy-dialog'
-import { EditDefinitionDialog } from '@/components/lab/edit-definition-dialog'
 import { LabStatusBadge } from '@/components/lab/status-badge'
 import {
   AlertDialog,
@@ -93,7 +92,6 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {can(PERM_LAB_EDIT) && <EditDefinitionDialog name={lab.name} definition={lab.definition} />}
         {can(PERM_LAB_EDIT) && (
           <DeployDialog
             name={lab.name}

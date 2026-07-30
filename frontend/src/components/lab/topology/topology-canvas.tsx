@@ -14,7 +14,7 @@ import {
   type Edge,
   type NodeMouseHandler,
 } from '@xyflow/react'
-import { Download, LayoutGrid, MoveHorizontal, MoveVertical } from 'lucide-react'
+import { Download, LayoutGrid, Map as MapIcon, MoveHorizontal, MoveVertical } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
@@ -135,6 +135,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
   const { resolvedTheme } = useTheme()
   const { fitView } = useReactFlow()
   const [rankdir, setRankdir] = useState<RankDir>('LR')
+  const [showMiniMap, setShowMiniMap] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   // Netem badge data: only running containers have a namespace to show.
@@ -258,20 +259,31 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
     >
       <Background variant={BackgroundVariant.Lines} gap={24} />
       <Controls showInteractive={false} />
-      <MiniMap
-        pannable
-        zoomable
-        className="hidden md:block"
-        nodeColor={(node) =>
-          node.type === 'lan'
-            ? 'var(--muted)'
-            : (node.data as { state?: string }).state === 'running'
-              ? 'var(--primary)'
-              : 'var(--muted-foreground)'
-        }
-      />
+      {showMiniMap && (
+        <MiniMap
+          pannable
+          zoomable
+          nodeColor={(node) =>
+            node.type === 'lan'
+              ? 'var(--muted)'
+              : (node.data as { state?: string }).state === 'running'
+                ? 'var(--primary)'
+                : 'var(--muted-foreground)'
+          }
+        />
+      )}
 
       <Panel position="top-right" className="flex items-center gap-1">
+        <Button
+          variant="outline"
+          size="icon-sm"
+          title={showMiniMap ? 'Hide minimap' : 'Show minimap'}
+          data-state={showMiniMap ? 'on' : 'off'}
+          className="data-[state=on]:bg-muted"
+          onClick={() => setShowMiniMap((on) => !on)}
+        >
+          <MapIcon className="size-3.5" />
+        </Button>
         <Button
           variant="outline"
           size="icon-sm"

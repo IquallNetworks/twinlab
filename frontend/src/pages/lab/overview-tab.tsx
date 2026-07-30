@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatDateTime, jobStatusBadgeVariant } from '@/lib/format'
+import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
 import { labJobsQueryOptions, labQueryOptions } from '@/lib/queries'
 
 /** Lab summary: record facts, the latest operation at a glance, and the
@@ -13,6 +15,7 @@ export function OverviewTab({ name }: { name: string }) {
   const { data: jobs } = useQuery(labJobsQueryOptions(name))
   if (!lab) return null
   const lastJob = jobs?.[0]
+  const canEdit = lab.permissions.includes(PERM_LAB_EDIT)
 
   return (
     <div className="flex flex-col gap-6">
@@ -50,13 +53,38 @@ export function OverviewTab({ name }: { name: string }) {
       )}
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Definition</CardTitle>
+          {canEdit && lab.definition !== null && (
+            <Link
+              to="/labs/$name/build"
+              params={{ name }}
+              className="text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              Edit on the Build tab
+            </Link>
+          )}
         </CardHeader>
         <CardContent>
           {lab.definition === null ? (
             <p className="text-sm text-muted-foreground">
-              No definition yet — use Edit definition to author this lab.
+              No definition yet
+              {canEdit ? (
+                <>
+                  {' '}
+                  — build one on the{' '}
+                  <Link
+                    to="/labs/$name/build"
+                    params={{ name }}
+                    className="underline hover:text-foreground"
+                  >
+                    Build
+                  </Link>{' '}
+                  tab.
+                </>
+              ) : (
+                '.'
+              )}
             </p>
           ) : (
             <pre className="overflow-x-auto rounded-md bg-muted p-4 font-mono text-xs">

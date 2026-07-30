@@ -47,8 +47,9 @@ it, and contract changes go through review.
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
 
 - **`frontend/`** — Vite + React + TypeScript (pnpm). **Being rebuilt in place on the v1.0 wire**
-  (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–3 done**, next
-  is Phase 4 — the guided builder). Phase 1 (graphical identity): identities are CSS token packs
+  (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–4 done**, next
+  is Phase 5 — editor + polish, then the v1.0 release train). Phase 1 (graphical identity):
+  identities are CSS token packs
   keyed off `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk +
   IBM Plex Mono, faint line-grid canvas) is the chosen design system and Blueprint is
   shelved-but-selectable; the twin-diamond wordmark is the logo; header chrome has its own
@@ -75,7 +76,22 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   hubs for multi-access; drift shown both ways), live node state + netem badges overlay it
   (queries shared with the netem controls, running nodes only), selection reuses the connect
   drawer + node controls, and the toolbar does auto-layout, LR/TB and PNG export; undeployed
-  labs render as documentation. UI stack: **shadcn/ui** (radix base) on Tailwind v4, the
+  labs render as documentation; manual layouts persist per lab in localStorage
+  (`topology/layout-store.ts`, shared with the builder). Phase 4 (guided builder): a **Build tab**
+  (`lab:edit`) owns definition editing in two modes — Visual is an editable canvas + inspector
+  over `lib/build-doc.ts`, a STRICT typed subset of netlab (nodes, p2p/LAN links, the proven
+  ospf/bgp/mpls/vrf set, curated `lib/device-catalog.ts` with the module-support matrix, plus
+  the server-injected name/addressing keys): `parseBuildDoc` collects every reason a definition
+  can't be represented (the tab then shows an explicit "edit as text" notice — content is never
+  silently dropped), `emitBuildDoc` is canonical with the round-trip invariant
+  parse(emit(doc)) == doc, and emit problems (device-less node, 2-member LAN) BLOCK Save
+  loudly; the reducer (`build/build-state.ts`) owns the doc, the canvas derives from it
+  (drag-to-connect via `validateConnect`, palette adds, index-safe deletions), and the
+  inspector greys out device×module combinations the catalog says can't run. Text mode is the
+  full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
+  `netlab_invalid` renders as a panel with the envelope's `extras.stderr` (`ApiError` carries
+  extras). Unsaved changes get a router blocker + beforeunload guard. UI stack: **shadcn/ui**
+  (radix base) on Tailwind v4, the
   **TanStack** family (Query, Router in code-based mode, Form) and **zod**. Auth gate: a pathless
   layout route resolves `GET /auth/me` in `beforeLoad`, redirects to `/login` on 401; actions
   gate on the caller's permissions. `useLabEvents` records SSE events to the activity store and

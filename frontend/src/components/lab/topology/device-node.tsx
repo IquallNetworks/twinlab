@@ -16,30 +16,51 @@ function DeviceGlyph({ device }: { device?: string }) {
 
 /** Wires attach invisibly at the node center: with straight edges the line is
  * occluded by the opaque body and visually meets the border from any angle —
- * the schematic look without floating-edge math. */
-function CenterHandles() {
+ * the schematic look without floating-edge math. Ids let the builder pin its
+ * edges deterministically; id-less edges (the read-only canvas) resolve to
+ * these same handles because they register first. */
+export function CenterHandles({ isConnectable }: { isConnectable?: boolean }) {
   const style = { left: '50%', top: '50%', opacity: 0, pointerEvents: 'none' as const }
   return (
     <>
-      <Handle type="source" position={Position.Top} style={style} />
-      <Handle type="target" position={Position.Top} style={style} />
+      <Handle id="c-s" type="source" position={Position.Top} style={style} isConnectable={isConnectable} />
+      <Handle id="c-t" type="target" position={Position.Top} style={style} isConnectable={isConnectable} />
     </>
   )
 }
 
-export function DeviceNode({ data, selected }: NodeProps<DeviceFlowNode>) {
+/** The builder's drag-to-connect grip: a visible source dot on the node's
+ * right edge, present only when the canvas is connectable (the read-only
+ * topology view passes nodesConnectable={false} and renders no grip). Drops
+ * land on the invisible center target via the canvas's connectionRadius. */
+export function ConnectGrip({ isConnectable }: { isConnectable?: boolean }) {
+  if (isConnectable !== true) return null
+  return (
+    <Handle
+      id="drag"
+      type="source"
+      position={Position.Right}
+      isConnectable
+      className="!size-2.5 !rounded-full !border !border-background !bg-primary opacity-0 transition-opacity group-hover:opacity-100"
+      title="drag to connect"
+    />
+  )
+}
+
+export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFlowNode>) {
   const notDeployed = data.state === NOT_DEPLOYED
   const running = data.state === 'running'
   return (
     <div
       style={{ width: DEVICE_W, height: DEVICE_H }}
       className={cn(
-        'relative flex items-center gap-2 rounded-[2px] border bg-card px-3',
+        'group relative flex items-center gap-2 rounded-[2px] border bg-card px-3',
         notDeployed && 'border-dashed text-muted-foreground',
         selected && 'ring-2 ring-primary',
       )}
     >
-      <CenterHandles />
+      <CenterHandles isConnectable={isConnectable} />
+      <ConnectGrip isConnectable={isConnectable} />
       <DeviceGlyph device={data.device} />
       <div className="flex min-w-0 flex-col">
         <span className="truncate font-mono text-sm font-medium">{data.label}</span>

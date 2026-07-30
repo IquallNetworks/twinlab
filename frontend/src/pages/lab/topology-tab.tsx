@@ -4,6 +4,7 @@ import { useMemo } from 'react'
 
 import { TopologyCanvas } from '@/components/lab/topology/topology-canvas'
 import { Card, CardContent } from '@/components/ui/card'
+import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
 import { labQueryOptions } from '@/lib/queries'
 import { parseTopology } from '@/lib/topology'
 
@@ -24,14 +25,16 @@ export function TopologyTab({ name }: { name: string }) {
   if (!lab) return null
 
   if (lab.definition === null) {
-    return (
+    return lab.permissions.includes(PERM_LAB_EDIT) ? (
       <Notice>
-        No definition yet — author one on the{' '}
-        <Link to="/labs/$name/overview" params={{ name }} className="underline hover:text-foreground">
-          Overview
+        No definition yet — build one on the{' '}
+        <Link to="/labs/$name/build" params={{ name }} className="underline hover:text-foreground">
+          Build
         </Link>{' '}
         tab, and the topology renders here.
       </Notice>
+    ) : (
+      <Notice>No definition yet — the topology renders here once one is authored.</Notice>
     )
   }
 

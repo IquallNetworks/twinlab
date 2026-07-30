@@ -31,10 +31,14 @@ export function loadLayout(lab: string): SavedPositions | null {
   }
 }
 
+export function savePositions(lab: string, positions: SavedPositions): void {
+  localStorage.setItem(keyFor(lab), JSON.stringify(positions))
+}
+
 export function saveLayout(lab: string, nodes: readonly AppNode[]): void {
   const positions: SavedPositions = {}
   for (const node of nodes) positions[node.id] = { x: node.position.x, y: node.position.y }
-  localStorage.setItem(keyFor(lab), JSON.stringify(positions))
+  savePositions(lab, positions)
 }
 
 export function clearLayout(lab: string): void {

@@ -157,6 +157,30 @@ backend link table.
 **Exit:** a user can build a small multi-node lab (e.g. 3 × VyOS + linux host) entirely on the
 canvas, deploy it, and see it live on the Topology tab.
 
+**Outcome (2026-07-30): DONE.** The **Build tab** (`lab:edit`, between Topology and Nodes) owns
+definition editing in two modes; the header's EditDefinitionDialog is gone. **Visual** edits a
+`BuildDoc` — `lib/build-doc.ts`, a *strict* typed subset of netlab (nodes, p2p/LAN links, the
+proven ospf/bgp/mpls/vrf module set with `bgp.as`/`mpls.ldp`/`mpls.vpn`/vrf-membership, the
+curated `lib/device-catalog.ts` with the `netlab show module-support` matrix, and the
+server-injected `name`/`addressing.mgmt` keys preserved verbatim). `parseBuildDoc` is a
+reason-collecting gate: anything outside the subset flips Visual into the explicit "this
+definition uses features the builder can't represent — edit as text" notice listing *every*
+reason (with the read-only canvas as best-effort preview) — content is never silently dropped.
+`emitBuildDoc` is canonical and *blocks* Save with named problems (device-less node — device is
+intentful; 2-member LAN) instead of silently fixing; round-trip invariant parse(emit(doc)) ==
+doc verified against the example, the live stored definition, and eleven gate-trip fixtures.
+The canvas derives purely from the reducer's doc (drag-to-connect through a shared
+`validateConnect`, palette adds at the viewport center, index-safe multi-deletions), shares the
+Topology tab's per-lab layout store (renames migrate the saved position), and the inspector is
+where the guidance lives: device Select with inherit-from-default, module checkboxes greyed by
+the device matrix, `mpls.vpn` unlocked only when the node's effective modules cover
+mpls+bgp+vrf, vrf membership with the customer-loopback flag, name validation that calls out
+the hyphen/link-form hazard as you type. **Text** mode is the full-syntax escape hatch.
+`netlab_invalid` failures render the envelope's `extras.stderr` in a dismissible panel
+(`ApiError` now carries extras); dirty state gets a router blocker + beforeunload +
+mode-switch confirms; server-side changes re-sync only while clean. Exit criterion verified
+live: the 3×VyOS + linux triangle emitted by the builder deployed to 4 running nodes.
+
 ### Phase 5 — editor + polish
 
 - Definition editor upgrade: CodeMirror 6 with YAML highlighting; `netlab_invalid` envelope

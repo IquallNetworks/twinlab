@@ -17,11 +17,47 @@ links: [r1-r2]
 """
 
 
-def test_create_generates_clab_topology() -> None:
+def test_create_generates_clab_topology_and_links() -> None:
     result = create_clab_topology(_VALID_DEFINITION)
     assert isinstance(result, Ok), result
     # A containerlab topology is a mapping with a `topology` section.
-    assert "topology" in result.value
+    assert "topology" in result.value.topology
+    # The logical link table: one p2p link, both endpoints resolved. Endpoint
+    # facts are asserted, never `type` — netlab's vocabulary is a passthrough.
+    (link,) = result.value.links
+    assert link.index == 1
+    assert {(e.node, e.ifname, e.clab_name) for e in link.endpoints} == {
+        ("r1", "eth1", "eth1"),
+        ("r2", "eth1", "eth1"),
+    }
+    assert link.prefix_ipv4 is not None
+    assert all(e.ipv4 is not None for e in link.endpoints)
+
+
+def test_create_links_lan_is_one_logical_link() -> None:
+    # A multi-access link is ONE logical link with N endpoints — not the
+    # per-member bridge fan-out clab.yml renders it as.
+    definition = (
+        "provider: clab\ndefaults.device: linux\nnodes: [n1, n2, n3]\nlinks:\n- [n1, n2, n3]\n"
+    )
+    result = create_clab_topology(definition)
+    assert isinstance(result, Ok), result
+    (link,) = result.value.links
+    assert {e.node for e in link.endpoints} == {"n1", "n2", "n3"}
+
+
+def test_create_links_join_uses_clab_interface_name() -> None:
+    # cisco_iol renames interfaces: netlab's ifname IS the clab-side name here
+    # ("Ethernet0/1"), carried via the node interface table's `clab.name` —
+    # this proves the (node, ifindex) join path, not the ifname fallback.
+    definition = "provider: clab\ndefaults.device: iol\nnodes: [r1, r2]\nlinks: [r1-r2]\n"
+    result = create_clab_topology(definition)
+    assert isinstance(result, Ok), result
+    (link,) = result.value.links
+    assert {(e.node, e.ifname, e.clab_name) for e in link.endpoints} == {
+        ("r1", "Ethernet0/1", "Ethernet0/1"),
+        ("r2", "Ethernet0/1", "Ethernet0/1"),
+    }
 
 
 def test_create_reports_error_on_invalid_definition() -> None:

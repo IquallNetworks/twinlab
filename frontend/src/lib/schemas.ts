@@ -276,6 +276,48 @@ export const netemImpairmentSchema = z.object({
 export type NetemImpairment = z.infer<typeof netemImpairmentSchema>
 export const nodeNetemSchema = z.array(netemImpairmentSchema)
 
+// The lab's logical link table (contract delta 14): netlab-derived links with
+// per-endpoint live state and active impairment. `endpoint.interface` is the
+// container-side name — exactly what /interfaces reports and netem accepts.
+export const linkEndpointSchema = z.object({
+  node: z.string(),
+  interface: z.string(),
+  ifname: z.string(),
+  ifindex: z.number(),
+  ipv4: z.string().nullable(),
+  ipv6: z.string().nullable(),
+  // Live oper state passthrough (unpinned, like NodeInterface.state); null =
+  // unknown. Impairment is orthogonal to state on purpose.
+  state: z.string().nullable(),
+  impairment: netemImpairmentSchema.nullable(),
+})
+export type LinkEndpoint = z.infer<typeof linkEndpointSchema>
+
+export const labLinkSchema = z.object({
+  index: z.number(),
+  name: z.string().nullable(),
+  // netlab's vocabulary — unpinned and NOT a rendering signal (a linux-host
+  // p2p comes out "lan"); discriminate on endpoints.length instead.
+  type: z.string(),
+  prefix_ipv4: z.string().nullable(),
+  prefix_ipv6: z.string().nullable(),
+  bandwidth: z.number().nullable(),
+  mtu: z.number().nullable(),
+  // Twinlab-derived, so pinned: the roll-up of the endpoints' states.
+  oper_state: z.enum(['up', 'degraded', 'down', 'unknown']),
+  endpoints: z.array(linkEndpointSchema),
+})
+export type LabLink = z.infer<typeof labLinkSchema>
+export type LinkOperState = LabLink['oper_state']
+
+// `live: false` = oper state could not be resolved (undeployed lab, or the
+// inventory was unavailable) — every state is then "unknown".
+export const labLinksSchema = z.object({
+  links: z.array(labLinkSchema),
+  live: z.boolean(),
+})
+export type LabLinks = z.infer<typeof labLinksSchema>
+
 // Impairment to apply — REPLACE semantics: the body is the interface's COMPLETE
 // desired impairment. An omitted dimension is cleared, and a body with only the
 // interface clears everything on it (there is no separate reset endpoint).

@@ -13,7 +13,7 @@ from twinlab_client import (
     ValidationTest,
 )
 
-from _config import LabFactory
+from _config import LINUX_LAB_DEFINITION, LabFactory
 
 _SUITES = {
     "smoke": TestSuite(
@@ -129,3 +129,28 @@ async def test_custom_config_rejects_traversal_paths(
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await admin.put_custom_config(lab.name, {"../evil.j2": "!\n"})
     assert excinfo.value.status_code == 422
+
+
+async def test_links_before_definition_is_409(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    # A bare created record has nothing to derive links from — an empty table
+    # would be indistinguishable from a definition with no links (delta 14).
+    lab = await make_lab(None)
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.links(lab.name)
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.code == "no_definition"
+
+
+async def test_links_table_from_authored_record(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+
+    table = await admin.links(lab.name)
+    # Undeployed: the full table is served with states honestly unknown.
+    assert table.live is False
+    (link,) = table.links  # the definition's single n1-n2 link, one LOGICAL entry
+    # Endpoint facts only — `type` is netlab's vocabulary and not asserted.
+    assert {endpoint.node for endpoint in link.endpoints} == {"n1", "n2"}
+    assert all(endpoint.interface for endpoint in link.endpoints)
+    assert link.oper_state == "unknown"
+    assert all(e.state is None and e.impairment is None for e in link.endpoints)

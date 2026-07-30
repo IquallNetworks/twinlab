@@ -21,6 +21,7 @@ from twinlab_client import (
     TestExpectation,
     TestSuite,
     TwinlabApiError,
+    TwinlabProtocolError,
     ValidationTest,
 )
 from twinlab_client.client import TwinlabClient
@@ -471,6 +472,109 @@ async def test_interfaces_node_filter_param(make_client: ClientFactory) -> None:
     async with make_client(handler) as client:
         inventory = await client.interfaces("lab1", node="r1")
     assert inventory[0].node == "r1"
+
+
+def _link_endpoint_payload(node: str, **overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "node": node,
+        "interface": "eth1",
+        "ifname": "eth1",
+        "ifindex": 1,
+        "ipv4": "10.0.0.1/30",
+        "ipv6": None,
+        "state": "up",
+        "impairment": None,
+    }
+    return payload | overrides
+
+
+def _lab_link_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "index": 1,
+        "name": None,
+        "type": "p2p",
+        "prefix_ipv4": "10.0.0.0/30",
+        "prefix_ipv6": None,
+        "bandwidth": None,
+        "mtu": None,
+        "oper_state": "up",
+        "endpoints": [_link_endpoint_payload("n1"), _link_endpoint_payload("n2")],
+    }
+    return payload | overrides
+
+
+async def test_links_parses_table_and_impairment(make_client: ClientFactory) -> None:
+    impaired = _link_endpoint_payload(
+        "n1",
+        impairment={
+            "interface": "eth1",
+            "delay": {"value": 50, "unit": "ms"},
+            "jitter": None,
+            "loss": 0,
+            "rate": 0,
+            "corruption": 0,
+        },
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/links"
+        return httpx.Response(
+            200,
+            json={
+                "links": [
+                    _lab_link_payload(endpoints=[impaired, _link_endpoint_payload("n2")]),
+                    _lab_link_payload(
+                        index=2,
+                        type="lan",
+                        oper_state="unknown",
+                        endpoints=[
+                            _link_endpoint_payload("n1", state=None),
+                            _link_endpoint_payload("n2"),
+                            _link_endpoint_payload("n3"),
+                        ],
+                    ),
+                ],
+                "live": True,
+            },
+        )
+
+    async with make_client(handler) as client:
+        table = await client.links("lab1")
+    assert table.live is True
+    p2p, lan = table.links
+    assert p2p.oper_state == "up"
+    assert p2p.endpoints[0].impairment is not None
+    assert p2p.endpoints[0].impairment.delay == Duration(50.0, "ms")
+    assert p2p.endpoints[1].impairment is None
+    assert len(lan.endpoints) == 3  # a LAN is ONE logical link
+    assert lan.endpoints[0].state is None
+
+
+async def test_links_no_definition_raises_api_error(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409,
+            json={"code": "no_definition", "message": "lab 'lab1' has no definition", "extras": {}},
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabApiError) as excinfo:
+            _ = await client.links("lab1")
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.code == "no_definition"
+
+
+async def test_links_unknown_oper_state_is_protocol_error(make_client: ClientFactory) -> None:
+    # oper_state is pinned (the backend derives it) — an unknown value is a
+    # protocol break, not something to tolerate.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"links": [_lab_link_payload(oper_state="flapping")], "live": True}
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabProtocolError):
+            _ = await client.links("lab1")
 
 
 async def test_ready_parses_503_as_degraded(make_client: ClientFactory) -> None:

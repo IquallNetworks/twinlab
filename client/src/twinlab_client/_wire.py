@@ -20,6 +20,7 @@ from twinlab_client.models import (
     JOB_KINDS,
     JOB_STATUSES,
     LAB_STATUSES,
+    LINK_OPER_STATES,
     NODE_CONFIG_STATUSES,
     PRINCIPAL_TYPES,
     READINESS_STATUSES,
@@ -43,9 +44,12 @@ from twinlab_client.models import (
     LabActionResponse,
     LabDetail,
     LabEvent,
+    LabLink,
+    LabLinks,
     LabNodeState,
     LabOwner,
     LabSummary,
+    LinkEndpoint,
     Liveness,
     NetemImpairment,
     NodeConfigResult,
@@ -545,6 +549,49 @@ def parse_netem_impairment(value: object) -> NetemImpairment:
         loss=_get_float(obj, "loss", where),
         rate=_get_int(obj, "rate", where),
         corruption=_get_float(obj, "corruption", where),
+    )
+
+
+def parse_link_endpoint(value: object) -> LinkEndpoint:
+    where = "LinkEndpoint"
+    obj = as_object(value, where)
+    impairment = _req(obj, "impairment", where)
+    return LinkEndpoint(
+        node=_get_str(obj, "node", where),
+        interface=_get_str(obj, "interface", where),
+        ifname=_get_str(obj, "ifname", where),
+        ifindex=_get_int(obj, "ifindex", where),
+        ipv4=_get_opt_str(obj, "ipv4", where),
+        ipv6=_get_opt_str(obj, "ipv6", where),
+        state=_get_opt_str(obj, "state", where),
+        impairment=None if impairment is None else parse_netem_impairment(impairment),
+    )
+
+
+def parse_lab_link(value: object) -> LabLink:
+    where = "LabLink"
+    obj = as_object(value, where)
+    return LabLink(
+        index=_get_int(obj, "index", where),
+        name=_get_opt_str(obj, "name", where),
+        type=_get_str(obj, "type", where),
+        prefix_ipv4=_get_opt_str(obj, "prefix_ipv4", where),
+        prefix_ipv6=_get_opt_str(obj, "prefix_ipv6", where),
+        bandwidth=_get_opt_int(obj, "bandwidth", where),
+        mtu=_get_opt_int(obj, "mtu", where),
+        oper_state=_get_literal(obj, "oper_state", where, LINK_OPER_STATES),
+        endpoints=[
+            parse_link_endpoint(item) for item in as_list(_req(obj, "endpoints", where), where)
+        ],
+    )
+
+
+def parse_lab_links(value: object) -> LabLinks:
+    where = "LabLinks"
+    obj = as_object(value, where)
+    return LabLinks(
+        links=[parse_lab_link(item) for item in as_list(_req(obj, "links", where), where)],
+        live=_get_bool(obj, "live", where),
     )
 
 

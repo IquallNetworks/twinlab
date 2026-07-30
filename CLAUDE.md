@@ -36,10 +36,10 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (thirteen deltas; delta 12 is the async job model, delta 13 the SSH
-jump). Two non-compose
+backend now implements in full (fourteen deltas; delta 12 is the async job model, delta 13 the SSH
+jump, delta 14 the link table — approved 2026-07-30). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 98 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 101 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -48,8 +48,15 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
 
 - **`frontend/`** — Vite + React + TypeScript (pnpm). **Rebuilt in place on the v1.0 wire**
   (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–5 ALL done —
-  frontend step 2 complete**, next is the v1.0 release train: publish `twinlab-client` to PyPI +
-  tag). Phase 1 (graphical identity):
+  frontend step 2 complete**. The parked backend batch is in progress — **link table + link oper
+  state DONE 2026-07-30** (contract delta 14; the frontend gained a Links card on the Nodes tab,
+  server-driven canvas edges with oper-state styling — stable `link:<linkindex>` ids, animated
+  impaired edges, client parse as fallback — and edge-click per-endpoint netem via the extracted
+  `NetemForm`/`useSetNetem` in `components/lab/netem-form.tsx`, which invalidates BOTH the node
+  netem key and `['labs', name, 'links']`); still parked: test-suites rework, definition
+  input methods, scenarios, catalog endpoint, … — and the v1.0 release train
+  (publish `twinlab-client` to PyPI + tag) goes LAST, after those land). Phase 1 (graphical
+  identity):
   identities are CSS token packs
   keyed off `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk +
   IBM Plex Mono, faint line-grid canvas) is the chosen design system and Blueprint is
@@ -185,7 +192,19 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   (whole-lab freeze — clab-api has no lab-level pause, so this fans out over the nodes, non-atomic),
   `POST /labs/{name}/save` (persist running config), `GET /labs/{name}/nodes/{node}/logs` (container
   logs, `?tail=`), `GET /labs/{name}/interfaces` (per-node inventory keyed by SHORT node name;
-  `?node=` filters by it), and **netem link impairment** keyed by node+interface (`GET/POST
+  `?node=` filters by it), the **link table** `GET /labs/{name}/links` (contract delta 14: the
+  LOGICAL link list from netlab's expanded topology — a LAN is ONE link with N endpoints; `netlab
+  create` runs `-o config -o provider -o json:nodefault=` since `-o` REPLACES the default output
+  set and `config` must come first for the clab provider's bind validation; persisted as a
+  regenerable JSONB cache on the lab record by the PUT dry-run, refreshed on deploy, lazily
+  backfilled on GET; endpoints carry the container-side interface name — `clab.name`-else-`ifname`,
+  live-resolved by name-OR-alias so cisco IOL's `Ethernet0/1` resolves to the netns `eth1` — plus
+  netlab IPs, live `state`, and the active netem impairment, merged best-effort with ONE inspect +
+  SEQUENTIAL netem shows because clab-api serializes netem per lab, concurrent calls 409; derived
+  `oper_state` is a pinned up/degraded/down/unknown roll-up, `live` the honesty flag, 409
+  `no_definition` on a bare record, upstream failures degrade to `live=false` — never 5xx; netlab's
+  link `type` is a passthrough and NOT a rendering signal — a linux-host p2p comes out "lan",
+  consumers discriminate on endpoint count), and **netem link impairment** keyed by node+interface (`GET/POST
   /labs/{name}/nodes/{node}/netem` — durations are structured `{value, unit}` pairs; set has
   REPLACE semantics: the body is the complete desired impairment, omitted = cleared, empty body =
   clear all; show lists only ACTIVELY impaired interfaces — the node's container is resolved from

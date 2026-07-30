@@ -117,9 +117,7 @@ async def test_deleting_the_user_releases_their_keys(
     assert key.fingerprint == keygen_fingerprint(tmp_path / "id_ed25519")
 
 
-async def test_generated_key_lifecycle(
-    make_user_client: UserClientFactory, tmp_path: Path
-) -> None:
+async def test_generated_key_lifecycle(make_user_client: UserClientFactory, tmp_path: Path) -> None:
     _, client = await make_user_client(None)
 
     generated = await client.generate_ssh_key("issued")

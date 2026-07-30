@@ -147,18 +147,26 @@ async def test_deploy_mutex_rejects_concurrent_submits(
     _ = await admin.wait_job(lab.name, winners[0].id, timeout=JOB_WAIT)
 
 
+async def test_links_live_state(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    detail = await _deployed_lab(admin, make_lab)
+    table = await admin.links(detail.name)
+    assert table.live is True
+    (link,) = table.links
+    assert link.oper_state == "up"
+    # Cross-endpoint consistency: the served interface name is exactly what
+    # /interfaces reports for that node (delta 14's whole point — no guessing).
+    inventory = {entry.node: entry.interfaces for entry in await admin.interfaces(detail.name)}
+    for endpoint in link.endpoints:
+        assert endpoint.state == "up"
+        assert endpoint.interface in {iface.name for iface in inventory[endpoint.node]}
+
+
 async def test_netem_set_show_clear(admin: TwinlabClient, make_lab: LabFactory) -> None:
     detail = await _deployed_lab(admin, make_lab)
-    inventory = {entry.node: entry.interfaces for entry in await admin.interfaces(detail.name)}
-    # eth0 is containerlab's management interface; the n1-n2 link is the
-    # first non-mgmt ethN.
-    link_interfaces = sorted(
-        iface.name
-        for iface in inventory["n1"]
-        if iface.name.startswith("eth") and iface.name != "eth0"
-    )
-    assert link_interfaces, "expected a non-mgmt link interface on n1"
-    interface = link_interfaces[0]
+    # The link table names the n1-n2 link interface authoritatively (before
+    # delta 14 this test guessed "first non-mgmt ethN" off the inventory).
+    (link,) = (await admin.links(detail.name)).links
+    interface = next(e.interface for e in link.endpoints if e.node == "n1")
 
     _ = await admin.set_netem(detail.name, "n1", interface, delay=Duration(50.0, "ms"), loss=1.0)
     shaped = {imp.interface: imp for imp in await admin.show_netem(detail.name, "n1")}
@@ -167,11 +175,23 @@ async def test_netem_set_show_clear(admin: TwinlabClient, make_lab: LabFactory) 
     assert impairment.loss == 1.0
     assert impairment.jitter is None
 
+    # The links view carries the same impairment on the endpoint it was set
+    # on — and an impaired-but-up link still reads "up" (impairment is
+    # requested behavior, not degraded health).
+    (shaped_link,) = (await admin.links(detail.name)).links
+    by_node = {endpoint.node: endpoint for endpoint in shaped_link.endpoints}
+    set_impairment = by_node["n1"].impairment
+    assert set_impairment is not None and set_impairment.delay == Duration(50.0, "ms")
+    assert by_node["n2"].impairment is None
+    assert shaped_link.oper_state == "up"
+
     # REPLACE semantics: a call with no impairments clears the interface —
     # and show lists only ACTIVELY impaired interfaces, so it disappears.
     _ = await admin.set_netem(detail.name, "n1", interface)
     cleared = {imp.interface: imp for imp in await admin.show_netem(detail.name, "n1")}
     assert interface not in cleared
+    (cleared_link,) = (await admin.links(detail.name)).links
+    assert all(endpoint.impairment is None for endpoint in cleared_link.endpoints)
 
 
 async def test_node_power_cycle(admin: TwinlabClient, make_lab: LabFactory) -> None:

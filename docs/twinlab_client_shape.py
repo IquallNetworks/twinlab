@@ -60,6 +60,20 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     registers the public half, and returns the private key ONCE (never
     stored — the api-key pattern). (wire today: no ssh-key surface, no jump
     service.)
+14. Link table (APPROVED 2026-07-30): ``GET
+    /labs/{name}/links`` serves the lab's LOGICAL link table, derived from
+    the netlab-expanded topology (a LAN is one link with N endpoints, not
+    clab.yml's per-member fan-out): per link the netlab ``linkindex``,
+    type, prefix, and per-endpoint ``node``/``interface``/IPs — plus a
+    DERIVED per-link oper state rolled up from the live interface
+    inventory and each endpoint's ACTIVE netem impairment (one read serves
+    the whole link view; per-node ``show_netem`` remains for the node
+    view). The table is produced by the same dry ``netlab create`` that
+    validates a PUT and persisted on the lab record, so reads never pay the
+    subprocess cost; it works on any AUTHORED lab (undeployed = full table,
+    states unknown). 409 ``no_definition`` on a bare created record. (wire
+    today: no link surface — the frontend guesses links from the raw
+    definition and the netem tests guess interface names.)
 
 Conventions:
 
@@ -514,6 +528,78 @@ class NetemImpairment:
     loss: float  # percent
     rate: int  # kbit/s
     corruption: float  # percent
+
+
+# Delta 14 (APPROVED 2026-07-30). Pinned as a Literal — unlike the interface `state`
+# passthrough — because Twinlab DERIVES this value itself. Roll-up over the
+# link's endpoint states: all "up" -> "up"; all known-not-up -> "down"; a mix
+# of known states -> "degraded" (a p2p with one side down reads degraded — the
+# per-endpoint states disambiguate; in practice a veth pair drops both sides);
+# any endpoint unknown (lab not deployed, inventory unavailable, interface not
+# found) -> "unknown".
+LinkOperState = Literal["up", "degraded", "down", "unknown"]
+
+
+@dataclass(frozen=True, slots=True)
+class LinkEndpoint:
+    """One attachment point of a logical link (delta 14)."""
+
+    node: str  # SHORT node name — matches /interfaces keys and the netem routes
+    # The container-side interface name: what /interfaces reports and netem
+    # accepts. QUIRK: resolved against the live inventory (name-or-alias
+    # match) when the lab is deployed; undeployed it is the generated
+    # clab-side name — identical for every non-renaming kind, but a renaming
+    # kind (cisco IOL: "Ethernet0/1" vs "eth1") only settles once deployed.
+    interface: str
+    ifname: (
+        str  # netlab/NOS-side name (e.g. "Ethernet0/1"); == interface when they agree
+    )
+    ifindex: int  # netlab interface index
+    ipv4: str | None  # netlab-assigned CIDR; None on unnumbered/L2-only links
+    ipv6: str | None
+    # Live oper state passthrough for this interface ("up"/"down"/... — the
+    # same unpinned vocabulary QUIRK as NodeInterface.state); None = unknown.
+    state: str | None
+    # Active netem impairment on this interface (reuses NetemImpairment — its
+    # `interface` field is redundant here but keeps one shape). None = not
+    # impaired OR unknown: only meaningful on a live read (`LabLinks.live`).
+    # Deliberately NOT folded into oper_state — an impairment is requested
+    # behavior, not degraded health; the UI renders them as distinct signals.
+    impairment: NetemImpairment | None
+
+
+@dataclass(frozen=True, slots=True)
+class LabLink:
+    """One LOGICAL link from the netlab-expanded topology (delta 14):
+    a LAN is ONE link with N endpoints, stubs/loopbacks have one — not
+    clab.yml's physical per-member fan-out."""
+
+    index: int  # netlab linkindex — stable within a definition version
+    name: str | None  # user-set link name only (netlab's _linkname is internal)
+    # netlab's link type ("p2p" | "lan" | "stub" | "loopback" observed) — a
+    # passthrough str, not pinned: netlab owns the vocabulary. QUIRK: not a
+    # rendering signal — a linux-host p2p comes out "lan" (bridge-backed);
+    # discriminate on len(endpoints) instead.
+    type: str
+    prefix_ipv4: str | None  # the link subnet; the only IP surface we have
+    prefix_ipv6: str | None  # (/interfaces is L2-only)
+    bandwidth: int | None  # netlab passthrough, as authored
+    mtu: int | None
+    oper_state: LinkOperState
+    endpoints: list[LinkEndpoint]
+
+
+@dataclass(frozen=True, slots=True)
+class LabLinks:
+    """The lab's link table (delta 14).
+
+    `live` is the honesty flag: False means oper state could not be resolved
+    (lab not deployed, or the interface inventory was unavailable) and every
+    state is "unknown" — distinguishable from a deployed lab reporting real
+    unknowns."""
+
+    links: list[LabLink]
+    live: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1028,7 +1114,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # "created" record — and the bar was "remove unless atomic". Callers
     # compose create_lab + PUTs + deploy_lab explicitly.)
 
-    async def configure_lab(self, name: str, *, skip_config_time_checks: bool = False) -> Job:
+    async def configure_lab(
+        self, name: str, *, skip_config_time_checks: bool = False
+    ) -> Job:
         """POST /labs/{name}/configure — lab:configure. **202 + the running
         configure Job** (result: ConfigureResponse). Pushes config from the
         stored definition, then runs config-time suites unless skipped (the
@@ -1162,6 +1250,17 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     ) -> list[NodeInterfaces]:
         """GET /labs/{name}/interfaces[?node=] — lab:read. See NodeInterfaces
         QUIRK (container-name keys)."""
+        raise NotImplementedError
+
+    async def links(self, name: str) -> LabLinks:
+        """PROPOSED (delta 14 APPROVED, not served yet) GET /labs/{name}/links — the lab's
+        logical link table with derived oper state. lab:read (404
+        existence-hiding). 409 ``no_definition`` on a bare created record —
+        an empty table would be indistinguishable from a definition with no
+        links. Works on ANY authored lab: undeployed labs return the full
+        table with every ``oper_state`` "unknown" and ``live=False``. The
+        live merge is best-effort: an interface-inventory failure degrades to
+        unknown states, never a 5xx."""
         raise NotImplementedError
 
     async def show_netem(self, name: str, node: str) -> list[NetemImpairment]:

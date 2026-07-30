@@ -15,9 +15,10 @@ maps typed errors to status codes.
 import re
 import uuid
 from http import HTTPStatus
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Path, Request
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -49,9 +50,13 @@ from twinlab_backend.models import (
     JobOut,
     LabActionResponse,
     LabDetail,
+    LabLink,
+    LabLinksResponse,
     LabNodeState,
     LabStatus,
     LabSummary,
+    LinkEndpoint,
+    LinkOperState,
     NetemImpairment,
     NetemSetRequest,
     NodeConfigResult,
@@ -82,8 +87,10 @@ from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
 from twinlab_backend.services.custom_config import BuiltinLibrary
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
 from twinlab_backend.services.netlab import (
+    TopologyLink,
     create_clab_topology,
     read_mgmt_subnet,
+    serialize_links,
     set_lab_name,
     set_mgmt_subnet,
     strip_generated_binds,
@@ -410,6 +417,144 @@ def _config_fileset(library: BuiltinLibrary, lab: Lab) -> dict[str, str]:
     return library.fileset | _user_fileset(lab)
 
 
+def link_oper_state(states: list[str | None]) -> LinkOperState:
+    """Roll a link's endpoint interface states up into the derived link state
+    (contract delta 14): all "up" -> up; all known-not-up -> down; a mix of
+    known states -> degraded; any unknown endpoint -> unknown."""
+    if not states or any(state is None for state in states):
+        return "unknown"
+    if all(state == "up" for state in states):
+        return "up"
+    if all(state != "up" for state in states):
+        return "down"
+    return "degraded"
+
+
+def merge_links(
+    stored: list[TopologyLink],
+    inventory: dict[str, list[NodeInterface]] | None,
+    impairments: dict[str, list[NetemImpairment]],
+) -> LabLinksResponse:
+    """Assemble the link-table response: the stored logical links overlaid with
+    live per-interface state and active impairment. `inventory` is keyed by
+    SHORT node name; None means live state could not be resolved (lab not
+    deployed / inventory unavailable) -> live=False, every state unknown. An
+    endpoint is matched against its node's inventory by name OR alias (a
+    renaming kind like cisco_iol advertises the NOS name as the alias);
+    matched endpoints report the live container-side name."""
+    links: list[LabLink] = []
+    for link in stored:
+        endpoints: list[LinkEndpoint] = []
+        for endpoint in link.endpoints:
+            live = None
+            if inventory is not None:
+                live = next(
+                    (
+                        candidate
+                        for candidate in inventory.get(endpoint.node, [])
+                        if endpoint.clab_name in (candidate.name, candidate.alias)
+                    ),
+                    None,
+                )
+            interface = live.name if live is not None else endpoint.clab_name
+            impairment = next(
+                (
+                    entry
+                    for entry in impairments.get(endpoint.node, [])
+                    if entry.interface == interface
+                ),
+                None,
+            )
+            endpoints.append(
+                LinkEndpoint(
+                    node=endpoint.node,
+                    interface=interface,
+                    ifname=endpoint.ifname,
+                    ifindex=endpoint.ifindex,
+                    ipv4=endpoint.ipv4,
+                    ipv6=endpoint.ipv6,
+                    state=live.state if live is not None else None,
+                    impairment=impairment,
+                )
+            )
+        links.append(
+            LabLink(
+                index=link.index,
+                name=link.name,
+                type=link.type,
+                prefix_ipv4=link.prefix_ipv4,
+                prefix_ipv6=link.prefix_ipv6,
+                bandwidth=link.bandwidth,
+                mtu=link.mtu,
+                oper_state=link_oper_state([e.state for e in endpoints]),
+                endpoints=endpoints,
+            )
+        )
+    return LabLinksResponse(links=links, live=inventory is not None)
+
+
+def _stored_links(lab: Lab) -> list[TopologyLink] | None:
+    """Parse the lab's cached link table; None = absent or unreadable (a shape
+    change since it was written) — both healed by regeneration."""
+    if lab.links is None:
+        return None
+    raw = lab.links.get("links")
+    if not isinstance(raw, list):
+        return None
+    try:
+        return [TopologyLink.model_validate(item) for item in cast("list[object]", raw)]
+    except ValidationError:
+        return None
+
+
+async def _live_link_state(
+    clab: ClabApiClient, lab: Lab, links: list[TopologyLink]
+) -> tuple[dict[str, list[NodeInterface]] | None, dict[str, list[NetemImpairment]]]:
+    """Best-effort live overlay for the link table. Upstream failures degrade
+    (None inventory -> live=False; a node's failed netem show -> no impairment
+    data) rather than failing the read — the table itself is stored data."""
+    if lab.status != lab_store.STATUS_DEPLOYED:
+        return None, {}
+    inventory_result = await clab.interfaces(lab.name)
+    if isinstance(inventory_result, Err):
+        return None, {}
+    try:
+        converted = _interfaces_response(inventory_result.value, lab.name)
+    except ApiError:
+        # An unexpected container name 502s the /interfaces route (the loud
+        # path); here an unreadable inventory just means "not live".
+        return None, {}
+    inventory = {entry.node: entry.interfaces for entry in converted}
+    # One inspect resolves every endpoint container at once (netem is keyed by
+    # container name).
+    endpoint_nodes = {endpoint.node for link in links for endpoint in link.endpoints}
+    inspected = await clab.inspect(lab.name)
+    if isinstance(inspected, Err):
+        return inventory, {}
+    containers = {
+        node.node_name: node.container_name
+        for node in inspected.value
+        if node.node_name in endpoint_nodes and node.state == "running"
+    }
+
+    # The netem shows run SEQUENTIALLY: clab-api serializes netem per lab — a
+    # concurrent call gets 409 "busy with netem operation", so a fan-out would
+    # defeat itself and quietly degrade to "no data" (implementation finding).
+    impairments: dict[str, list[NetemImpairment]] = {}
+    for node, container in containers.items():
+        shown = await clab.show_netem(container)
+        if isinstance(shown, Err):
+            impairments[node] = []
+            continue
+        try:
+            impairments[node] = [_netem_model(entry) for entry in shown.value]
+        except ApiError:
+            # A malformed tc duration 502s the per-node netem route (the loud
+            # path); here it must not take down the whole table.
+            impairments[node] = []
+    return inventory, impairments
+
+
 def _custom_config_response(library: BuiltinLibrary, lab: Lab) -> CustomConfigResponse:
     return CustomConfigResponse(
         builtin=[
@@ -445,25 +590,27 @@ async def _live_detail(lab: Lab, clab: ClabApiClient, permissions: list[str]) ->
 
 async def _run_deploy(
     definition: str, clab: ClabApiClient, templates: dict[str, str], *, reconfigure: bool
-) -> Result[DeployedLab, ApiError]:
+) -> Result[tuple[DeployedLab, list[TopologyLink]], ApiError]:
     """Generate the containerlab topology from a netlab definition and deploy it.
     `reconfigure` overwrites a lab of the same name (redeploy). `templates` is the
     custom-config fileset the definition may reference — `netlab create` validates
     those exist, so they must be present even though config push happens later.
-    Returns the mapped ApiError as an error value so the caller can release a
-    reservation before re-raising, rather than unwinding through an exception."""
+    Also hands back the run's link table so the caller can refresh the stored
+    cache. Returns the mapped ApiError as an error value so the caller can
+    release a reservation before re-raising, rather than unwinding through an
+    exception."""
     # netlab create is blocking subprocess work; keep it off the event loop.
-    topology = await run_in_threadpool(create_clab_topology, definition, templates)
-    if isinstance(topology, Err):
-        return Err(_netlab_failed(topology.error.message, topology.error.stderr))
+    artifacts = await run_in_threadpool(create_clab_topology, definition, templates)
+    if isinstance(artifacts, Err):
+        return Err(_netlab_failed(artifacts.error.message, artifacts.error.stderr))
     # We deploy inline (topologyContent) and ship no files, so drop binds netlab
     # points at its generated node_files/* (e.g. cisco_iol's ifstate) — the clab
     # kind regenerates them, and clab-api would otherwise reject the bind path.
-    shippable = strip_generated_binds(topology.value)
+    shippable = strip_generated_binds(artifacts.value.topology)
     deployed = await clab.deploy(shippable, reconfigure=reconfigure)
     if isinstance(deployed, Err):
         return Err(_deploy_failed(deployed.error.message))
-    return Ok(deployed.value)
+    return Ok((deployed.value, artifacts.value.links))
 
 
 async def _finish_deploy(
@@ -580,7 +727,9 @@ async def update_lab_definition(
     if isinstance(validated, Err):
         raise _netlab_failed(validated.error.message, validated.error.stderr)
 
-    updated = await lab_store.update_definition(db, lab_name, definition, mgmt_subnet)
+    updated = await lab_store.update_definition(
+        db, lab_name, definition, mgmt_subnet, serialize_links(validated.value.links)
+    )
     if isinstance(updated, lab_store.LabStoreError):
         if updated.reason == "subnet_taken":
             raise ApiError(409, "mgmt_subnet_taken", f"mgmt subnet {mgmt_subnet} is already in use")
@@ -648,9 +797,13 @@ async def _deploy_job(
         if isinstance(deployed, Err):
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise deployed.error
+        deployed_lab, links = deployed.value
+        # The deploy's own `netlab create` just produced the link table — refresh
+        # the stored cache (free backfill for rows predating the column).
+        _ = await lab_store.set_links(db, lab_name, serialize_links(links))
         _ = await lab_store.mark_deployed(db, lab_name)
         return await _finish_deploy(
-            deployed.value,
+            deployed_lab,
             definition,
             runner,
             db,
@@ -1177,6 +1330,36 @@ async def lab_interfaces(
     if node is None:
         return inventory
     return [entry for entry in inventory if entry.node == node]
+
+
+@router.get("/{lab_name}/links", dependencies=[Depends(require_lab(perms.LAB_READ))])
+async def lab_links(
+    lab_name: LabName, clab: ClabClientDep, db: SessionDep, library: BuiltinLibraryDep
+) -> LabLinksResponse:
+    """The lab's logical link table with derived oper state (contract delta 14):
+    served from the record's cached extract, lazily regenerated from the stored
+    definition when the cache predates the column."""
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    if lab.definition is None:
+        # An empty table would be indistinguishable from a definition with no
+        # links; a bare created record has nothing to derive from.
+        raise ApiError(
+            409, "no_definition", f"lab '{lab_name}' has no definition to derive links from"
+        )
+    stored = _stored_links(lab)
+    if stored is None:
+        artifacts = await run_in_threadpool(
+            create_clab_topology, lab.definition, _config_fileset(library, lab)
+        )
+        if isinstance(artifacts, Err):
+            # Unexpected — the stored definition passed its PUT-time dry run.
+            raise _netlab_failed(artifacts.error.message, artifacts.error.stderr)
+        stored = artifacts.value.links
+        _ = await lab_store.set_links(db, lab_name, serialize_links(stored))
+    inventory, impairments = await _live_link_state(clab, lab, stored)
+    return merge_links(stored, inventory, impairments)
 
 
 async def _lab_lifecycle(

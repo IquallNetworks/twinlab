@@ -187,6 +187,12 @@ class Lab(Base):
     # / skipped / no config-time suites), True (passed), False (failed). An explicit
     # flag so a lab whose config-time checks failed is unambiguous in a listing.
     config_time_ok: Mapped[bool | None] = mapped_column(Boolean(), default=None)
+    # The definition's derived link table ({"links": [TopologyLink, ...]},
+    # contract delta 14): a regenerable cache extracted from the same `netlab
+    # create` that validates the definition on PUT, so GET /labs/{name}/links
+    # never pays the subprocess cost. NULL = not yet generated (rows predating
+    # the feature) — the GET lazily regenerates and persists.
+    links: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
     # User-authored netlab custom-config templates: a {relpath: content} fileset
     # (e.g. {"nat/ios.j2": "..."}), shipped to the runner alongside the built-in
     # library on every configure. Built-ins live in code, not here. Never sent to

@@ -12,6 +12,7 @@ import {
   labActionResponseSchema,
   labDetailSchema,
   labInterfacesSchema,
+  labLinksSchema,
   labListSchema,
   labOwnerSchema,
   nodeLogsResponseSchema,
@@ -259,6 +260,10 @@ export const api = {
     ),
   labInterfaces: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/interfaces`, labInterfacesSchema),
+  // The netlab-derived logical link table with per-endpoint live state and
+  // active impairment; 409 no_definition on a bare created record.
+  labLinks: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}/links`, labLinksSchema),
 
   // Netem link impairment, keyed by node + interface (the backend resolves the
   // node to its container). Set takes lab:configure; show takes lab:read. Set

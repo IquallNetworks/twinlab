@@ -36,6 +36,7 @@ from twinlab_client.models import (
     LabActionResponse,
     LabDetail,
     LabEvent,
+    LabLinks,
     LabOwner,
     LabPowerAction,
     LabSummary,
@@ -595,6 +596,15 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         params: dict[str, str | int | bool] | None = None if node is None else {"node": node}
         payload = await self._send_json("GET", f"/labs/{name}/interfaces", params=params)
         return [_wire.parse_node_interfaces(v) for v in _wire.as_list(payload, "NodeInterfaces[]")]
+
+    async def links(self, name: str) -> LabLinks:
+        """GET /labs/{name}/links — the lab's logical link table with derived
+        oper state and per-endpoint active impairment (delta 14). lab:read.
+        409 `no_definition` on a bare created record. Works on any authored
+        lab: undeployed labs return the full table with every oper_state
+        "unknown" and live=False."""
+        payload = await self._send_json("GET", f"/labs/{name}/links")
+        return _wire.parse_lab_links(payload)
 
     async def show_netem(self, name: str, node: str) -> list[NetemImpairment]:
         """GET /labs/{name}/nodes/{node}/netem — lab:read. Lists only the

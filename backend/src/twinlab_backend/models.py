@@ -410,6 +410,61 @@ class NetemImpairment(BaseModel):
     corruption: float  # percent
 
 
+# Contract delta 14. Pinned — unlike the interface `state` passthrough —
+# because Twinlab derives this value itself. Roll-up over the link's endpoint
+# states: all "up" -> "up"; all known-not-up -> "down"; a mix of known states
+# -> "degraded"; any endpoint unknown -> "unknown".
+LinkOperState = Literal["up", "degraded", "down", "unknown"]
+
+
+class LinkEndpoint(BaseModel):
+    """One attachment point of a logical link (contract delta 14)."""
+
+    node: str  # SHORT node name — matches /interfaces keys and the netem routes
+    # The container-side interface name: what /interfaces reports and netem
+    # accepts. Resolved against the live inventory (name-or-alias match) when
+    # the lab is deployed; undeployed it is the generated clab-side name.
+    interface: str
+    ifname: str  # netlab/NOS-side name; == interface when they agree
+    ifindex: int  # netlab interface index
+    ipv4: str | None  # netlab-assigned CIDR; None on unnumbered/L2-only links
+    ipv6: str | None
+    # Live oper state passthrough for this interface (the same unpinned
+    # vocabulary as NodeInterface.state); None = unknown.
+    state: str | None
+    # Active netem impairment on this interface; None = not impaired OR
+    # unknown (only meaningful on a live read). Deliberately not folded into
+    # oper_state — an impairment is requested behavior, not degraded health.
+    impairment: NetemImpairment | None
+
+
+class LabLink(BaseModel):
+    """One LOGICAL link from the netlab-expanded topology (contract delta 14):
+    a LAN is one link with N endpoints, stubs have one — not clab.yml's
+    physical per-member fan-out."""
+
+    index: int  # netlab linkindex — stable within a definition version
+    name: str | None  # user-set link name only
+    # netlab's link type — a passthrough, not pinned (netlab owns the
+    # vocabulary) and not a rendering signal: discriminate on len(endpoints).
+    type: str
+    prefix_ipv4: str | None  # the link subnet — the only IP surface we have
+    prefix_ipv6: str | None  # (/interfaces is L2-only)
+    bandwidth: int | None
+    mtu: int | None
+    oper_state: LinkOperState
+    endpoints: list[LinkEndpoint]
+
+
+class LabLinksResponse(BaseModel):
+    """The lab's link table (contract delta 14). `live` is the honesty flag:
+    False means oper state could not be resolved (lab not deployed, or the
+    interface inventory was unavailable) and every state is "unknown"."""
+
+    links: list[LabLink]
+    live: bool
+
+
 class LabEvent(BaseModel):
     """A lab lifecycle event relayed from clab-api as the SSE payload; the frontend
     invalidates the affected lab's queries on each one."""

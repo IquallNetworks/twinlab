@@ -26,6 +26,14 @@ export function nodeStateBadgeVariant(state: string): BadgeVariant {
   return state === 'running' ? 'default' : 'secondary'
 }
 
+/** Link oper state (the pinned delta-14 roll-up) → badge style. */
+export function linkOperBadgeVariant(state: 'up' | 'degraded' | 'down' | 'unknown'): BadgeVariant {
+  if (state === 'up') return 'default'
+  if (state === 'down') return 'destructive'
+  if (state === 'degraded') return 'secondary'
+  return 'outline'
+}
+
 /** Test result status → badge style: pass reads as active, fail/error as
  * destructive, skip as muted. */
 export function testStatusBadgeVariant(status: string): BadgeVariant {

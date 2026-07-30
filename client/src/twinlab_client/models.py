@@ -58,6 +58,12 @@ CONTAINER_STATES: Final[tuple[ContainerState, ...]] = (
 NodeConfigStatus = Literal["configured", "failed"]
 NODE_CONFIG_STATUSES: Final[tuple[NodeConfigStatus, ...]] = ("configured", "failed")
 
+# The derived per-link oper state (delta 14) — pinned because Twinlab computes
+# it: all endpoints "up" -> "up"; all known-not-up -> "down"; a mix of known
+# states -> "degraded"; any endpoint unknown -> "unknown".
+LinkOperState = Literal["up", "degraded", "down", "unknown"]
+LINK_OPER_STATES: Final[tuple[LinkOperState, ...]] = ("up", "degraded", "down", "unknown")
+
 DestroyStatus = Literal["destroyed", "deleted"]
 DESTROY_STATUSES: Final[tuple[DestroyStatus, ...]] = ("destroyed", "deleted")
 
@@ -427,6 +433,54 @@ class NetemImpairment:
     loss: float  # percent
     rate: int  # kbit/s
     corruption: float  # percent
+
+
+@dataclass(frozen=True, slots=True)
+class LinkEndpoint:
+    """One attachment point of a logical link (delta 14)."""
+
+    node: str  # SHORT node name — matches /interfaces keys and the netem routes
+    # Container-side interface name (what /interfaces reports and netem
+    # accepts): live-resolved when the lab is deployed; otherwise the generated
+    # clab-side name (QUIRK: a renaming kind like cisco IOL settles on deploy).
+    interface: str
+    ifname: str  # netlab/NOS-side name; == interface when they agree
+    ifindex: int  # netlab interface index
+    ipv4: str | None  # netlab-assigned CIDR; None on unnumbered/L2-only links
+    ipv6: str | None
+    # Live oper state passthrough (the same unpinned vocabulary QUIRK as
+    # NodeInterface.state); None = unknown.
+    state: str | None
+    # Active netem impairment; None = not impaired OR unknown (only meaningful
+    # on a live read). Deliberately not folded into oper_state.
+    impairment: NetemImpairment | None
+
+
+@dataclass(frozen=True, slots=True)
+class LabLink:
+    """One LOGICAL link from the netlab-expanded topology (delta 14): a LAN is
+    one link with N endpoints, stubs have one — not clab.yml's physical
+    per-member fan-out."""
+
+    index: int  # netlab linkindex — stable within a definition version
+    name: str | None  # user-set link name only
+    type: str  # netlab's vocabulary, passthrough — not a rendering signal
+    prefix_ipv4: str | None
+    prefix_ipv6: str | None
+    bandwidth: int | None
+    mtu: int | None
+    oper_state: LinkOperState
+    endpoints: list[LinkEndpoint]
+
+
+@dataclass(frozen=True, slots=True)
+class LabLinks:
+    """The lab's link table (delta 14). `live` is the honesty flag: False means
+    oper state could not be resolved (lab not deployed, or the interface
+    inventory was unavailable) and every state is "unknown"."""
+
+    links: list[LabLink]
+    live: bool
 
 
 @dataclass(frozen=True, slots=True)

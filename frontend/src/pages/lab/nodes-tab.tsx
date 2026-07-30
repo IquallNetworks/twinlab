@@ -3,6 +3,7 @@ import { Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { LabInterfaces } from '@/components/lab/lab-interfaces'
+import { LabLinks } from '@/components/lab/lab-links'
 import { NodeConnectDrawer } from '@/components/lab/node-connect-drawer'
 import { NodeControls } from '@/components/lab/node-controls'
 import { Badge } from '@/components/ui/badge'
@@ -122,6 +123,9 @@ export function NodesTab({ name }: { name: string }) {
         </CardContent>
       </Card>
 
+      {/* The link table is definition-derived, so it renders for any authored
+          lab — not just deployed ones (states are honestly unknown there). */}
+      <LabLinks name={lab.name} enabled={lab.definition !== null} />
       <LabInterfaces name={lab.name} enabled={isDeployed} />
     </div>
   )

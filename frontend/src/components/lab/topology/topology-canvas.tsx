@@ -1,4 +1,4 @@
-import { useQueries } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   Background,
@@ -12,6 +12,7 @@ import {
   useNodesState,
   useReactFlow,
   type Edge,
+  type EdgeMouseHandler,
   type NodeMouseHandler,
 } from '@xyflow/react'
 import { Download, LayoutGrid, Map as MapIcon, MoveHorizontal, MoveVertical } from 'lucide-react'
@@ -19,18 +20,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
 
+import { CurrentImpairments, NetemForm, useSetNetem } from '@/components/lab/netem-form'
 import { NodeConnectDrawer } from '@/components/lab/node-connect-drawer'
 import { NodeControls } from '@/components/lab/node-controls'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { nodeStateBadgeVariant } from '@/lib/format'
+import { linkOperBadgeVariant, nodeStateBadgeVariant } from '@/lib/format'
 import {
   PERM_LAB_CONFIGURE,
   PERM_LAB_READ,
   PERM_LAB_TERMINAL,
 } from '@/lib/lab-permissions'
-import { nodeNetemQueryOptions } from '@/lib/queries'
-import type { LabDetail } from '@/lib/schemas'
+import { labLinksQueryOptions, nodeNetemQueryOptions } from '@/lib/queries'
+import type { LabDetail, LabLink, LinkEndpoint, LinkOperState } from '@/lib/schemas'
 import type { ParsedTopology } from '@/lib/topology'
 
 import { DeviceNode } from './device-node'
@@ -59,10 +61,36 @@ interface BuiltGraph {
   shape: string
 }
 
+// Live overlay carried on server-derived edges. Scalars only — the selection
+// panel looks the full link up by id — so the in-place patch can compare
+// field-by-field like the node patch does.
+interface LinkEdgeData extends Record<string, unknown> {
+  operState: LinkOperState
+  impaired: boolean
+}
+
+/** Stroke/animation for a link's state. Unknown reads muted-dashed, down reads
+ * destructive; an impairment tints toward primary and animates — deliberately
+ * distinct from health (an impaired link is doing what was asked). */
+function edgeStyle(operState: LinkOperState, impaired: boolean): Partial<Edge> {
+  const style: Record<string, string | number> = {}
+  if (operState === 'down') style['stroke'] = 'var(--destructive)'
+  else if (operState === 'degraded') style['stroke'] = 'var(--primary)'
+  else if (operState === 'unknown') {
+    style['stroke'] = 'var(--muted-foreground)'
+    style['strokeDasharray'] = '4 3'
+    style['opacity'] = 0.6
+  } else if (impaired) {
+    style['stroke'] = 'var(--primary)'
+  }
+  return { style, animated: impaired }
+}
+
 function buildGraph(
   lab: LabDetail,
   topology: ParsedTopology,
   impairedByNode: ReadonlyMap<string, number>,
+  serverLinks: LabLink[] | null,
 ): BuiltGraph {
   const liveByName = new Map(lab.nodes.map((node) => [node.name, node]))
   const nodes: AppNode[] = []
@@ -106,23 +134,93 @@ function buildGraph(
   }
 
   const edges: Edge[] = []
-  topology.links.forEach((link, i) => {
-    if (link.kind === 'p2p') {
-      edges.push({ id: `${link.a}~${link.b}#${i}`, source: link.a, target: link.b, type: 'straight' })
-    } else {
-      nodes.push({
-        id: link.id,
-        type: 'lan',
-        position: { x: 0, y: 0 },
-        width: LAN_W,
-        height: LAN_H,
-        data: { label: `${link.members.length}-node LAN` },
-      })
-      for (const member of link.members) {
-        edges.push({ id: `${link.id}~${member}`, source: link.id, target: member, type: 'straight' })
+  if (serverLinks !== null) {
+    // The server link table is the ground truth (netlab's expanded topology):
+    // stable `link:<linkindex>` ids, real oper state, per-endpoint impairment.
+    // Endpoint count decides the rendering — netlab's `type` is not a signal
+    // (a linux-host p2p comes out "lan").
+    const present = new Set(nodes.map((n) => n.id))
+    for (const link of serverLinks) {
+      for (const endpoint of link.endpoints) {
+        // A link may reference a node the client-side parse missed — surface
+        // it like the parser's implicit nodes rather than dropping the edge.
+        if (!present.has(endpoint.node)) {
+          present.add(endpoint.node)
+          nodes.push({
+            id: endpoint.node,
+            type: 'device',
+            position: { x: 0, y: 0 },
+            width: DEVICE_W,
+            height: DEVICE_H,
+            data: {
+              label: endpoint.node,
+              state: liveByName.get(endpoint.node)?.state ?? NOT_DEPLOYED,
+              impairedIfaces: impairedByNode.get(endpoint.node) ?? 0,
+            },
+          })
+        }
       }
+      if (link.endpoints.length === 2) {
+        const [a, b] = link.endpoints
+        if (a === undefined || b === undefined) continue
+        edges.push({
+          id: `link:${link.index}`,
+          source: a.node,
+          target: b.node,
+          type: 'straight',
+          data: {
+            operState: link.oper_state,
+            impaired: a.impairment !== null || b.impairment !== null,
+          } satisfies LinkEdgeData,
+          ...edgeStyle(link.oper_state, a.impairment !== null || b.impairment !== null),
+        })
+      } else if (link.endpoints.length > 2) {
+        nodes.push({
+          id: `link:${link.index}`,
+          type: 'lan',
+          position: { x: 0, y: 0 },
+          width: LAN_W,
+          height: LAN_H,
+          data: { label: link.name ?? `${link.endpoints.length}-node LAN` },
+        })
+        for (const endpoint of link.endpoints) {
+          // Each spoke carries ITS member's interface state, not the roll-up.
+          const spokeState: LinkOperState =
+            endpoint.state === null ? 'unknown' : endpoint.state === 'up' ? 'up' : 'down'
+          edges.push({
+            id: `link:${link.index}~${endpoint.node}`,
+            source: `link:${link.index}`,
+            target: endpoint.node,
+            type: 'straight',
+            data: {
+              operState: spokeState,
+              impaired: endpoint.impairment !== null,
+            } satisfies LinkEdgeData,
+            ...edgeStyle(spokeState, endpoint.impairment !== null),
+          })
+        }
+      }
+      // Single-endpoint links (stubs/loopbacks) render in the table, not here.
     }
-  })
+  } else {
+    topology.links.forEach((link, i) => {
+      if (link.kind === 'p2p') {
+        edges.push({ id: `${link.a}~${link.b}#${i}`, source: link.a, target: link.b, type: 'straight' })
+      } else {
+        nodes.push({
+          id: link.id,
+          type: 'lan',
+          position: { x: 0, y: 0 },
+          width: LAN_W,
+          height: LAN_H,
+          data: { label: `${link.members.length}-node LAN` },
+        })
+        for (const member of link.members) {
+          edges.push({ id: `${link.id}~${member}`, source: link.id, target: member, type: 'straight' })
+        }
+      }
+    })
+  }
 
   const shape = [
     nodes.map((n) => n.id).sort().join(','),
@@ -131,12 +229,67 @@ function buildGraph(
   return { nodes, edges, shape }
 }
 
+// What the bottom panel shows: a device node or a server-table link. Decoded
+// from element ids (edge/hub ids are `link:<linkindex>[~member]`), the same
+// pattern the builder canvas uses.
+type Selection = { kind: 'node'; id: string } | { kind: 'link'; index: number }
+
+const LINK_ID = /^link:(\d+)/
+
+/** One endpoint's impairment controls inside the link panel: the current
+ * impairment on exactly this interface, plus the set form when permitted.
+ * Needs a live namespace, so not-running endpoints get the no-actions copy. */
+function EndpointNetem({
+  name,
+  endpoint,
+  running,
+  canConfigure,
+}: {
+  name: string
+  endpoint: LinkEndpoint
+  running: boolean
+  canConfigure: boolean
+}) {
+  const [resetting, setResetting] = useState<string | null>(null)
+  const reset = useSetNetem(name)
+  if (!running) {
+    return <span className="text-muted-foreground text-xs">Not running — no impairment control.</span>
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <CurrentImpairments
+        name={name}
+        node={endpoint.node}
+        enabled
+        interfaceFilter={endpoint.interface}
+        onReset={(iface) => {
+          setResetting(iface)
+          reset.mutate(
+            { node: endpoint.node, input: { interface: iface } },
+            { onSettled: () => setResetting(null) },
+          )
+        }}
+        resetting={resetting}
+      />
+      {canConfigure ? (
+        <NetemForm
+          name={name}
+          node={endpoint.node}
+          iface={endpoint.interface}
+          canConfigure
+          idPrefix={`edge-${endpoint.node}-${endpoint.interface}`}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopology }) {
   const { resolvedTheme } = useTheme()
   const { fitView } = useReactFlow()
   const [rankdir, setRankdir] = useState<RankDir>('LR')
   const [showMiniMap, setShowMiniMap] = useState(false)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selection, setSelection] = useState<Selection | null>(null)
 
   // Netem badge data: only running containers have a namespace to show.
   const runningNames = lab.nodes.filter((n) => n.state === 'running').map((n) => n.name)
@@ -161,9 +314,19 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
     [netemKey],
   )
 
+  // The server link table (authoritative when it resolves — including a
+  // legitimately-empty one); until then, or on error, the client-side parse
+  // keeps the canvas honest. Structural sharing keeps `data` referentially
+  // stable across identical refetches, so the memo doesn't churn.
+  const linksQuery = useQuery({
+    ...labLinksQueryOptions(lab.name),
+    enabled: lab.definition !== null,
+  })
+  const serverLinks = linksQuery.isSuccess ? linksQuery.data.links : null
+
   const built = useMemo(
-    () => buildGraph(lab, topology, impairedByNode),
-    [lab, topology, impairedByNode],
+    () => buildGraph(lab, topology, impairedByNode, serverLinks),
+    [lab, topology, impairedByNode, serverLinks],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<AppNode>([])
@@ -210,6 +373,23 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
         })
         return changed ? (next as AppNode[]) : current
       })
+      // Same discipline for edges: live overlay (state stroke, impairment
+      // animation) refreshes in place; the array identity only changes when
+      // an edge's data actually did.
+      const freshEdges = new Map(built.edges.map((e) => [e.id, e]))
+      setEdges((current) => {
+        let changed = false
+        const next = current.map((edge) => {
+          const update = freshEdges.get(edge.id)
+          if (!update) return edge
+          const a = edge.data as LinkEdgeData | undefined
+          const b = update.data as LinkEdgeData | undefined
+          if (a?.operState === b?.operState && a?.impaired === b?.impaired) return edge
+          changed = true
+          return { ...edge, data: update.data, style: update.style, animated: update.animated }
+        })
+        return changed ? next : current
+      })
     }
   }, [built, rankdir, lab.name, setNodes, setEdges, fitView])
 
@@ -219,15 +399,33 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
   nodesRef.current = nodes
 
   const onNodeClick: NodeMouseHandler<AppNode> = (_event, node) => {
-    setSelectedId(node.type === 'device' ? node.id : null)
+    if (node.type === 'device') {
+      setSelection({ kind: 'node', id: node.id })
+      return
+    }
+    // A LAN hub's id IS its link id — select the link, same as its spokes.
+    const hub = LINK_ID.exec(node.id)
+    setSelection(hub?.[1] !== undefined ? { kind: 'link', index: Number(hub[1]) } : null)
   }
 
+  // Server-table edges (and spokes) decode to their link; fallback-parse edges
+  // carry no link identity, so clicking them just clears the selection.
+  const onEdgeClick: EdgeMouseHandler<Edge> = (_event, edge) => {
+    const match = LINK_ID.exec(edge.id)
+    setSelection(match?.[1] !== undefined ? { kind: 'link', index: Number(match[1]) } : null)
+  }
+
+  const selectedId = selection?.kind === 'node' ? selection.id : null
   const selectedLive = selectedId !== null ? lab.nodes.find((n) => n.name === selectedId) : undefined
   const selectedData =
     selectedId !== null
       ? (nodes.find((n): n is AppNode & { type: 'device' } => n.id === selectedId && n.type === 'device')
           ?.data ?? null)
       : null
+  const selectedLink =
+    selection?.kind === 'link' && serverLinks !== null
+      ? serverLinks.find((link) => link.index === selection.index)
+      : undefined
   const can = (perm: string) => lab.permissions.includes(perm)
 
   return (
@@ -239,6 +437,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
       nodeTypes={NODE_TYPES}
       onNodesChange={onNodesChange}
       onNodeClick={onNodeClick}
+      onEdgeClick={onEdgeClick}
       onNodeDragStop={(_event, _node, dragged) => {
         // Dragging IS defining the manual layout: persist it per lab.
         const merged = nodesRef.current.map((node) => {
@@ -247,7 +446,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
         })
         saveLayout(lab.name, merged as AppNode[])
       }}
-      onPaneClick={() => setSelectedId(null)}
+      onPaneClick={() => setSelection(null)}
       nodesConnectable={false}
       edgesFocusable={false}
       deleteKeyCode={null}
@@ -324,7 +523,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
         </Button>
       </Panel>
 
-      {topology.unrendered > 0 && (
+      {serverLinks === null && topology.unrendered > 0 && (
         <Panel position="top-left">
           <p className="rounded-[2px] border bg-card/90 px-2 py-1 text-xs text-muted-foreground">
             {topology.unrendered} link{topology.unrendered === 1 ? '' : 's'} not rendered —{' '}
@@ -336,6 +535,61 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
               view the definition
             </Link>
           </p>
+        </Panel>
+      )}
+
+      {selectedLink !== undefined && (
+        <Panel position="bottom-center" className="w-full max-w-2xl">
+          <div className="flex max-h-[45vh] flex-col gap-3 overflow-y-auto rounded-[2px] border bg-card/95 px-3 py-2">
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-sm font-medium">
+                {selectedLink.name ?? `link #${selectedLink.index}`}
+              </span>
+              <span className="text-muted-foreground text-xs">{selectedLink.type}</span>
+              {selectedLink.prefix_ipv4 !== null && (
+                <span className="text-muted-foreground font-mono text-xs">
+                  {selectedLink.prefix_ipv4}
+                </span>
+              )}
+              <Badge variant={linkOperBadgeVariant(selectedLink.oper_state)}>
+                {selectedLink.oper_state}
+              </Badge>
+            </div>
+            {selectedLink.endpoints.map((endpoint) => (
+              <div
+                key={`${endpoint.node}:${endpoint.interface}`}
+                className="flex flex-col gap-2 border-t pt-2"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs font-medium">
+                    {endpoint.node}:{endpoint.interface}
+                  </span>
+                  {endpoint.ipv4 !== null && (
+                    <span className="text-muted-foreground font-mono text-xs">{endpoint.ipv4}</span>
+                  )}
+                  <Badge
+                    variant={
+                      endpoint.state === null
+                        ? 'outline'
+                        : endpoint.state === 'up'
+                          ? 'default'
+                          : 'destructive'
+                    }
+                  >
+                    {endpoint.state ?? 'unknown'}
+                  </Badge>
+                </div>
+                <EndpointNetem
+                  name={lab.name}
+                  endpoint={endpoint}
+                  running={
+                    lab.nodes.find((node) => node.name === endpoint.node)?.state === 'running'
+                  }
+                  canConfigure={can(PERM_LAB_CONFIGURE)}
+                />
+              </div>
+            ))}
+          </div>
         </Panel>
       )}
 

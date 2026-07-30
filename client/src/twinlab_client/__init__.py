@@ -4,6 +4,7 @@ from twinlab_client._terminal import TerminalClosed, TerminalSession
 from twinlab_client.client import TwinlabClient
 from twinlab_client.errors import TwinlabApiError, TwinlabProtocolError
 from twinlab_client.models import (
+    LINK_OPER_STATES,
     ApiKey,
     ApiKeyCreated,
     BuiltinTemplate,
@@ -28,11 +29,15 @@ from twinlab_client.models import (
     LabActionResponse,
     LabDetail,
     LabEvent,
+    LabLink,
+    LabLinks,
     LabNodeState,
     LabOwner,
     LabPowerAction,
     LabStatus,
     LabSummary,
+    LinkEndpoint,
+    LinkOperState,
     Liveness,
     NetemImpairment,
     NodeConfigResult,
@@ -66,6 +71,7 @@ from twinlab_client.models import (
 )
 
 __all__ = [
+    "LINK_OPER_STATES",
     "ApiKey",
     "ApiKeyCreated",
     "BuiltinTemplate",
@@ -90,11 +96,15 @@ __all__ = [
     "LabActionResponse",
     "LabDetail",
     "LabEvent",
+    "LabLink",
+    "LabLinks",
     "LabNodeState",
     "LabOwner",
     "LabPowerAction",
     "LabStatus",
     "LabSummary",
+    "LinkEndpoint",
+    "LinkOperState",
     "Liveness",
     "NetemImpairment",
     "NodeConfigResult",

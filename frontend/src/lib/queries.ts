@@ -56,6 +56,16 @@ export const labInterfacesQueryOptions = (name: string) =>
     queryFn: () => api.labInterfaces(name),
   })
 
+// Server-cached on the lab record, but every SSE burst invalidates the
+// ['labs'] prefix — a short staleTime damps refetch storms while still
+// tracking oper state through lab events.
+export const labLinksQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'links'],
+    queryFn: () => api.labLinks(name),
+    staleTime: 15_000,
+  })
+
 export const nodeNetemQueryOptions = (name: string, node: string) =>
   queryOptions({
     queryKey: ['labs', name, 'netem', node],

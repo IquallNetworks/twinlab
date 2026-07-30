@@ -92,6 +92,7 @@ async def create_lab(
         lab.last_validation = None
         lab.config_time_ok = None
         lab.custom_config = None
+        lab.links = None
         lab.deleted_at = None
         # A revived name starts with NO job history — the row keeps its id, so
         # without this the previous incarnation's jobs (possibly a different
@@ -220,6 +221,21 @@ async def record_validation(
     return lab
 
 
+async def set_links(
+    session: AsyncSession, name: str, links: dict[str, object]
+) -> Lab | LabStoreError:
+    """Persist a lab's derived link table alone: the lazy backfill for rows
+    predating the cache (GET regenerates from the stored definition) and the
+    deploy-path refresh (deploy re-runs the same `netlab create`). `not_found`
+    when the lab was never recorded here."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.links = links
+    await session.commit()
+    return lab
+
+
 async def transfer_owner(
     session: AsyncSession, name: str, new_owner_id: uuid.UUID
 ) -> Lab | LabStoreError:
@@ -235,17 +251,20 @@ async def transfer_owner(
 
 
 async def update_definition(
-    session: AsyncSession, name: str, definition: str, mgmt_subnet: str
+    session: AsyncSession, name: str, definition: str, mgmt_subnet: str, links: dict[str, object]
 ) -> Lab | LabStoreError:
     """Replace a lab's stored definition without touching its runtime. The caller
     validates the definition (and pins the lab's name and mgmt subnet into it)
-    first; here we only persist. `not_found` when the lab was never recorded
-    here."""
+    first; here we only persist. `links` is the definition's derived link table
+    (serialized {"links": [...]}), a byproduct of the validating `netlab create`
+    — stored together so the cache can never describe a different definition.
+    `not_found` when the lab was never recorded here."""
     lab = await get_lab(session, name)
     if lab is None:
         return LabStoreError("not_found", name)
     lab.definition = definition
     lab.mgmt_subnet = mgmt_subnet
+    lab.links = links
     try:
         await session.commit()
     except IntegrityError:

@@ -139,7 +139,8 @@ refetches), overlays state dots and netem badges (`useQueries` over running node
 with the Operations netem controls), and reuses NodeConnectDrawer + NodeControls from a selection
 panel. Toolbar: auto-layout, LR/TB, PNG export (`html-to-image`, approved). Undeployed labs
 render all-not-deployed — topology as documentation. Link oper state remains parked on the
-backend link table.
+backend link table. *(Unparked 2026-07-30: the link table shipped — see the parked list below —
+and the canvas now renders server-derived edges with true link state.)*
 
 ### Phase 4 — guided builder
 
@@ -190,7 +191,9 @@ live: the 3×VyOS + linux triangle emitted by the builder deployed to 4 running 
 - Accessibility pass (focus order, contrast under both themes, keyboard reachability), error-UX
   sweep, favicon/meta/branding finish.
 
-**Exit:** frontend step 2 done → v1.0 release train (publish `twinlab-client` to PyPI, tag).
+**Exit:** frontend step 2 done. **Ordering settled 2026-07-30:** the parked backend items below
+come FIRST; the v1.0 release train (publish `twinlab-client` to PyPI, tag) goes LAST, after they
+land — v1.0 is marked done only then.
 
 **Outcome (2026-07-30): DONE.** A shared **`CodeEditor`** (hand-rolled CodeMirror 6 wrapper —
 controlled value with an echo guard, compartments, `minimalSetup` + explicit extensions, themed
@@ -236,15 +239,26 @@ Frontend-driven wants that surfaced in this roadmap:
 
 - **Device/image catalog endpoint** — what devices/images can this deployment actually run
   (feeds the builder palette; replaces the curated client-side list).
-- **Link table + link oper state** — expose the netlab-generated link graph and per-link state
-  (upgrades the topology overlay from node-state-only to true link state). Now has a second,
-  user-requested consumer: **link-level netem from the canvas** (click an edge to manage its
-  impairment; color impaired edges) needs the definition-link → `node:iface` mapping, which only
-  the generated clab topology knows. Implementation pointer: the backend's
-  `create_clab_topology()` (services/netlab.py) already returns the parsed clab topology whose
-  `links[].endpoints` carry exact `node:iface` pairs — a `GET /labs/{name}/links` endpoint is a
-  deterministic re-generation from the stored definition (cacheable per definition hash).
-  Contract change → review gate.
+- **Link table + link oper state** — **DONE 2026-07-30 (contract delta 14, APPROVED)**. `GET
+  /labs/{name}/links` serves the LOGICAL link table from netlab's *expanded* topology (`netlab
+  create -o config -o provider -o json:nodefault=` — `-o` replaces the default output set and
+  `config` must come first or the clab provider's bind validation fails), persisted as a
+  regenerable JSONB cache on the lab record by the same dry create that validates a PUT (deploy
+  refreshes it; the GET lazily backfills pre-feature rows). Each endpoint carries the
+  container-side interface name (netlab `clab.name`-else-`ifname`, live-resolved by
+  name-OR-alias against `/interfaces` — cisco IOL's `Ethernet0/1` is the netns `eth1`'s alias),
+  netlab IPs (the only IP surface; `/interfaces` is L2-only), live `state`, and the ACTIVE netem
+  impairment (orthogonal to state on purpose). Derived `oper_state` is pinned
+  (up/degraded/down/unknown); `live` is the honesty flag; 409 `no_definition` on a bare record.
+  Implementation finding: clab-api serializes netem per lab (concurrent shows 409 "busy") — the
+  impairment merge runs sequentially. All three consumers landed: the **Links card** on the
+  Nodes tab (definition-gated, not deploy-gated), **server-driven canvas edges** (stable
+  `link:<linkindex>` ids, endpoint-count decides edge-vs-hub — netlab's `type` is NOT a
+  rendering signal, a linux-host p2p reads "lan" — with oper-state strokes + animated impaired
+  edges and an edge patch path; client parse stays the fallback), and **edge-click netem** (link
+  panel with per-endpoint state + extracted `NetemForm`/`useSetNetem`/filtered
+  `CurrentImpairments`). Blackbox: the netem test now takes its interface from `links()` instead
+  of guessing "first non-mgmt ethN".
 - **SSE job events** — already in ROADMAP; would let the job center drop its polling.
 - **Deployed-definition snapshot** — enables "definition drifted since deploy" hints.
 - **Server-side topology layout** — a layout field on the lab record, so a manually arranged

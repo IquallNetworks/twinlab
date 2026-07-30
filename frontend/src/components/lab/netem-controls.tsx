@@ -1,10 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { toast } from 'sonner'
 
-import { Button } from '@/components/ui/button'
+import { CurrentImpairments, NetemForm, useSetNetem } from '@/components/lab/netem-form'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -13,126 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { api } from '@/lib/api'
-import { formatDuration } from '@/lib/format'
-import { labInterfacesQueryOptions, nodeNetemQueryOptions } from '@/lib/queries'
-import type { LabNodeState, NetemImpairment, NetemSetInput } from '@/lib/schemas'
-
-// Impairment inputs are kept as raw strings. Set has REPLACE semantics: the
-// request is the interface's complete desired impairment, so an empty field
-// means that dimension is CLEARED (omitted from the request).
-interface Fields {
-  delay: string // ms
-  jitter: string // ms
-  loss: string // %
-  rate: string // kbit/s
-  corruption: string // %
-}
-
-const EMPTY_FIELDS: Fields = { delay: '', jitter: '', loss: '', rate: '', corruption: '' }
-
-/** Turn the raw fields into a set request, or null when nothing is filled in
- * (an all-empty body would clear the interface — that's the Reset button's job,
- * so Apply treats it as a mistake). Delay and jitter are entered in ms and sent
- * as structured {value, unit} durations. */
-function buildInput(iface: string, f: Fields): NetemSetInput | null {
-  const input: NetemSetInput = { interface: iface }
-  if (f.delay.trim() !== '') input.delay = { value: Number(f.delay), unit: 'ms' }
-  if (f.jitter.trim() !== '') input.jitter = { value: Number(f.jitter), unit: 'ms' }
-  if (f.loss.trim() !== '') input.loss = Number(f.loss)
-  if (f.rate.trim() !== '') input.rate = Number(f.rate)
-  if (f.corruption.trim() !== '') input.corruption = Number(f.corruption)
-  const hasImpairment =
-    input.delay !== undefined ||
-    input.jitter !== undefined ||
-    input.loss !== undefined ||
-    input.rate !== undefined ||
-    input.corruption !== undefined
-  return hasImpairment ? input : null
-}
-
-function pct(value: number): string {
-  return value > 0 ? `${value}%` : '—'
-}
-
-function CurrentImpairments({
-  name,
-  node,
-  enabled,
-  onReset,
-  resetting,
-}: {
-  name: string
-  node: string
-  enabled: boolean
-  onReset: (iface: string) => void
-  resetting: string | null
-}) {
-  const { data, isFetching, isError, error } = useQuery({
-    ...nodeNetemQueryOptions(name, node),
-    enabled: enabled && node !== '',
-  })
-
-  if (isError) {
-    return (
-      <p className="text-destructive text-sm">
-        {error instanceof Error ? error.message : 'Failed to load netem state'}
-      </p>
-    )
-  }
-  if (!data || data.length === 0) {
-    return (
-      <p className="text-muted-foreground text-sm">
-        {isFetching ? 'Loading…' : 'No impairments applied on this node.'}
-      </p>
-    )
-  }
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Interface</TableHead>
-          <TableHead>Delay</TableHead>
-          <TableHead>Jitter</TableHead>
-          <TableHead>Loss</TableHead>
-          <TableHead>Rate</TableHead>
-          <TableHead>Corruption</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {data.map((imp: NetemImpairment) => (
-          <TableRow key={imp.interface}>
-            <TableCell className="font-medium">{imp.interface}</TableCell>
-            <TableCell>{formatDuration(imp.delay)}</TableCell>
-            <TableCell>{formatDuration(imp.jitter)}</TableCell>
-            <TableCell>{pct(imp.loss)}</TableCell>
-            <TableCell>{imp.rate > 0 ? `${imp.rate} kbit/s` : '—'}</TableCell>
-            <TableCell>{pct(imp.corruption)}</TableCell>
-            <TableCell className="text-right">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onReset(imp.interface)}
-                disabled={resetting !== null}
-              >
-                {resetting === imp.interface ? 'Resetting…' : 'Reset'}
-              </Button>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  )
-}
+import { labInterfacesQueryOptions } from '@/lib/queries'
+import type { LabNodeState } from '@/lib/schemas'
 
 /** Link impairment (netem): apply delay / jitter / loss / rate / corruption to a
  * node interface and view or clear what's applied. Keyed by node + interface;
@@ -150,11 +30,12 @@ export function NetemControls({
   enabled: boolean
   canConfigure: boolean
 }) {
-  const queryClient = useQueryClient()
   const [node, setNode] = useState(nodes[0]?.name ?? '')
   const [iface, setIface] = useState('')
-  const [fields, setFields] = useState<Fields>(EMPTY_FIELDS)
   const [resetting, setResetting] = useState<string | null>(null)
+  // A separate mutation instance from NetemForm's, so a running reset doesn't
+  // read as "applying" on the form (and vice versa).
+  const reset = useSetNetem(name)
 
   // Interface options for the selected node come from the live inventory, keyed
   // by the same short node name this control uses.
@@ -164,31 +45,6 @@ export function NetemControls({
   })
   const interfaces = inventory?.find((n) => n.node === node)?.interfaces ?? []
 
-  async function invalidateNetem() {
-    await queryClient.invalidateQueries({ queryKey: nodeNetemQueryOptions(name, node).queryKey })
-  }
-
-  const set = useMutation({
-    mutationFn: (input: NetemSetInput) => api.setNodeNetem(name, node, input),
-    onSuccess: async (result) => {
-      await invalidateNetem()
-      setFields(EMPTY_FIELDS)
-      toast.success(result.message)
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to set impairment'),
-  })
-
-  // Clearing an interface = a set with no impairments (replace semantics).
-  const reset = useMutation({
-    mutationFn: (target: string) => api.setNodeNetem(name, node, { interface: target }),
-    onSuccess: async (result) => {
-      await invalidateNetem()
-      toast.success(result.message)
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to reset impairment'),
-    onSettled: () => setResetting(null),
-  })
-
   function onNodeChange(next: string) {
     setNode(next)
     setIface('') // the previous interface may not exist on the new node
@@ -196,33 +52,9 @@ export function NetemControls({
 
   function onReset(target: string) {
     setResetting(target)
-    reset.mutate(target)
+    // Clearing an interface = a set with no impairments (replace semantics).
+    reset.mutate({ node, input: { interface: target } }, { onSettled: () => setResetting(null) })
   }
-
-  function apply() {
-    const input = iface === '' ? null : buildInput(iface, fields)
-    if (input === null) {
-      toast.error('Pick an interface and set at least one impairment.')
-      return
-    }
-    set.mutate(input)
-  }
-
-  const field = (key: keyof Fields, label: string, placeholder: string) => (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={`netem-${key}`}>{label}</Label>
-      <Input
-        id={`netem-${key}`}
-        type="number"
-        min={0}
-        inputMode="decimal"
-        placeholder={placeholder}
-        value={fields[key]}
-        onChange={(e) => setFields((prev) => ({ ...prev, [key]: e.target.value }))}
-        disabled={!canConfigure || set.isPending}
-      />
-    </div>
-  )
 
   return (
     <Card>
@@ -270,18 +102,7 @@ export function NetemControls({
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-                  {field('delay', 'Delay (ms)', 'e.g. 50')}
-                  {field('jitter', 'Jitter (ms)', 'needs delay')}
-                  {field('loss', 'Loss (%)', '0–100')}
-                  {field('rate', 'Rate (kbit/s)', 'e.g. 1000')}
-                  {field('corruption', 'Corruption (%)', '0–100')}
-                </div>
-                <div>
-                  <Button onClick={apply} disabled={set.isPending}>
-                    {set.isPending ? 'Applying…' : 'Apply impairment'}
-                  </Button>
-                </div>
+                <NetemForm name={name} node={node} iface={iface} canConfigure={canConfigure} />
               </div>
             )}
 

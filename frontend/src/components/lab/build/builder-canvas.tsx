@@ -312,7 +312,7 @@ function CanvasInner({ state, dispatch, positions, onPositions }: BuilderCanvasP
   }
 
   return (
-    <div ref={wrapperRef} className="h-full w-full">
+    <div ref={wrapperRef} role="region" aria-label="Topology builder canvas" className="h-full w-full">
       <ReactFlow<AppNode>
         nodes={nodes}
         edges={edges}
@@ -354,11 +354,29 @@ function CanvasInner({ state, dispatch, positions, onPositions }: BuilderCanvasP
 
         <BuilderPalette onAddDevice={addDevice} onAddLan={addLan} />
 
+        {/* Teaching overlay: gone the moment the first node lands. */}
+        {doc.nodes.length === 0 && (
+          <Panel position="top-center" className="pointer-events-none mt-14">
+            <div className="max-w-sm rounded-[2px] border bg-card/90 px-4 py-3 text-center">
+              <p className="font-mono text-xs tracking-wide text-muted-foreground uppercase">
+                blank canvas
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">Add</span> a device from the menu,
+                drag between nodes to connect them, then{' '}
+                <span className="font-medium text-foreground">Save</span> — deploying applies the
+                saved definition.
+              </p>
+            </div>
+          </Panel>
+        )}
+
         <Panel position="top-right" className="flex items-center gap-1">
           <Button
             variant="outline"
             size="icon-sm"
             title={showMiniMap ? 'Hide minimap' : 'Show minimap'}
+            aria-label={showMiniMap ? 'Hide minimap' : 'Show minimap'}
             data-state={showMiniMap ? 'on' : 'off'}
             className="data-[state=on]:bg-muted"
             onClick={() => setShowMiniMap((on) => !on)}
@@ -369,6 +387,7 @@ function CanvasInner({ state, dispatch, positions, onPositions }: BuilderCanvasP
             variant="outline"
             size="icon-sm"
             title="Auto-layout (replaces your manual layout)"
+            aria-label="Auto-layout"
             onClick={() => applyLayout(rankdir)}
           >
             <LayoutGrid className="size-3.5" />
@@ -377,6 +396,7 @@ function CanvasInner({ state, dispatch, positions, onPositions }: BuilderCanvasP
             variant="outline"
             size="icon-sm"
             title={rankdir === 'LR' ? 'Rank top-to-bottom' : 'Rank left-to-right'}
+            aria-label={rankdir === 'LR' ? 'Rank top-to-bottom' : 'Rank left-to-right'}
             onClick={() => {
               const next: RankDir = rankdir === 'LR' ? 'TB' : 'LR'
               setRankdir(next)

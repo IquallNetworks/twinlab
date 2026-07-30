@@ -1,6 +1,6 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -44,6 +44,7 @@ import {
 import { api, waitJob } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import { labsQueryOptions, meQueryOptions } from '@/lib/queries'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 const PERM_LAB_CREATE = 'lab:create'
 const PERM_LAB_DESTROY = 'lab:destroy'
@@ -62,9 +63,15 @@ const createSchema = z.object({
 })
 
 /** Create a bare lab record (the lifecycle split's first step) and jump to its
- * detail page, where the definition is authored and deployed. */
-function CreateLabDialog() {
-  const [open, setOpen] = useState(false)
+ * detail page, where the definition is authored and deployed. Open state is
+ * the page's: the command palette can open it via ?new=1. */
+function CreateLabDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
@@ -73,7 +80,7 @@ function CreateLabDialog() {
     onSuccess: async (lab) => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
       toast.success(`Lab ${lab.name} created — author its definition, then deploy`)
-      setOpen(false)
+      onOpenChange(false)
       await navigate({ to: '/labs/$name', params: { name: lab.name } })
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Create failed'),
@@ -91,7 +98,7 @@ function CreateLabDialog() {
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        setOpen(next)
+        onOpenChange(next)
         if (!next) form.reset()
       }}
     >
@@ -180,6 +187,7 @@ function DeleteLabAction({ name }: { name: string }) {
           className="size-8 text-muted-foreground hover:text-destructive"
           disabled={del.isPending}
           title={`Delete ${name}`}
+          aria-label={`Delete ${name}`}
         >
           <Trash2 className="size-4" />
         </Button>
@@ -202,8 +210,22 @@ function DeleteLabAction({ name }: { name: string }) {
 }
 
 export function LabsPage() {
-  const { data: labs, isPending, isError, error } = useQuery(labsQueryOptions)
+  useDocumentTitle('Labs')
+  const { data: labs, isPending, isError, error, refetch } = useQuery(labsQueryOptions)
   const { data: me } = useQuery(meQueryOptions)
+  const navigate = useNavigate()
+  // ?new=1 (palette / dashboard CTA) opens the create dialog; closing clears
+  // the param so back/refresh doesn't reopen it.
+  const search = useSearch({ strict: false })
+  const [createOpen, setCreateOpen] = useState(false)
+  const openFromSearch = 'new' in search && search.new === true
+  const createDialogOpen = createOpen || openFromSearch
+  const setCreateDialogOpen = (next: boolean) => {
+    setCreateOpen(next)
+    if (!next && openFromSearch) {
+      void navigate({ to: '/labs', search: {}, replace: true })
+    }
+  }
   // Creating a new lab is a global right; deleting is per-lab (from each row's
   // permissions), so the Actions column shows when any listed lab is deletable.
   const canCreate = me?.permissions.includes(PERM_LAB_CREATE) ?? false
@@ -223,12 +245,19 @@ export function LabsPage() {
             </span>
           )}
         </div>
-        {canCreate && <CreateLabDialog />}
+        {canCreate && <CreateLabDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} />}
       </div>
 
       {isError ? (
         <p className="text-sm text-destructive">
-          {error instanceof Error ? error.message : 'Failed to load labs'}
+          {error instanceof Error ? error.message : 'Failed to load labs'}{' '}
+          <button
+            type="button"
+            className="underline hover:text-foreground"
+            onClick={() => void refetch()}
+          >
+            Retry
+          </button>
         </p>
       ) : (
         <div className="border bg-card/60">

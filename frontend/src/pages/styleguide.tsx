@@ -65,6 +65,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Wordmark } from '@/components/wordmark'
 import { jobStatusBadgeVariant } from '@/lib/format'
 import { IDENTITY_LABELS, useIdentity } from '@/lib/identity'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 const COLOR_TOKENS = [
   'background',
@@ -93,6 +94,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 /** Dev-only gallery: every primitive rendered under the active identity pack,
  * so the three bake-off candidates can be compared like-for-like. */
 export function StyleguidePage() {
+  useDocumentTitle('Styleguide')
   const { identity } = useIdentity()
   const [checked, setChecked] = useState(true)
 

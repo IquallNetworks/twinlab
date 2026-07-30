@@ -41,6 +41,7 @@ import { copyText } from '@/lib/clipboard'
 import { formatDateTime } from '@/lib/format'
 import { apiKeysQueryOptions, sshAccessQueryOptions, sshKeysQueryOptions } from '@/lib/queries'
 import { JUMP_HOST_ALIAS, jumpCoordinates, sshConfigBlock } from '@/lib/ssh'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   return (
@@ -533,6 +534,7 @@ function SshKeysCard() {
 /** Self-service credentials: API keys (Bearer) and SSH keys for the jump host.
  * No permission gate — every authenticated user manages their own. */
 export function AccountPage() {
+  useDocumentTitle('Account')
   return (
     <div className="flex flex-col gap-6">
       <h1 className="font-heading text-2xl font-semibold">Account</h1>

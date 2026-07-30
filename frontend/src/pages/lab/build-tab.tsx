@@ -243,7 +243,13 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
         <div className="rounded-[2px] border border-destructive/50 bg-card px-3 py-2 text-sm">
           <div className="flex items-start justify-between gap-2">
             <p className="text-destructive">netlab rejected the definition: {saveError.message}</p>
-            <Button variant="ghost" size="icon-xs" title="Dismiss" onClick={() => setSaveError(null)}>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Dismiss"
+              aria-label="Dismiss error"
+              onClick={() => setSaveError(null)}
+            >
               <X className="size-3" />
             </Button>
           </div>

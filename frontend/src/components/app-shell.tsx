@@ -1,14 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, Outlet, useNavigate, type LinkProps } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
+import { Link, Outlet, type LinkProps } from '@tanstack/react-router'
 import { LogOut } from 'lucide-react'
-import { toast } from 'sonner'
 
+import { CommandPalette } from '@/components/command-palette'
 import { IdentitySwitcher, ThemeToggle } from '@/components/identity-switcher'
 import { Button } from '@/components/ui/button'
 import { Wordmark } from '@/components/wordmark'
-import { api } from '@/lib/api'
 import { meQueryOptions } from '@/lib/queries'
 import { useLabEvents } from '@/lib/use-lab-events'
+import { useLogout } from '@/lib/use-logout'
 
 const PERM_USER_MANAGE = 'user:manage'
 const PERM_GROUP_MANAGE = 'group:manage'
@@ -39,21 +39,11 @@ function NavLink({
 }
 
 export function AppShell() {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
   // Live lab updates over SSE while authenticated (this shell wraps the auth area).
   useLabEvents()
   // Guaranteed present: the auth route's beforeLoad resolved it before render.
   const { data: me } = useQuery(meQueryOptions)
-
-  const logout = useMutation({
-    mutationFn: () => api.logout(),
-    onSuccess: async () => {
-      queryClient.removeQueries({ queryKey: meQueryOptions.queryKey })
-      await navigate({ to: '/login' })
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Logout failed'),
-  })
+  const logout = useLogout()
 
   const canManageUsers = me?.permissions.includes(PERM_USER_MANAGE) ?? false
   const canManageGroups = me?.permissions.includes(PERM_GROUP_MANAGE) ?? false
@@ -78,6 +68,7 @@ export function AppShell() {
             {import.meta.env.DEV && <NavLink to="/styleguide">Styleguide</NavLink>}
           </nav>
           <div className="ml-auto flex items-center gap-1 text-sm">
+            <CommandPalette className={HEADER_GHOST} />
             <IdentitySwitcher className={HEADER_GHOST} />
             <ThemeToggle className={HEADER_GHOST} />
             <span className="px-2 font-mono text-xs text-(--id-header-muted)">{me?.username}</span>

@@ -68,6 +68,7 @@ export function OperationsTab({ name }: { name: string }) {
             jobs={jobsQuery.data ?? []}
             isPending={jobsQuery.isPending}
             isError={jobsQuery.isError}
+            onRetry={() => void jobsQuery.refetch()}
           />
         </CardContent>
       </Card>

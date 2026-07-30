@@ -39,6 +39,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
           variant="ghost"
           size="icon-xs"
           title={`Copy ${label}`}
+          aria-label={`Copy ${label}`}
           onClick={() =>
             void copyText(text).then((ok) =>
               ok ? toast.success(`Copied ${label}`) : toast.error('Copy failed'),
@@ -103,6 +104,7 @@ export function NodeConnectDrawer({
                   variant="ghost"
                   size="icon-xs"
                   title="Copy address"
+                  aria-label="Copy management address"
                   onClick={() =>
                     void copyText(node.mgmt_ip).then((ok) =>
                       ok ? toast.success('Copied address') : toast.error('Copy failed'),

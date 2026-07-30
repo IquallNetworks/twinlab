@@ -22,7 +22,13 @@ export function IdentitySwitcher({ className }: { className?: string }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" title="Identity (bake-off)" className={className}>
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Identity (bake-off)"
+          aria-label="Choose identity"
+          className={className}
+        >
           <Palette className="size-4" />
         </Button>
       </DropdownMenuTrigger>
@@ -50,7 +56,10 @@ export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
-  if (!mounted) return <Button variant="ghost" size="icon" disabled className={className} />
+  if (!mounted)
+    return (
+      <Button variant="ghost" size="icon" disabled aria-hidden tabIndex={-1} className={className} />
+    )
 
   const dark = resolvedTheme === 'dark'
   return (
@@ -58,6 +67,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       variant="ghost"
       size="icon"
       title={dark ? 'Switch to light' : 'Switch to dark'}
+      aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
       onClick={() => setTheme(dark ? 'light' : 'dark')}
       className={className}
     >

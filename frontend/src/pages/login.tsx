@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label'
 import { Wordmark } from '@/components/wordmark'
 import { api } from '@/lib/api'
 import { meQueryOptions } from '@/lib/queries'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -20,6 +21,7 @@ const loginSchema = z.object({
 })
 
 export function LoginPage() {
+  useDocumentTitle('Sign in')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -49,6 +51,7 @@ export function LoginPage() {
       </div>
 
       <div className="flex w-full max-w-sm flex-col gap-6">
+        <h1 className="sr-only">Sign in to Twinlab</h1>
         <div className="flex justify-center">
           <Wordmark className="scale-125" />
         </div>

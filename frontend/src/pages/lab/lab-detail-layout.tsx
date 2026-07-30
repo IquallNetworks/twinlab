@@ -7,6 +7,7 @@ import { LabTabNav } from '@/components/lab/lab-tab-nav'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError } from '@/lib/api'
 import { labQueryOptions } from '@/lib/queries'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 function BackLink() {
   return (
@@ -21,6 +22,7 @@ function BackLink() {
  * and renders the header + tab strip above the active tab's outlet. Tab pages
  * read the same cached query, so the data is already there when they mount. */
 export function LabDetailLayout({ name }: { name: string }) {
+  useDocumentTitle(name)
   const { data: lab, isPending, isError, error } = useQuery(labQueryOptions(name))
 
   if (isPending) {

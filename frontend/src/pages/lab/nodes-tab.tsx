@@ -38,6 +38,7 @@ function MgmtCell({ ip }: { ip: string }) {
         size="icon"
         className="size-6"
         title="Copy address"
+        aria-label={`Copy address ${ip}`}
         onClick={() =>
           void copyText(ip).then((ok) =>
             ok ? toast.success('Copied address') : toast.error('Copy failed'),

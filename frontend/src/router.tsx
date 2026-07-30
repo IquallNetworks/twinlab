@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router'
 
 import { AppShell } from '@/components/app-shell'
+import { RouteErrorFallback, RouteNotFound } from '@/components/route-errors'
 import { defaultLabTab } from '@/lib/lab-permissions'
 import { labQueryOptions, meQueryOptions } from '@/lib/queries'
 import { AccountPage } from '@/pages/account'
@@ -64,6 +65,9 @@ const labsRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/labs',
   component: LabsPage,
+  // ?new=1 opens the create-lab dialog (the command palette links here).
+  validateSearch: (search: Record<string, unknown>): { new?: true } =>
+    search['new'] === true || search['new'] === '1' || search['new'] === 1 ? { new: true } : {},
 })
 
 // /labs/$name is a layout: the tab pages are child routes so views deep-link
@@ -212,6 +216,8 @@ export const router = createRouter({
   routeTree,
   context: { queryClient },
   defaultPreload: 'intent',
+  defaultErrorComponent: RouteErrorFallback,
+  defaultNotFoundComponent: RouteNotFound,
 })
 
 declare module '@tanstack/react-router' {

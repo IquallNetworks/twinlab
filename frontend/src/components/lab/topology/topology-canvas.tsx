@@ -232,6 +232,8 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
 
   return (
     <ReactFlow<AppNode>
+      role="region"
+      aria-label="Lab topology canvas"
       nodes={nodes}
       edges={edges}
       nodeTypes={NODE_TYPES}
@@ -278,6 +280,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
           variant="outline"
           size="icon-sm"
           title={showMiniMap ? 'Hide minimap' : 'Show minimap'}
+          aria-label={showMiniMap ? 'Hide minimap' : 'Show minimap'}
           data-state={showMiniMap ? 'on' : 'off'}
           className="data-[state=on]:bg-muted"
           onClick={() => setShowMiniMap((on) => !on)}
@@ -288,6 +291,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
           variant="outline"
           size="icon-sm"
           title="Auto-layout (clears your manual layout)"
+          aria-label="Auto-layout"
           onClick={() => {
             clearLayout(lab.name)
             setNodes(layoutNodes(built.nodes, built.edges, rankdir))
@@ -300,6 +304,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
           variant="outline"
           size="icon-sm"
           title={rankdir === 'LR' ? 'Rank top-to-bottom' : 'Rank left-to-right'}
+          aria-label={rankdir === 'LR' ? 'Rank top-to-bottom' : 'Rank left-to-right'}
           onClick={() => setRankdir((dir) => (dir === 'LR' ? 'TB' : 'LR'))}
         >
           {rankdir === 'LR' ? <MoveVertical className="size-3.5" /> : <MoveHorizontal className="size-3.5" />}
@@ -308,6 +313,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
           variant="outline"
           size="icon-sm"
           title="Download PNG"
+          aria-label="Download PNG"
           onClick={() => {
             void exportTopologyPng(lab.name, nodes).then((ok) =>
               ok ? toast.success('Topology exported') : toast.error('Export failed'),

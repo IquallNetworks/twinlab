@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Textarea } from '@/components/ui/textarea'
+import { CodeEditor } from '@/components/code-editor'
 import { api } from '@/lib/api'
 import { customConfigQueryOptions } from '@/lib/queries'
 import type { BuiltinTemplate } from '@/lib/schemas'
@@ -56,9 +56,7 @@ function TemplateRow({
           {Object.entries(files).map(([path, content]) => (
             <div key={path}>
               <p className="text-muted-foreground mb-1 font-mono text-xs">{path}</p>
-              <pre className="bg-muted overflow-x-auto rounded-md p-3 font-mono text-xs">
-                {content}
-              </pre>
+              <CodeEditor value={content} language="jinja2" className="max-h-64" />
             </div>
           ))}
         </div>
@@ -118,11 +116,12 @@ function TemplatesEditor({ name, filesetJson }: { name: string; filesetJson: str
             shadow a built-in.
           </DialogDescription>
         </DialogHeader>
-        <Textarea
-          className="min-h-48 flex-1 resize-none font-mono text-xs"
+        <CodeEditor
           value={text}
-          onChange={(e) => setText(e.target.value)}
-          spellCheck={false}
+          onChange={setText}
+          language="json"
+          lint
+          className="min-h-48 max-h-[60vh] flex-1"
         />
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>

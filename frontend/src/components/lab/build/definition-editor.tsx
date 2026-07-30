@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
+import { CodeEditor } from '@/components/code-editor'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 
 /** The Build tab's text mode: the plain-YAML escape hatch (netlab's syntax is
  * far richer than the visual builder's subset). The draft re-seeds from the
@@ -32,14 +32,15 @@ export function DefinitionEditor({
 
   return (
     <div className="flex flex-col gap-2">
-      <Textarea
+      <CodeEditor
         value={draft}
-        onChange={(event) => {
-          setDraft(event.target.value)
-          setDirty(event.target.value !== (definition ?? ''))
+        onChange={(text) => {
+          setDraft(text)
+          setDirty(text !== (definition ?? ''))
         }}
-        spellCheck={false}
-        className="h-[max(24rem,calc(100vh-26rem))] resize-none font-mono text-xs"
+        language="yaml"
+        lint
+        className="h-[max(24rem,calc(100vh-26rem))]"
         placeholder="netlab definition (provider, defaults.device, nodes, links, …)"
       />
       <div className="flex items-center justify-end gap-2">

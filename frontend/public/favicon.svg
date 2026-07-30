@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linejoin="round">
+  <!-- TwinGlyph (components/wordmark.tsx): strokes are the Schematic primary,
+       oklch(0.64 0.13 70) light / oklch(0.78 0.13 75) dark, converted to sRGB. -->
+  <style>
+    svg { stroke: #be7c1c; }
+    @media (prefers-color-scheme: dark) { svg { stroke: #e8aa4e; } }
+  </style>
+  <path d="M8 4l7 8-7 8-7-8z"/>
+  <path d="M16 4l7 8-7 8-7-8z" opacity=".45"/>
+</svg>

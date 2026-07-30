@@ -39,6 +39,12 @@ html[data-identity],
     --sidebar-accent-foreground: var(--accent-foreground);
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
+    /* Code-editor syntax voice (CodeEditor): three slots derived from the
+     * pack's core tokens so highlighting tracks identity and theme; a pack
+     * block may override any slot (the Phase 5 contrast audit does). */
+    --id-code-key: var(--primary);
+    --id-code-literal: color-mix(in oklab, var(--primary) 55%, var(--foreground));
+    --id-code-comment: var(--muted-foreground);
 }
 
 /* ================================================================
@@ -60,7 +66,9 @@ html[data-identity='schematic'] {
     --card-foreground: oklch(0.25 0.02 260);
     --popover: oklch(0.995 0.002 255);
     --popover-foreground: oklch(0.25 0.02 260);
-    --primary: oklch(0.7 0.13 70);
+    /* L 0.64 (was 0.7): the amber signal must hold 3:1 as a non-text
+     * indicator on --background (measured 3.17:1; 0.7 was 2.51:1). */
+    --primary: oklch(0.64 0.13 70);
     --primary-foreground: oklch(0.22 0.04 75);
     --secondary: oklch(0.93 0.01 255);
     --secondary-foreground: oklch(0.25 0.02 260);
@@ -71,7 +79,10 @@ html[data-identity='schematic'] {
     --destructive: oklch(0.54 0.19 27);
     --border: oklch(0.86 0.012 255);
     --input: oklch(0.86 0.012 255);
-    --ring: oklch(0.7 0.13 70);
+    --ring: oklch(0.64 0.13 70);
+    /* Pure primary reads at only ~3:1 on the near-white card; syntax keys
+     * are text, so pull toward ink for 4.5:1+ (measured ≥4.6:1). */
+    --id-code-key: color-mix(in oklab, var(--primary) 70%, var(--foreground));
 
     --id-pattern:
         linear-gradient(oklch(0.3 0.05 260 / 5%) 1px, transparent 1px),

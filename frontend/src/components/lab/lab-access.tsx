@@ -37,9 +37,10 @@ import type { Principal } from '@/lib/schemas'
  * backend still enforces anti-escalation and owner-equivalence for transfer. */
 export function LabAccess({ name, owner }: { name: string; owner: Principal | null }) {
   const queryClient = useQueryClient()
-  const { data: grants } = useQuery(labGrantsQueryOptions(name))
-  const { data: principals } = useQuery(principalsQueryOptions)
-  const { data: roleCatalog } = useQuery(rolesQueryOptions)
+  const grantsQuery = useQuery(labGrantsQueryOptions(name))
+  const grants = grantsQuery.data
+  const { data: principals, isError: principalsError } = useQuery(principalsQueryOptions)
+  const { data: roleCatalog, isError: rolesError } = useQuery(rolesQueryOptions)
   const assignableRoles = labRoles(roleCatalog ?? []).map((r) => r.name)
 
   const [principalType, setPrincipalType] = useState<'user' | 'group'>('user')
@@ -99,8 +100,20 @@ export function LabAccess({ name, owner }: { name: string; owner: Principal | nu
           <span className="font-medium">{owner?.name ?? '—'}</span>
         </div>
 
-        {/* Current grants */}
-        {grants && grants.length > 0 ? (
+        {/* Current grants. A failed load must not read as "no grants". */}
+        {grantsQuery.isError ? (
+          <p className="text-sm text-destructive">
+            Couldn&apos;t load grants
+            {grantsQuery.error instanceof Error ? `: ${grantsQuery.error.message}` : '.'}{' '}
+            <button
+              type="button"
+              className="underline hover:text-foreground"
+              onClick={() => void grantsQuery.refetch()}
+            >
+              Retry
+            </button>
+          </p>
+        ) : grants && grants.length > 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -124,6 +137,7 @@ export function LabAccess({ name, owner }: { name: string; owner: Principal | nu
                       size="icon"
                       className="size-7"
                       title="Remove grant"
+                      aria-label={`Remove ${g.role} grant for ${g.principal_name ?? g.principal_id}`}
                       onClick={() => removeGrant.mutate(g.id)}
                       disabled={removeGrant.isPending}
                     >
@@ -186,6 +200,12 @@ export function LabAccess({ name, owner }: { name: string; owner: Principal | nu
             {addGrant.isPending ? 'Granting…' : 'Grant'}
           </Button>
         </div>
+        {(principalsError || rolesError) && (
+          <p className="text-xs text-destructive">
+            Couldn&apos;t load {principalsError ? 'users and groups' : 'the role catalog'} — the
+            selectors above are incomplete.
+          </p>
+        )}
 
         {/* Transfer ownership — the backend rejects this unless the caller is
             owner-equivalent, so a plain lab:grant holder will get an error toast. */}

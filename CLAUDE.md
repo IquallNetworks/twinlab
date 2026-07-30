@@ -46,9 +46,10 @@ it, and contract changes go through review.
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
 
-- **`frontend/`** — Vite + React + TypeScript (pnpm). **Being rebuilt in place on the v1.0 wire**
-  (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–4 done**, next
-  is Phase 5 — editor + polish, then the v1.0 release train). Phase 1 (graphical identity):
+- **`frontend/`** — Vite + React + TypeScript (pnpm). **Rebuilt in place on the v1.0 wire**
+  (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–5 ALL done —
+  frontend step 2 complete**, next is the v1.0 release train: publish `twinlab-client` to PyPI +
+  tag). Phase 1 (graphical identity):
   identities are CSS token packs
   keyed off `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk +
   IBM Plex Mono, faint line-grid canvas) is the chosen design system and Blueprint is
@@ -90,7 +91,24 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   inspector greys out device×module combinations the catalog says can't run. Text mode is the
   full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
   `netlab_invalid` renders as a panel with the envelope's `extras.stderr` (`ApiError` carries
-  extras). Unsaved changes get a router blocker + beforeunload guard. UI stack: **shadcn/ui**
+  extras). Unsaved changes get a router blocker + beforeunload guard. Phase 5 (editor +
+  polish): a shared **`CodeEditor`** (`components/code-editor.tsx`, hand-rolled CodeMirror 6
+  wrapper — controlled value with an echo guard, compartments, minimalSetup + explicit
+  extensions, themed purely from identity CSS vars with three `--id-code-*` syntax tokens)
+  powers the Build text mode (yaml + client-side lint gutter via `parseDocument`; Save is NOT
+  lint-gated — the server's dry `netlab create` stays the validator; netlab stderr stays a
+  panel since it carries no positions), the Overview definition card (read-only yaml) and
+  custom-config (jinja2 sources read-only, templates dialog as linted json). A **cmdk command
+  palette** (Ctrl/Cmd+K, mounted in the app shell, defers to an open xterm) does gated page
+  nav, current-lab tab jumps, fuzzy jump-to-lab, Create lab (`/labs?new=1` search param opens
+  the page-controlled dialog), theme, and sign out (shared `useLogout`) — no lifecycle verbs.
+  Teaching empty states (builder-canvas overlay, created-lab steps, dashboard CTA, jobs line);
+  router default error/not-found pages; honest error states (lab-access failures don't read as
+  "no grants"; `useAllJobs` renders partial data with a `failedLabs` count, isError =
+  all-failed; Retry affordances); a11y pass (aria-labels beside titles, keyboard job rows,
+  login h1, labeled canvases); TwinGlyph SVG favicon + meta/theme-color + `useDocumentTitle`;
+  computed contrast audit fixed Schematic light (`--primary`/`--ring` L→0.64,
+  `--id-code-key` toward ink). UI stack: **shadcn/ui**
   (radix base) on Tailwind v4, the
   **TanStack** family (Query, Router in code-based mode, Form) and **zod**. Auth gate: a pathless
   layout route resolves `GET /auth/me` in `beforeLoad`, redirects to `/login` on 401; actions

@@ -33,6 +33,7 @@ import { api } from '@/lib/api'
 import { rolesQueryOptions, usersQueryOptions } from '@/lib/queries'
 import { globalRoles } from '@/lib/roles'
 import type { UserSummary } from '@/lib/schemas'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 function RoleCheckboxes({
   roles,
@@ -257,6 +258,7 @@ function EditRolesDialog({ user }: { user: UserSummary }) {
 }
 
 export function UsersPage() {
+  useDocumentTitle('Users')
   const { data: users, isPending, isError, error } = useQuery(usersQueryOptions)
 
   return (

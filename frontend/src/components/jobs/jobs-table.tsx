@@ -31,12 +31,17 @@ export function JobsTable({
   jobs,
   isPending,
   isError,
+  failedLabs = 0,
+  onRetry,
   showLab = false,
   limit,
 }: {
   jobs: Job[]
   isPending: boolean
   isError: boolean
+  /** Aggregate views: how many labs' queries failed while others succeeded. */
+  failedLabs?: number
+  onRetry?: () => void
   showLab?: boolean
   limit?: number
 }) {
@@ -48,6 +53,12 @@ export function JobsTable({
 
   return (
     <>
+      {!isError && failedLabs > 0 && (
+        <p className="px-3 pt-2 text-xs text-destructive">
+          Couldn&apos;t load operations for {failedLabs} {failedLabs === 1 ? 'lab' : 'labs'} — the
+          list is partial.
+        </p>
+      )}
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
@@ -69,20 +80,43 @@ export function JobsTable({
             <TableRow>
               <TableCell colSpan={colCount} className="text-sm text-destructive">
                 Failed to load operations.
+                {onRetry !== undefined && (
+                  <button
+                    type="button"
+                    className="ml-2 underline hover:text-foreground"
+                    onClick={onRetry}
+                  >
+                    Retry
+                  </button>
+                )}
               </TableCell>
             </TableRow>
           ) : rows.length === 0 ? (
             <TableRow>
               <TableCell colSpan={colCount} className="py-8 text-center text-muted-foreground">
                 <span className="font-mono text-xs tracking-wide uppercase">no operations</span>
+                <span className="mt-1 block text-sm">
+                  Deploy, configure and validation runs appear here.
+                </span>
               </TableCell>
             </TableRow>
           ) : (
             rows.map((job) => (
               <TableRow
                 key={job.id}
-                className="cursor-pointer"
+                className="cursor-pointer focus-visible:bg-muted/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
                 onClick={() => setSelected(job)}
+                // Behaves as a button (opens the detail sheet), so it must be
+                // keyboard-reachable and -operable too.
+                tabIndex={0}
+                role="button"
+                aria-label={`${job.kind} ${job.status}, open details`}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    setSelected(job)
+                  }
+                }}
                 title={job.error?.message}
               >
                 {showLab && <TableCell className="font-mono text-xs">{job.lab_name}</TableCell>}

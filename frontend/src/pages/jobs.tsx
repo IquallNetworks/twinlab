@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { JobsTable } from '@/components/jobs/jobs-table'
@@ -9,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useAllJobs } from '@/lib/use-all-jobs'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 const STATUS_FILTERS = ['all', 'running', 'succeeded', 'failed'] as const
 type StatusFilter = (typeof STATUS_FILTERS)[number]
@@ -17,7 +19,9 @@ type StatusFilter = (typeof STATUS_FILTERS)[number]
  * first, polling while any running job is in view. Aggregated client-side —
  * there is no cross-lab jobs endpoint yet. */
 export function JobsPage() {
-  const { jobs, isPending, isError } = useAllJobs({ live: true })
+  useDocumentTitle('Operations')
+  const queryClient = useQueryClient()
+  const { jobs, isPending, isError, failedLabs } = useAllJobs({ live: true })
   const [status, setStatus] = useState<StatusFilter>('all')
   const filtered = status === 'all' ? jobs : jobs.filter((job) => job.status === status)
 
@@ -47,7 +51,14 @@ export function JobsPage() {
       </div>
 
       <div className="border bg-card/60">
-        <JobsTable jobs={filtered} isPending={isPending} isError={isError} showLab />
+        <JobsTable
+          jobs={filtered}
+          isPending={isPending}
+          isError={isError}
+          failedLabs={failedLabs}
+          onRetry={() => void queryClient.invalidateQueries({ queryKey: ['jobs'] })}
+          showLab
+        />
       </div>
     </div>
   )

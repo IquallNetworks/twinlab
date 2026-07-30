@@ -22,7 +22,11 @@ export function jobsRefetchInterval(live: boolean) {
 export interface AllJobs {
   jobs: Job[]
   isPending: boolean
+  /** Every fan-out query failed — nothing at all to show. */
   isError: boolean
+  /** Labs whose jobs query failed while others succeeded: the merged list is
+   * partial, and consumers surface that instead of blanking the table. */
+  failedLabs: number
 }
 
 /** Recent jobs across labs, newest first. `maxLabs` bounds the fan-out to the
@@ -47,7 +51,8 @@ export function useAllJobs(options?: { maxLabs?: number; live?: boolean }): AllJ
         .flatMap((result) => result.data ?? [])
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
       isPending: names.length > 0 && results.some((result) => result.isPending),
-      isError: results.some((result) => result.isError),
+      isError: results.length > 0 && results.every((result) => result.isError),
+      failedLabs: results.filter((result) => result.isError).length,
     }),
   })
 }

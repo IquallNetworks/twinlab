@@ -16,9 +16,11 @@ import {
 } from '@/lib/queries'
 import type { LabSummary } from '@/lib/schemas'
 import { useAllJobs } from '@/lib/use-all-jobs'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 const PERM_USER_MANAGE = 'user:manage'
 const PERM_GROUP_MANAGE = 'group:manage'
+const PERM_LAB_CREATE = 'lab:create'
 
 function StatTile({
   label,
@@ -61,6 +63,7 @@ function LabLink({ lab }: { lab: LabSummary }) {
  * flight, and live activity. Admin figures appear only with the permissions —
  * their queries never fire without them. */
 export function DashboardPage() {
+  useDocumentTitle('Dashboard')
   const { data: me } = useQuery(meQueryOptions)
   const { data: labs, isPending: labsPending } = useQuery(labsQueryOptions)
   const recentJobs = useAllJobs({ maxLabs: 8 })
@@ -118,6 +121,7 @@ export function DashboardPage() {
               jobs={recentJobs.jobs}
               isPending={recentJobs.isPending}
               isError={recentJobs.isError}
+              failedLabs={recentJobs.failedLabs}
               showLab
               limit={10}
             />
@@ -132,7 +136,20 @@ export function DashboardPage() {
             <CardContent className="flex flex-col gap-2">
               {recentLabs.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No labs yet{me ? ' — create one from the Labs page.' : '.'}
+                  No labs yet.{' '}
+                  {(me?.permissions.includes(PERM_LAB_CREATE) ?? false) ? (
+                    <Link
+                      to="/labs"
+                      search={{ new: true }}
+                      className="underline hover:text-foreground"
+                    >
+                      Create your first lab
+                    </Link>
+                  ) : (
+                    <Link to="/labs" className="underline hover:text-foreground">
+                      Browse labs
+                    </Link>
+                  )}
                 </p>
               ) : (
                 recentLabs.map((lab) => (

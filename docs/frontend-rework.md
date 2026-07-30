@@ -192,6 +192,29 @@ live: the 3×VyOS + linux triangle emitted by the builder deployed to 4 running 
 
 **Exit:** frontend step 2 done → v1.0 release train (publish `twinlab-client` to PyPI, tag).
 
+**Outcome (2026-07-30): DONE.** A shared **`CodeEditor`** (hand-rolled CodeMirror 6 wrapper —
+controlled value with an echo guard, compartments, `minimalSetup` + explicit extensions, themed
+entirely from identity CSS variables so it tracks theme/identity switches live; three new
+pack-overridable `--id-code-*` syntax tokens) serves the Build tab's text mode (**yaml + lint
+gutter** from client-side `parseDocument` — offsets map straight onto Diagnostics; Save stays
+enabled because the server's dry `netlab create` remains the real validator), the Overview
+definition card (read-only yaml), and custom-config (read-only jinja2 sources; the templates
+dialog is a linted **json** editor). netlab stderr stayed an honest panel — it carries no
+positions, so pretending gutter diagnostics would lie. **Command palette** (cmdk, Ctrl/Cmd+K +
+header trigger, deferring to an open xterm): page nav gated like the nav bar, current-lab tab
+jumps gated per-lab, fuzzy jump-to-lab (the index redirect keeps role-aware landing), Create lab
+via a new `/labs?new=1` search param, theme, sign out (shared `useLogout`); lifecycle verbs
+deliberately excluded. **Teaching empty states**: builder-canvas overlay, created-lab
+getting-started steps on Overview, dashboard create-CTA, jobs-table context line. **Error UX**:
+router default error + not-found pages; lab-access failures no longer masquerade as "No grants
+yet"; the cross-lab jobs aggregate renders partial data with a failed-labs warning (isError =
+all-failed) and Retry affordances landed on the jobs/labs surfaces. **A11y**: aria-labels beside
+every icon-only button title, keyboard-operable job rows, login h1, labeled canvas regions.
+**Branding**: TwinGlyph SVG favicon (prefers-color-scheme aware), meta description +
+theme-colors, `useDocumentTitle` per page. **Contrast audit** (computed, both identities × both
+modes): two Schematic-light failures fixed — `--primary`/`--ring` L 0.7→0.64 (3:1 non-text) and
+`--id-code-key` pulled 30% toward ink (4.5:1 text); all other pairs passed.
+
 ## Non-goals (this rework)
 
 - Mobile-first layouts (responsive-reasonable, not designed-for).

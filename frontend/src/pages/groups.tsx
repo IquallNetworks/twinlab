@@ -41,6 +41,7 @@ import { api } from '@/lib/api'
 import { groupsQueryOptions, principalsQueryOptions, rolesQueryOptions } from '@/lib/queries'
 import { globalRoles } from '@/lib/roles'
 import type { GroupSummary } from '@/lib/schemas'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 function toggle(list: string[], value: string, checked: boolean): string[] {
   const set = new Set(list)
@@ -273,6 +274,7 @@ function DeleteGroupButton({ group }: { group: GroupSummary }) {
 }
 
 export function GroupsPage() {
+  useDocumentTitle('Groups')
   const { data: groups, isPending, isError, error } = useQuery(groupsQueryOptions)
 
   return (

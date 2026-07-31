@@ -1,21 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { api } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
-import { formatDuration } from '@/lib/format'
 import { labLinksQueryOptions, nodeNetemQueryOptions } from '@/lib/queries'
 import type { Duration, NetemImpairment, NetemSetInput } from '@/lib/schemas'
 
@@ -72,10 +63,6 @@ function buildInput(iface: string, f: Fields): NetemSetInput {
   if (f.rate.trim() !== '') input.rate = Number(f.rate)
   if (f.corruption.trim() !== '') input.corruption = Number(f.corruption)
   return input
-}
-
-function pct(value: number): string {
-  return value > 0 ? `${value}%` : '—'
 }
 
 type FieldErrors = Partial<Record<keyof Fields, string>>
@@ -247,98 +234,5 @@ export function NetemForm({
         </div>
       ) : null}
     </div>
-  )
-}
-
-/** The node's actively-impaired interfaces (netem show lists only those) — a
- * whole-node overview beside the editor, which targets one interface at a
- * time. Selecting a row loads it into the editor. */
-export function CurrentImpairments({
-  name,
-  node,
-  enabled,
-  onSelect,
-  onReset,
-  resetting,
-}: {
-  name: string
-  node: string
-  enabled: boolean
-  onSelect: (iface: string) => void
-  onReset: (iface: string) => void
-  resetting: string | null
-}) {
-  const { data, isFetching, isError, error } = useQuery({
-    ...nodeNetemQueryOptions(name, node),
-    enabled: enabled && node !== '',
-  })
-
-  if (isError) {
-    return (
-      <p className="text-destructive text-sm">
-        {error instanceof Error ? error.message : 'Failed to load netem state'}
-      </p>
-    )
-  }
-  const rows = data ?? []
-  if (rows.length === 0) {
-    return (
-      <p className="text-muted-foreground text-sm">
-        {isFetching ? 'Loading…' : 'No impairments applied on this node.'}
-      </p>
-    )
-  }
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Interface</TableHead>
-          <TableHead>Delay</TableHead>
-          <TableHead>Jitter</TableHead>
-          <TableHead>Loss</TableHead>
-          <TableHead>Rate</TableHead>
-          <TableHead>Corruption</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((imp: NetemImpairment) => (
-          <TableRow
-            key={imp.interface}
-            tabIndex={0}
-            role="button"
-            aria-label={`Edit impairment on ${imp.interface}`}
-            className="focus-visible:bg-muted/50 focus-visible:ring-ring cursor-pointer focus-visible:ring-1 focus-visible:outline-none"
-            onClick={() => onSelect(imp.interface)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                onSelect(imp.interface)
-              }
-            }}
-          >
-            <TableCell className="font-medium">{imp.interface}</TableCell>
-            <TableCell>{formatDuration(imp.delay)}</TableCell>
-            <TableCell>{formatDuration(imp.jitter)}</TableCell>
-            <TableCell>{pct(imp.loss)}</TableCell>
-            <TableCell>{imp.rate > 0 ? `${imp.rate} kbit/s` : '—'}</TableCell>
-            <TableCell>{pct(imp.corruption)}</TableCell>
-            <TableCell className="text-right">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onReset(imp.interface)
-                }}
-                disabled={resetting !== null}
-              >
-                {resetting === imp.interface ? 'Clearing…' : 'Clear'}
-              </Button>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
   )
 }

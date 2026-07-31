@@ -568,7 +568,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
                 <NodeControls
                   name={lab.name}
                   node={selectedLive.name}
-                  running={selectedLive.state === 'running'}
+                  state={selectedLive.state}
                   canConfigure={can(PERM_LAB_CONFIGURE)}
                   canRead={can(PERM_LAB_READ)}
                   canTerminal={can(PERM_LAB_TERMINAL)}

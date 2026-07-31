@@ -141,7 +141,12 @@ with the Operations netem controls), and reuses NodeConnectDrawer + NodeControls
 panel. Toolbar: auto-layout, LR/TB, PNG export (`html-to-image`, approved). Undeployed labs
 render all-not-deployed — topology as documentation. Link oper state remains parked on the
 backend link table. *(Unparked 2026-07-30: the link table shipped — see the parked list below —
-and the canvas now renders server-derived edges with true link state.)*
+and the canvas now renders server-derived edges with true link state.)* *(Superseded 2026-07-31:
+the Topology **tab** is gone. Overview and Topology were two surfaces over one artifact — the
+stored definition — so the canvas became Overview's **Visual** view via
+`components/lab/definition-view.tsx`, carrying the same Visual/Text selector the Build tab uses
+(Visual default; both read-only). `/labs/{name}/topology` redirects to overview. The canvas
+itself is unchanged.)*
 
 ### Phase 4 — guided builder
 
@@ -267,7 +272,11 @@ Frontend-driven wants that surfaced in this roadmap:
   edges and an edge patch path; client parse stays the fallback), and **edge-click netem** (link
   panel with per-endpoint state + extracted `NetemForm`/`useSetNetem`/filtered
   `CurrentImpairments`). Blackbox: the netem test now takes its interface from `links()` instead
-  of guessing "first non-mgmt ethN".
+  of guessing "first non-mgmt ethN". *(Revised 2026-07-31: impairment is no longer a section
+  anywhere — it lives on the row it acts on. The Links table gained an Impairment column
+  expanding into `LinkImpairment` (bidirectional; Advanced splits per endpoint), the Interfaces
+  card gained a node selector and a per-row single-endpoint `NetemForm` (unidirectional), and
+  Operations' netem card is gone — `NetemControls` and `CurrentImpairments` deleted with it.)*
 - **SSE job events** — **DONE 2026-07-30 (contract delta 16, APPROVED)**. `GET /events` now
   carries TWO **named** events: `lab` (the container events it always relayed) and `job`
   (`{lab, job_id, kind, status, timestamp}`, emitted at submit and at the terminal state).

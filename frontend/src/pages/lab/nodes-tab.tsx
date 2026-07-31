@@ -106,9 +106,9 @@ export function NodesTab({ name }: { name: string }) {
                           canTerminal={can(PERM_LAB_TERMINAL)}
                         />
                         <NodeControls
-                        name={lab.name}
-                        node={node.name}
-                        running={node.state === 'running'}
+                          name={lab.name}
+                          node={node.name}
+                          state={node.state}
                           canConfigure={can(PERM_LAB_CONFIGURE)}
                           canRead={can(PERM_LAB_READ)}
                           canTerminal={can(PERM_LAB_TERMINAL)}
@@ -124,9 +124,21 @@ export function NodesTab({ name }: { name: string }) {
       </Card>
 
       {/* The link table is definition-derived, so it renders for any authored
-          lab — not just deployed ones (states are honestly unknown there). */}
-      <LabLinks name={lab.name} enabled={lab.definition !== null} />
-      <LabInterfaces name={lab.name} enabled={isDeployed} />
+          lab — not just deployed ones (states are honestly unknown there).
+          Both cards carry impairment: a link shapes both directions at once,
+          an interface shapes its own. */}
+      <LabLinks
+        name={lab.name}
+        nodes={lab.nodes}
+        enabled={lab.definition !== null}
+        canConfigure={can(PERM_LAB_CONFIGURE)}
+      />
+      <LabInterfaces
+        name={lab.name}
+        nodes={lab.nodes}
+        enabled={isDeployed}
+        canConfigure={can(PERM_LAB_CONFIGURE)}
+      />
     </div>
   )
 }

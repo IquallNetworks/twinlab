@@ -1,15 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
-import { CodeEditor } from '@/components/code-editor'
+import { DefinitionView } from '@/components/lab/definition-view'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatDateTime, jobStatusBadgeVariant } from '@/lib/format'
 import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
 import { labJobsQueryOptions, labQueryOptions } from '@/lib/queries'
 
-/** Lab summary: record facts, the latest operation at a glance, and the
- * stored definition (the lab's source of truth). */
+/** Lab summary: the definition as topology or source (the lab's own answer to
+ * "what is this"), then the record facts and the latest operation. */
 export function OverviewTab({ name }: { name: string }) {
   // Same cached query the layout resolved; never pending in practice.
   const { data: lab } = useQuery(labQueryOptions(name))
@@ -66,6 +66,8 @@ export function OverviewTab({ name }: { name: string }) {
           </p>
         ))}
 
+      <DefinitionView lab={lab} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Details</CardTitle>
@@ -102,46 +104,6 @@ export function OverviewTab({ name }: { name: string }) {
           </div>
         )
       )}
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Definition</CardTitle>
-          {canEdit && lab.definition !== null && (
-            <Link
-              to="/labs/$name/build"
-              params={{ name }}
-              className="text-xs text-muted-foreground underline hover:text-foreground"
-            >
-              Edit on the Build tab
-            </Link>
-          )}
-        </CardHeader>
-        <CardContent>
-          {lab.definition === null ? (
-            <p className="text-sm text-muted-foreground">
-              No definition yet
-              {canEdit ? (
-                <>
-                  {' '}
-                  — build one on the{' '}
-                  <Link
-                    to="/labs/$name/build"
-                    params={{ name }}
-                    className="underline hover:text-foreground"
-                  >
-                    Build
-                  </Link>{' '}
-                  tab.
-                </>
-              ) : (
-                '.'
-              )}
-            </p>
-          ) : (
-            <CodeEditor value={lab.definition} language="yaml" className="max-h-[32rem]" />
-          )}
-        </CardContent>
-      </Card>
     </div>
   )
 }

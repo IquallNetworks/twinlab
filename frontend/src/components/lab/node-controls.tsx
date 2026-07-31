@@ -16,7 +16,34 @@ import type { NodeAction } from '@/lib/schemas'
 import { NodeLogsDialog } from './node-logs-dialog'
 import { NodeTerminalDialog } from './node-terminal-dialog'
 
-const ACTIONS: NodeAction[] = ['start', 'stop', 'restart', 'pause', 'unpause']
+/** The menu as two toggles plus restart, not five verbs: a node is either up or
+ * down and either frozen or not, so each axis gets ONE entry whose label is the
+ * verb that applies right now. Docker would refuse or ignore the other half
+ * anyway — `start` on a running container is a silent 304 no-op, `pause`/
+ * `unpause` in the wrong state a hard 409.
+ *
+ * Freezing is the one axis with a state that has no verb at all (nothing to
+ * pause on a stopped node), so it is the only entry that can be disabled.
+ * `restart` stays available from stopped, since docker starts it from there. */
+function nodeActionMenu(
+  state: string,
+): { action: NodeAction; label: string; disabled: string | null }[] {
+  const paused = state === 'paused'
+  const transitional = state === 'restarting' || state === 'removing'
+  // A paused container is up-but-frozen: stopping it is meaningful, starting it
+  // is not — unpause is the way back.
+  const up = state === 'running' || paused
+  const midFlight = transitional ? `node is ${state}` : null
+  return [
+    { action: up ? 'stop' : 'start', label: up ? 'Stop' : 'Start', disabled: midFlight },
+    {
+      action: paused ? 'unpause' : 'pause',
+      label: paused ? 'Unpause' : 'Pause',
+      disabled: up ? null : `node is ${state}`,
+    },
+    { action: 'restart', label: 'Restart', disabled: midFlight },
+  ]
+}
 
 /** Per-node runtime controls for the nodes table: a start/stop/restart menu
  * (lab:configure), a logs viewer (lab:read), and an interactive console
@@ -24,14 +51,14 @@ const ACTIONS: NodeAction[] = ['start', 'stop', 'restart', 'pause', 'unpause']
 export function NodeControls({
   name,
   node,
-  running,
+  state,
   canConfigure,
   canRead,
   canTerminal,
 }: {
   name: string
   node: string
-  running: boolean
+  state: string
   canConfigure: boolean
   canRead: boolean
   canTerminal: boolean
@@ -53,7 +80,7 @@ export function NodeControls({
   return (
     <div className="flex items-center justify-end gap-1">
       {canRead && <NodeLogsDialog name={name} node={node} />}
-      {canTerminal && running && <NodeTerminalDialog name={name} node={node} />}
+      {canTerminal && state === 'running' && <NodeTerminalDialog name={name} node={node} />}
       {canConfigure && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -62,9 +89,14 @@ export function NodeControls({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {ACTIONS.map((a) => (
-              <DropdownMenuItem key={a} onClick={() => action.mutate(a)} className="capitalize">
-                {a}
+            {nodeActionMenu(state).map(({ action: verb, label, disabled }) => (
+              <DropdownMenuItem
+                key={label}
+                disabled={disabled !== null}
+                title={disabled ?? undefined}
+                onClick={() => action.mutate(verb)}
+              >
+                {label}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

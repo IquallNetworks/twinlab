@@ -20,7 +20,6 @@ import { LabDetailLayout } from '@/pages/lab/lab-detail-layout'
 import { NodesTab } from '@/pages/lab/nodes-tab'
 import { OperationsTab } from '@/pages/lab/operations-tab'
 import { OverviewTab } from '@/pages/lab/overview-tab'
-import { TopologyTab } from '@/pages/lab/topology-tab'
 import { LabsPage } from '@/pages/labs'
 import { LoginPage } from '@/pages/login'
 import { StyleguidePage } from '@/pages/styleguide'
@@ -114,12 +113,13 @@ const labOverviewRoute = createRoute({
   },
 })
 
+// The topology is Overview's Visual view now; the old path stays as a redirect
+// so bookmarks and pasted links keep landing somewhere useful.
 const labTopologyRoute = createRoute({
   getParentRoute: () => labDetailRoute,
   path: '/topology',
-  component: function LabTopologyRouteComponent() {
-    const { name } = labTopologyRoute.useParams()
-    return <TopologyTab name={name} />
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: '/labs/$name/overview', params: { name: params.name } })
   },
 })
 

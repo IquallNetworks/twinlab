@@ -40,7 +40,7 @@ export function DefinitionEditor({
         }}
         language="yaml"
         lint
-        className="h-[max(24rem,calc(100vh-26rem))]"
+        className="h-[max(24rem,calc(100vh-22rem))]"
         placeholder="netlab definition (provider, defaults.device, nodes, links, …)"
       />
       <div className="flex items-center justify-end gap-2">

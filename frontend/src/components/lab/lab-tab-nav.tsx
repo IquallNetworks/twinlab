@@ -10,15 +10,15 @@ const TAB_LINK =
   '-mb-px border-b-2 border-transparent px-1 pb-2 text-sm text-muted-foreground transition-colors hover:text-foreground data-[status=active]:border-primary data-[status=active]:font-medium data-[status=active]:text-foreground'
 
 /** The lab page's tab strip. Only permitted tabs render; the tab components
- * themselves also self-guard so a hand-typed URL degrades gracefully. */
+ * themselves also self-guard so a hand-typed URL degrades gracefully.
+ *
+ * There is no Topology tab: the drawing is Overview's Visual view of the
+ * definition, since both answered the same question from the same source. */
 export function LabTabNav({ name, permissions }: { name: string; permissions: string[] }) {
   return (
     <nav className="flex items-center gap-4 border-b">
       <Link to="/labs/$name/overview" params={{ name }} className={TAB_LINK}>
         Overview
-      </Link>
-      <Link to="/labs/$name/topology" params={{ name }} className={TAB_LINK}>
-        Topology
       </Link>
       {permissions.includes(PERM_LAB_EDIT) && (
         <Link to="/labs/$name/build" params={{ name }} className={TAB_LINK}>

@@ -72,7 +72,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   linking each caller to their tab, session-scoped SSE **activity feed** — module ring buffer in
   `lib/lab-event-store.ts`, no server history — and an admin card whose queries are
   permission-gated); **lab detail is routed tabs** under `/labs/$name` (layout route; children
-  overview/nodes/operations/access; the index redirects role-aware via
+  overview/build/nodes/operations/access; the index redirects role-aware via
   `defaultLabTab(lab.permissions)` — authors land on Overview, pure consumers on Nodes; Access
   renders only with `lab:grant`); a per-node **Connect drawer** (mgmt IP, web console + logs
   launchers, and SSH guidance from `lib/ssh.ts`: the `~/.ssh/config` `Host twinlab-jump` block +
@@ -81,15 +81,30 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   plus per-lab job history through one shared `JobsTable` (row → detail sheet with request/
   result/error JSON; aggregation is one `GET /jobs` query keyed `['jobs', 'all', limit]`, under
   the same `['jobs']` root as the per-lab lists so one invalidation refreshes either). Long ops submit **202 async jobs** awaited via `waitJob`
-  (`src/lib/api.ts`); the frozen **test-suites** panel and netem/power/interfaces/custom-config
-  live on the Operations tab. Phase 3 (topology view): a **Topology tab** renders the stored
-  definition on a React Flow + dagre canvas — `lib/topology.ts` best-effort-parses netlab's link
+  (`src/lib/api.ts`); the frozen **test-suites** panel and custom-config live on the
+  Operations tab. **Whole-lab power + save-config are header-menu entries**, not a Controls card
+  — `components/lab/lab-power-menu.tsx` renders them into the lab header's `⋯` menu above a
+  separator from destroy/delete, each offered only where it acts (a MIXED lab shows both Start
+  and Stop, since it has containers in both states; freeze and save name their reason when the
+  lab has none running; destroy needs containers, delete does not). **Netem impairment is NOT a
+  section of its own** either — it sits on the row it acts
+  on, in the Nodes tab's two tables: the Links table's Impairment column expands into
+  `LinkImpairment` (BIDIRECTIONAL — the same shaping written to every endpoint, Advanced splits
+  per endpoint, divergent endpoints read "mixed"), and the Interfaces card (now ONE node at a
+  time, behind a node selector) expands each row into a single-endpoint `NetemForm`
+  (UNIDIRECTIONAL — netem shapes egress, so an interface IS a direction). Phase 3 (topology
+  view): the stored definition renders on a React
+  Flow + dagre canvas — `lib/topology.ts` best-effort-parses netlab's link
   forms (unresolvable entries surface as an "N links not rendered" strip, never dropped; LAN
   hubs for multi-access; drift shown both ways), live node state + netem badges overlay it
   (queries shared with the netem controls, running nodes only), selection reuses the connect
   drawer + node controls, and the toolbar does auto-layout, LR/TB and PNG export; undeployed
   labs render as documentation; manual layouts persist per lab in localStorage
-  (`topology/layout-store.ts`, shared with the builder). Phase 4 (guided builder): a **Build tab**
+  (`topology/layout-store.ts`, shared with the builder). The canvas is **Overview's Visual view**,
+  not a tab of its own — `components/lab/definition-view.tsx` gives the Definition card the same
+  Visual/Text selector the Build tab uses (Visual default, both read-only), since a separate
+  Topology tab was a second surface over the same artifact; `/labs/{name}/topology` now redirects
+  to overview so old links land. Phase 4 (guided builder): a **Build tab**
   (`lab:edit`) owns definition editing in two modes — Visual is an editable canvas + inspector
   over `lib/build-doc.ts`, a STRICT typed subset of netlab (nodes, p2p/LAN links, the proven
   ospf/bgp/mpls/vrf set, curated `lib/device-catalog.ts` with the module-support matrix, plus

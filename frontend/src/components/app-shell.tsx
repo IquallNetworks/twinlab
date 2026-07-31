@@ -51,7 +51,7 @@ export function AppShell() {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-40 border-b border-(--id-header-border) bg-(--id-header-bg) text-(--id-header-fg) backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-[var(--id-shell-max,72rem)] items-center gap-6 px-4">
+        <div className="mx-auto flex h-12 max-w-[var(--id-shell-max,72rem)] items-center gap-6 px-4">
           <Link to="/" aria-label="Twinlab home">
             <Wordmark />
           </Link>
@@ -85,7 +85,7 @@ export function AppShell() {
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[var(--id-shell-max,72rem)] flex-1 px-4 py-8">
+      <main className="mx-auto w-full max-w-[var(--id-shell-max,72rem)] flex-1 px-4 py-6">
         <Outlet />
       </main>
       <footer className="border-t">

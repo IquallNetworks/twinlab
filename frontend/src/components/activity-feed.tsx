@@ -1,18 +1,8 @@
 import { Link } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
 
 import { formatRelativeTime } from '@/lib/format'
 import { useLabEventLog } from '@/lib/lab-event-store'
-
-// Relative timestamps drift; re-render on a coarse tick.
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs)
-    return () => clearInterval(timer)
-  }, [intervalMs])
-  return now
-}
+import { useNow } from '@/lib/use-now'
 
 /** Live lab events from the SSE stream, newest first. Session-scoped by
  * nature — there is no server-side event history to backfill from. */

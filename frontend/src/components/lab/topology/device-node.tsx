@@ -54,7 +54,7 @@ export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFl
     <div
       style={{ width: DEVICE_W, height: DEVICE_H }}
       className={cn(
-        'group relative flex items-center gap-2 rounded-[2px] border bg-card px-3',
+        'group relative flex items-center gap-2 rounded-[2px] border border-(--tp-node-border) bg-card px-3',
         notDeployed && 'border-dashed text-muted-foreground',
         selected && 'ring-2 ring-primary',
       )}
@@ -78,7 +78,7 @@ export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFl
       {data.impairedIfaces > 0 && (
         <span
           title={`${data.impairedIfaces} impaired interface(s)`}
-          className="absolute -top-2 -right-2 flex items-center gap-0.5 rounded-[2px] border bg-card px-1 font-mono text-[0.6rem] text-primary"
+          className="absolute -top-2 -right-2 flex items-center gap-0.5 rounded-[2px] border border-(--tp-node-border) bg-card px-1 font-mono text-[0.6rem] text-primary"
         >
           <Zap className="size-3" />
           {data.impairedIfaces}

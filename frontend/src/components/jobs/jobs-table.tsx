@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import { JobDetailSheet } from '@/components/jobs/job-detail-sheet'
 import { Badge } from '@/components/ui/badge'
@@ -13,16 +13,7 @@ import {
 } from '@/components/ui/table'
 import { formatDateTime, formatElapsed, jobStatusBadgeVariant } from '@/lib/format'
 import type { Job } from '@/lib/schemas'
-
-function useNow(intervalMs: number, enabled: boolean): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!enabled) return
-    const timer = setInterval(() => setNow(Date.now()), intervalMs)
-    return () => clearInterval(timer)
-  }, [intervalMs, enabled])
-  return now
-}
+import { useNow } from '@/lib/use-now'
 
 /** The shared jobs surface: used per-lab (Operations tab) and cross-lab
  * (dashboard, /jobs) — `showLab` adds the lab column in aggregate views.

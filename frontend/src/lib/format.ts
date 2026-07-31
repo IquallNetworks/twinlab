@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react'
 
 import type { Badge } from '@/components/ui/badge'
-import type { Duration } from '@/lib/schemas'
+import type { Duration, NetemImpairment } from '@/lib/schemas'
 
 type BadgeVariant = NonNullable<ComponentProps<typeof Badge>['variant']>
 
@@ -50,6 +50,20 @@ export function formatDateTime(iso: string): string {
 /** A netem duration for display, preserving the author's unit ("50 ms"). */
 export function formatDuration(duration: Duration | null): string {
   return duration ? `${duration.value} ${duration.unit}` : '—'
+}
+
+/** An applied impairment as one line of table cell ("50 ms · 1% loss"). A zero
+ * on the wire means "that dimension is unshaped", so it contributes nothing;
+ * null (and an all-zero impairment) reads as unimpaired. */
+export function impairmentSummary(impairment: NetemImpairment | null): string {
+  if (impairment === null) return '—'
+  const parts: string[] = []
+  if (impairment.delay) parts.push(formatDuration(impairment.delay))
+  if (impairment.jitter) parts.push(`±${formatDuration(impairment.jitter)}`)
+  if (impairment.loss > 0) parts.push(`${impairment.loss}% loss`)
+  if (impairment.rate > 0) parts.push(`${impairment.rate} kbit/s`)
+  if (impairment.corruption > 0) parts.push(`${impairment.corruption}% corrupt`)
+  return parts.length === 0 ? '—' : parts.join(' · ')
 }
 
 /** Compact "how long ago" for feeds ("12s", "3m", "2h", "5d"). */

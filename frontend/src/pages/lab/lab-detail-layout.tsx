@@ -20,7 +20,11 @@ function BackLink() {
 
 /** Layout for /labs/$name: loads the lab, owns the pending/404/error states,
  * and renders the header + tab strip above the active tab's outlet. Tab pages
- * read the same cached query, so the data is already there when they mount. */
+ * read the same cached query, so the data is already there when they mount.
+ *
+ * The chrome is deliberately tight — header and tabs read as ONE navigation
+ * block (the way back is the header's breadcrumb, not a row of its own), so the
+ * tab content starts high on the page. */
 export function LabDetailLayout({ name }: { name: string }) {
   useDocumentTitle(name)
   const { data: lab, isPending, isError, error } = useQuery(labQueryOptions(name))
@@ -49,9 +53,10 @@ export function LabDetailLayout({ name }: { name: string }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <BackLink />
-      <LabHeader lab={lab} />
-      <LabTabNav name={lab.name} permissions={lab.permissions} />
+      <div className="flex flex-col gap-3">
+        <LabHeader lab={lab} />
+        <LabTabNav name={lab.name} permissions={lab.permissions} />
+      </div>
       <Outlet />
     </div>
   )

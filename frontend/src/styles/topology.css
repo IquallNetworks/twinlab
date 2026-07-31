@@ -1,10 +1,21 @@
 /* React Flow themed through its --xy-* custom properties, mapped onto the
  * identity tokens so the canvas flips with the pack's own dark/light. */
 .react-flow {
-    /* An explicit near-white drawing surface (the card token), with the grid
-     * faded to a whisper — the graph reads first, the paper second. */
-    --xy-background-color: var(--card);
-    --xy-background-pattern-color: color-mix(in oklab, var(--foreground) 1.5%, transparent);
+    /* The drawing surface is the PAGE token, not the card one: the canvas sits
+     * inside a card, so painting it --card gave the nodes (also --card) no fill
+     * contrast at all — they hung on a hairline. --background recesses the
+     * paper under the node bodies, and in the same direction in both themes
+     * (light: 0.97 under 0.995; dark: 0.18 under 0.22). */
+    --xy-background-color: var(--background);
+    /* The grid is a whisper on the paper — the graph reads first. */
+    --xy-background-pattern-color: color-mix(in oklab, var(--foreground) 2.5%, transparent);
+    /* A node needs a real stroke, not the UI hairline: --border is tuned to
+     * separate stacked panels of near-identical color, which is a much easier
+     * job than outlining a small shape on open canvas. Pulled toward the ink so
+     * it holds up at node size. The 55/45 mix lands near L 0.59 in BOTH packs
+     * (light 0.86→0.59, dark 0.32→0.59): a true mid-grey stroke either way,
+     * dark enough on white paper and light enough on dark. */
+    --tp-node-border: color-mix(in oklab, var(--border) 55%, var(--foreground));
     --xy-edge-stroke: var(--muted-foreground);
     --xy-edge-stroke-selected: var(--primary);
     --xy-minimap-background-color: var(--card);

@@ -78,7 +78,7 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
   const [textDirty, setTextDirty] = useState(false)
   const dirty = mode === 'visual' ? state.dirty : textDirty
 
-  // Manual layout, shared with the Topology tab via the same per-lab store.
+  // Manual layout, shared with Overview's topology view via the per-lab store.
   const [positions, setPositionsState] = useState<SavedPositions>(() => loadLayout(name) ?? {})
   const positionsRef = useRef(positions)
   positionsRef.current = positions
@@ -277,7 +277,7 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
               </Button>
             </div>
             {preview !== null && preview.nodes.length > 0 && (
-              <div className="h-[max(20rem,calc(100vh-34rem))] rounded-[2px] border">
+              <div className="h-[max(20rem,calc(100vh-30rem))] rounded-[2px] border">
                 <TopologyCanvas lab={lab} topology={preview} />
               </div>
             )}
@@ -287,7 +287,7 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
         <div className="flex items-stretch gap-4">
           <Card className="min-w-0 flex-1 py-0">
             <CardContent className="p-0">
-              <div className="h-[max(28rem,calc(100vh-24rem))]">
+              <div className="h-[max(28rem,calc(100vh-20rem))]">
                 <BuilderCanvas
                   state={state}
                   dispatch={dispatch}

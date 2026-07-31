@@ -10,7 +10,7 @@ export function LanNode({ data, isConnectable }: NodeProps<LanFlowNode>) {
   return (
     <div
       style={{ width: LAN_W, height: LAN_H }}
-      className="group relative flex flex-col items-center justify-center gap-0.5 rounded-[2px] border border-dashed bg-muted/60 text-muted-foreground"
+      className="group relative flex flex-col items-center justify-center gap-0.5 rounded-[2px] border border-dashed border-(--tp-node-border) bg-muted text-muted-foreground"
       title={data.label}
     >
       <CenterHandles isConnectable={isConnectable} />

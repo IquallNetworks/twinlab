@@ -1,5 +1,3 @@
-import { useEffect, useState } from 'react'
-
 import { Badge } from '@/components/ui/badge'
 import {
   Sheet,
@@ -10,16 +8,7 @@ import {
 } from '@/components/ui/sheet'
 import { formatDateTime, formatElapsed, jobStatusBadgeVariant } from '@/lib/format'
 import type { Job } from '@/lib/schemas'
-
-function useNow(intervalMs: number, enabled: boolean): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!enabled) return
-    const timer = setInterval(() => setNow(Date.now()), intervalMs)
-    return () => clearInterval(timer)
-  }, [intervalMs, enabled])
-  return now
-}
+import { useNow } from '@/lib/use-now'
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
   return (

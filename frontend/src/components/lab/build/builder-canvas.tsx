@@ -413,8 +413,8 @@ function CanvasInner({ state, dispatch, positions, onPositions }: BuilderCanvasP
 
 /** The editable canvas: structure derives from the BuildDoc (the reducer owns
  * the truth), React Flow owns positions/selection, and the shared per-lab
- * layout store carries manual arrangements across the Build and Topology
- * tabs. Every edit dispatches an action. */
+ * layout store carries manual arrangements between the Build tab and
+ * Overview's topology view. Every edit dispatches an action. */
 export function BuilderCanvas(props: BuilderCanvasProps) {
   return (
     <ReactFlowProvider>

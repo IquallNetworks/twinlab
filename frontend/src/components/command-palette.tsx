@@ -55,9 +55,6 @@ function CurrentLabGroup({ name, onDone }: { name: string; onDone: () => void })
       <CommandItem onSelect={() => go(() => navigate({ to: '/labs/$name/overview', params: { name } }))}>
         Overview
       </CommandItem>
-      <CommandItem onSelect={() => go(() => navigate({ to: '/labs/$name/topology', params: { name } }))}>
-        Topology
-      </CommandItem>
       {canEdit && (
         <CommandItem onSelect={() => go(() => navigate({ to: '/labs/$name/build', params: { name } }))}>
           Build

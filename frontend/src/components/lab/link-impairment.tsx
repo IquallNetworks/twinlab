@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { NetemForm, type NetemEndpoint } from '@/components/lab/netem-form'
 import { Button } from '@/components/ui/button'
+import { impairmentSummary } from '@/lib/format'
 import type { LabLink, LabNodeState, NetemImpairment } from '@/lib/schemas'
 
 /** Identity of an applied impairment, for spotting endpoints that disagree.
@@ -15,6 +16,15 @@ function impairmentKey(impairment: NetemImpairment | null): string {
     impairment.rate,
     impairment.corruption,
   ])
+}
+
+/** The link's impairment as one cell of text. "mixed" when the directions
+ * carry different shaping — a single line can't state two, and pretending
+ * otherwise would hide an asymmetry someone set deliberately. */
+export function linkImpairmentSummary(link: LabLink): string {
+  const distinct = new Set(link.endpoints.map((endpoint) => impairmentKey(endpoint.impairment)))
+  if (distinct.size > 1) return 'mixed'
+  return impairmentSummary(link.endpoints[0]?.impairment ?? null)
 }
 
 /** Why an endpoint can't be shaped: netem needs a live namespace, and the

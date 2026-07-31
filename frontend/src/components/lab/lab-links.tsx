@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { Zap } from 'lucide-react'
+import { ChevronDown, ChevronUp, Zap } from 'lucide-react'
+import { Fragment, useState } from 'react'
 
+import { LinkImpairment, linkImpairmentSummary } from '@/components/lab/link-impairment'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,20 +17,44 @@ import {
 import { ApiError } from '@/lib/api'
 import { linkOperBadgeVariant } from '@/lib/format'
 import { labLinksQueryOptions } from '@/lib/queries'
+import type { LabNodeState } from '@/lib/schemas'
 
 /** The lab's logical link table — the server-derived ground truth (netlab's
  * expanded topology), not the client-side definition sketch. Meaningful for any
  * AUTHORED lab (undeployed labs list links with live state unavailable), so the
- * caller gates on "has a definition", not "is deployed". */
-export function LabLinks({ name, enabled }: { name: string; enabled: boolean }) {
+ * caller gates on "has a definition", not "is deployed".
+ *
+ * It is also where a link is impaired BIDIRECTIONALLY: a row expands into the
+ * shared editor, which writes the same shaping to every endpoint. Impairing one
+ * direction only is the Interfaces card's job — netem is per-interface egress,
+ * so an interface IS a direction. */
+export function LabLinks({
+  name,
+  nodes,
+  enabled,
+  canConfigure,
+}: {
+  name: string
+  nodes: LabNodeState[]
+  enabled: boolean
+  canConfigure: boolean
+}) {
   const { data, isFetching, isError, error, refetch } = useQuery({
     ...labLinksQueryOptions(name),
     enabled,
   })
+  // One row at a time: the point of the column is that the editor is out of the
+  // way until asked for.
+  const [openLink, setOpenLink] = useState<number | null>(null)
 
   // Shouldn't happen behind the `enabled` gate, but a stale cache can race a
   // definition wipe — render it as the not-authored copy, not as a failure.
   const noDefinition = error instanceof ApiError && error.code === 'no_definition'
+  // Impairment needs live state to read (and a running node to write), so the
+  // column travels with the State column.
+  const live = data?.live ?? false
+  const columns = live ? 6 : 4
+
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -69,45 +95,89 @@ export function LabLinks({ name, enabled }: { name: string; enabled: boolean }) 
                   <TableHead>Type</TableHead>
                   <TableHead>Endpoints</TableHead>
                   <TableHead>Prefix</TableHead>
-                  {data.live ? <TableHead>State</TableHead> : null}
+                  {live ? <TableHead>State</TableHead> : null}
+                  {live ? <TableHead>Impairment</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.links.map((link) => (
-                  <TableRow key={link.index}>
-                    <TableCell className="font-medium">{link.name ?? `#${link.index}`}</TableCell>
-                    <TableCell className="text-muted-foreground">{link.type}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-0.5">
-                        {link.endpoints.map((endpoint) => (
-                          <span
-                            key={`${endpoint.node}:${endpoint.interface}`}
-                            className="font-mono text-xs"
-                          >
-                            {endpoint.node}:{endpoint.interface}
-                            {endpoint.ipv4 ? (
-                              <span className="text-muted-foreground"> {endpoint.ipv4}</span>
-                            ) : null}
-                            {endpoint.impairment ? (
-                              <Zap
-                                className="text-primary ml-1 inline size-3"
-                                aria-label="impaired"
-                              />
-                            ) : null}
-                          </span>
-                        ))}
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{link.prefix_ipv4 ?? '—'}</TableCell>
-                    {data.live ? (
-                      <TableCell>
-                        <Badge variant={linkOperBadgeVariant(link.oper_state)}>
-                          {link.oper_state}
-                        </Badge>
-                      </TableCell>
-                    ) : null}
-                  </TableRow>
-                ))}
+                {data.links.map((link) => {
+                  const open = openLink === link.index
+                  return (
+                    <Fragment key={link.index}>
+                      <TableRow>
+                        <TableCell className="font-medium">
+                          {link.name ?? `#${link.index}`}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{link.type}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            {link.endpoints.map((endpoint) => (
+                              <span
+                                key={`${endpoint.node}:${endpoint.interface}`}
+                                className="font-mono text-xs"
+                              >
+                                {endpoint.node}:{endpoint.interface}
+                                {endpoint.ipv4 ? (
+                                  <span className="text-muted-foreground"> {endpoint.ipv4}</span>
+                                ) : null}
+                                {endpoint.impairment ? (
+                                  <Zap
+                                    className="text-primary ml-1 inline size-3"
+                                    aria-label="impaired"
+                                  />
+                                ) : null}
+                              </span>
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {link.prefix_ipv4 ?? '—'}
+                        </TableCell>
+                        {live ? (
+                          <TableCell>
+                            <Badge variant={linkOperBadgeVariant(link.oper_state)}>
+                              {link.oper_state}
+                            </Badge>
+                          </TableCell>
+                        ) : null}
+                        {live ? (
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs">
+                                {linkImpairmentSummary(link)}
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                aria-expanded={open}
+                                onClick={() => setOpenLink(open ? null : link.index)}
+                              >
+                                {canConfigure ? 'Impair' : 'Show'}
+                                {open ? (
+                                  <ChevronUp className="size-3.5" />
+                                ) : (
+                                  <ChevronDown className="size-3.5" />
+                                )}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        ) : null}
+                      </TableRow>
+                      {open ? (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={columns} className="bg-muted/30">
+                            <LinkImpairment
+                              name={name}
+                              link={link}
+                              nodes={nodes}
+                              canConfigure={canConfigure}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
+                  )
+                })}
               </TableBody>
             </Table>
           </>

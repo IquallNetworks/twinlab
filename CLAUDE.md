@@ -62,8 +62,10 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   below: multi-access LAN topologies now deploy end-to-end — `examples/campus-lan.yml` is the
   worked example — and linux-node initial config actually applies); still
   parked: test-suites rework, definition
-  input methods, scenarios, catalog endpoint, … — and the v1.0 release train
-  (publish `twinlab-client` to PyPI + tag) goes LAST, after those land). Phase 1 (graphical
+  input methods, scenarios, catalog endpoint, …; after that batch comes a
+  comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
+  the browser-layer complement to the blackbox suite), and only then the v1.0
+  release train (publish `twinlab-client` to PyPI + tag) goes LAST). Phase 1 (graphical
   identity):
   identities are CSS token packs
   keyed off `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk +
@@ -315,15 +317,24 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   records (`labs`: definition + status + owner) via SQLAlchemy async + Alembic; migrations run in the
   backend entrypoint.
 
-Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner quality gates: `ruff format` + `ruff
-check`, basedpyright (strict), pytest.
+Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner + hostprep quality gates: `ruff
+format` + `ruff check`, basedpyright (strict), pytest.
+
+**Supported NOS platforms are VyOS and Cisco IOL — the tested set (maintainer's call
+2026-07-31)** — plus `linux` as the host/endpoint device; the builder's device catalog offers
+exactly these. Other netlab devices are out of scope for now, not merely unpolished: FRR in
+particular is untested AND its clab config path (sh-mode scripts delivered as clab binds) is known
+not to survive Twinlab's inline deploy, which strips `node_files/*` binds. A definition naming
+another device is not rejected — it edits as text and may even deploy — but nothing about it is
+promised. Widening the set is a maintainer decision that starts with testing, not a catalog edit.
 
 **End-to-end deploy + config push is proven:** create → `PUT` the definition → `POST
 /labs/{name}/deploy` with `configure: true` (202 + job) → poll the job to `succeeded` → nodes
 deployed *and* configured via clab-api deploy + the netlab-runner, config-time gate green —
-exercised continuously by the black-box suite's `deploy`-marked tests (linux nodes) and verified
-on VyOS (OSPF adjacency reaches Full) and cisco IOL. Needs a host user in the `clab_api` group,
-node images pulled, and clab-api running. Keep this section current as the project evolves.
+exercised continuously by the black-box suite's `deploy`-marked tests (linux nodes, incl. the
+multi-access-LAN bridge path) and verified on VyOS (OSPF adjacency reaches Full) and cisco IOL.
+Needs a host user in the `clab_api` group, node images pulled, and clab-api running. Keep this
+section current as the project evolves.
 
 A previous, complete iteration lives in the sibling directory **`../bak.0`** (a four-layer Python
 package with an HTTP backend / CLI client / privileged lab-runner split, plus a full `docs/` design

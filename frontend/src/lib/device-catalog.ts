@@ -10,7 +10,7 @@ export const BUILDER_MODULES = ['ospf', 'bgp', 'mpls', 'vrf'] as const
 export type BuilderModule = (typeof BUILDER_MODULES)[number]
 
 export interface CatalogDevice {
-  device: 'vyos' | 'iol' | 'frr' | 'linux'
+  device: 'vyos' | 'iol' | 'linux'
   label: string
   kind: 'router' | 'host'
   // Which of the builder's modules the device can run, per
@@ -19,9 +19,13 @@ export interface CatalogDevice {
 }
 
 export const DEVICE_CATALOG: readonly CatalogDevice[] = [
+  // VyOS and Cisco IOL are the two supported NOS platforms (the tested set —
+  // maintainer's call 2026-07-31); linux is the host/endpoint device. FRR was
+  // dropped: untested, and its clab config path (sh-mode via binds) is known
+  // not to survive Twinlab's inline deploy. A definition using another device
+  // still works — it just edits as text, not in the builder.
   { device: 'vyos', label: 'VyOS', kind: 'router', modules: BUILDER_MODULES },
   { device: 'iol', label: 'Cisco IOL', kind: 'router', modules: BUILDER_MODULES },
-  { device: 'frr', label: 'FRR', kind: 'router', modules: BUILDER_MODULES },
   { device: 'linux', label: 'Linux host', kind: 'host', modules: [] },
 ]
 

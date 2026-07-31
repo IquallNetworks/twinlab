@@ -503,6 +503,21 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     Revocation (key delete, grant removal, user deactivation) bites on the
     next connection; established tunnels survive until closed.
 
+### Playwright e2e UX suite · **planned** (after the parked backend batch, BEFORE the release train)
+
+14. **A comprehensive end-to-end test suite driving the real frontend with
+    Playwright (Apache-2.0), verifying the UX** — decided 2026-07-31. Sequencing
+    is locked: it lands after the parked backend batch (test-suites rework,
+    definition input methods, scenarios, catalog endpoint, …) so the surfaces it
+    pins down are final, and before the v1.0 release train, which must not ship
+    without it. The black-box suite already proves the API contract through the
+    client; this suite covers what that cannot — the browser layer: login/auth
+    flows, role-gated affordances actually hidden/shown, the dashboard → lab
+    tabs → builder → deploy → operate journeys, dialogs/toasts/empty states,
+    and the canvas interactions. Scope, structure (against a live stack like
+    blackbox, deploy-marked split, etc.), and gating are designed when picked
+    up.
+
 ### Deferred items from the API review (2026-07-23) · **deferred**
 
 Surfaced while freezing the API shape for the Python client / black-box suite /

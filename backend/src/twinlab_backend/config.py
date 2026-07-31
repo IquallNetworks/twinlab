@@ -9,7 +9,14 @@ the app fails startup on an `Err`.
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from twinlab_backend.result import Err, Ok, Result
 
@@ -33,6 +40,8 @@ _OPTIONAL_ENV_KEYS = {
     "mgmt_subnet_pool": "MGMT_SUBNET_POOL",
     "ssh_jump_token": "SSH_JUMP_TOKEN",
     "ssh_jump_address": "SSH_JUMP_ADDRESS",
+    "hostprep_url": "HOSTPREP_URL",
+    "hostprep_token": "HOSTPREP_TOKEN",
 }
 
 
@@ -75,6 +84,21 @@ class Settings(BaseModel):
     # "host:port" advertised on GET /ssh-access; "" = not advertised.
     ssh_jump_token: SecretStr | None = None
     ssh_jump_address: str = ""
+
+    # Host-preparation sidecar (lab bridges + kernel modules). Optional in code
+    # — the backend runs without it and only a deploy that NEEDS host prep
+    # fails, with a clear job error — while the compose stack requires the
+    # token so a deployed stack can't ship without one. URL and token are one
+    # feature: setting only one of them is a configuration mistake, not a
+    # choice, so it fails loading.
+    hostprep_url: str = ""
+    hostprep_token: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def _hostprep_pair(self) -> Settings:
+        if bool(self.hostprep_url) != (self.hostprep_token is not None):
+            raise ValueError("HOSTPREP_URL and HOSTPREP_TOKEN must be set together")
+        return self
 
     @field_validator("ssh_jump_address")
     @classmethod

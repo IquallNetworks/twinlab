@@ -52,6 +52,16 @@ nodes: [n1, n2]
 links: [n1-n2]
 """
 
+# A multi-access (3-endpoint) segment: netlab's clab provider references a
+# host bridge for it, so deploying exercises the hostprep path end-to-end.
+LAN_LAB_DEFINITION: Final = """\
+provider: clab
+defaults.device: linux
+nodes: [n1, n2, n3]
+links:
+- [n1, n2, n3]
+"""
+
 # Valid YAML that netlab must reject (unknown device) -> 422 on authoring.
 NETLAB_INVALID_DEFINITION: Final = """\
 provider: clab

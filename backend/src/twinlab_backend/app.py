@@ -36,6 +36,7 @@ from twinlab_backend.result import Err
 from twinlab_backend.services import job_store
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.custom_config import load_builtins
+from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.job_events import JobEventBroker
 from twinlab_backend.services.runner_client import RunnerClient
 
@@ -100,6 +101,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.runner_client = RunnerClient(
             client=client,
             base_url=settings.netlab_runner_url,
+        )
+        # Optional (settings validate url+token as a pair): None simply means
+        # deploys that need host preparation fail with a clear job error.
+        app.state.hostprep_client = (
+            HostPrepClient(
+                client=client,
+                base_url=settings.hostprep_url,
+                token=settings.hostprep_token.get_secret_value(),
+            )
+            if settings.hostprep_url and settings.hostprep_token is not None
+            else None
         )
         try:
             yield

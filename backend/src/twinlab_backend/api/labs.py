@@ -31,6 +31,7 @@ from twinlab_backend.db.models import Lab
 from twinlab_backend.deps import (
     BuiltinLibraryDep,
     ClabClientDep,
+    HostPrepDep,
     RunnerClientDep,
     SessionDep,
     SettingsDep,
@@ -85,8 +86,10 @@ from twinlab_backend.services.clab_api import NetemImpairment as ClabNetemImpair
 from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfaces
 from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
 from twinlab_backend.services.custom_config import BuiltinLibrary
+from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
 from twinlab_backend.services.netlab import (
+    ClabArtifacts,
     TopologyLink,
     create_clab_topology,
     read_mgmt_subnet,
@@ -588,29 +591,147 @@ async def _live_detail(lab: Lab, clab: ClabApiClient, permissions: list[str]) ->
     return lab_detail(lab, nodes, permissions)
 
 
-async def _run_deploy(
-    definition: str, clab: ClabApiClient, templates: dict[str, str], *, reconfigure: bool
-) -> Result[tuple[DeployedLab, list[TopologyLink]], ApiError]:
-    """Generate the containerlab topology from a netlab definition and deploy it.
-    `reconfigure` overwrites a lab of the same name (redeploy). `templates` is the
-    custom-config fileset the definition may reference — `netlab create` validates
-    those exist, so they must be present even though config push happens later.
-    Also hands back the run's link table so the caller can refresh the stored
-    cache. Returns the mapped ApiError as an error value so the caller can
-    release a reservation before re-raising, rather than unwinding through an
-    exception."""
-    # netlab create is blocking subprocess work; keep it off the event loop.
+async def _generate_topology(
+    definition: str, templates: dict[str, str]
+) -> Result[ClabArtifacts, ApiError]:
+    """Run `netlab create` (off the event loop — blocking subprocess work) and
+    map a failure onto the error envelope. `templates` is the custom-config
+    fileset the definition may reference — `netlab create` validates those
+    exist. Returns the ApiError as a value so the caller can restore lab state
+    before re-raising, rather than unwinding through an exception."""
     artifacts = await run_in_threadpool(create_clab_topology, definition, templates)
     if isinstance(artifacts, Err):
         return Err(_netlab_failed(artifacts.error.message, artifacts.error.stderr))
-    # We deploy inline (topologyContent) and ship no files, so drop binds netlab
-    # points at its generated node_files/* (e.g. cisco_iol's ifstate) — the clab
-    # kind regenerates them, and clab-api would otherwise reject the bind path.
-    shippable = strip_generated_binds(artifacts.value.topology)
-    deployed = await clab.deploy(shippable, reconfigure=reconfigure)
-    if isinstance(deployed, Err):
-        return Err(_deploy_failed(deployed.error.message))
-    return Ok((deployed.value, artifacts.value.links))
+    return Ok(artifacts.value)
+
+
+async def _prepare_host(
+    db: AsyncSession, hostprep: HostPrepClient | None, lab_name: str, artifacts: ClabArtifacts
+) -> ApiError | None:
+    """Host preparation before the clab deploy — `netlab up`'s pre-start work,
+    done through the hostprep sidecar: create the host bridges multi-access
+    links need and load the kernel modules the topology's devices ask for.
+    No-op when the topology needs nothing, so a stack without the sidecar
+    still deploys every such lab. Returned (not raised) so the caller restores
+    the lab status first."""
+    bridges = list(artifacts.host_bridges)
+    modules = [module.name for module in artifacts.kernel_modules]
+    if not bridges and not modules:
+        return None
+    if hostprep is None:
+        return ApiError(
+            503,
+            "hostprep_unavailable",
+            "this topology needs host preparation (bridges/kernel modules) "
+            "but no hostprep sidecar is configured",
+        )
+    if bridges:
+        # Bridge names truncate the lab name to 10 chars, so two labs sharing
+        # a prefix (and a linkindex) would share a bridge — silently
+        # cross-wiring their segments in netlab's own workflow. The persisted
+        # claims let Twinlab refuse loudly instead.
+        owners = await lab_store.bridge_owners(db, exclude_lab=lab_name)
+        taken = sorted(bridge for bridge in bridges if bridge in owners)
+        if taken:
+            return ApiError(
+                409,
+                "bridge_conflict",
+                f"host bridge(s) {', '.join(taken)} belong to another lab — lab names "
+                "sharing their first 10 characters collide on bridge names; rename one lab",
+            )
+        # Claim BEFORE creating, so cleanup always knows what may exist.
+        _ = await lab_store.set_host_bridges(db, lab_name, bridges)
+        ensured = await hostprep.ensure_bridges(bridges)
+        if isinstance(ensured, Err):
+            return ApiError(502, "hostprep_failed", ensured.error.message)
+        conflicts = [o for o in ensured.value if o.status == "not_bridge"]
+        if conflicts:
+            names = ", ".join(o.name for o in conflicts)
+            return ApiError(
+                409,
+                "bridge_conflict",
+                f"host interface(s) {names} already exist and are not bridges",
+            )
+        failures = [o for o in ensured.value if o.status not in ("created", "existed")]
+        if failures:
+            detail = "; ".join(f"{o.name}: {o.detail}" for o in failures)
+            return ApiError(502, "hostprep_failed", f"could not create host bridge(s): {detail}")
+    if modules:
+        loaded = await hostprep.load_modules(modules)
+        if isinstance(loaded, Err):
+            return ApiError(502, "hostprep_failed", loaded.error.message)
+        required = {module.name for module in artifacts.kernel_modules if module.required}
+        # Only required modules fail the deploy (netlab's own `?` semantics):
+        # without them the lab's dataplane silently wouldn't work.
+        missing = [o for o in loaded.value if not o.ok and o.name in required]
+        if missing:
+            detail = "; ".join(f"{o.name}: {o.detail}" for o in missing)
+            return ApiError(
+                502,
+                "kernel_module_missing",
+                f"required kernel module(s) failed to load: {detail}",
+            )
+    return None
+
+
+async def _prune_stale_bridges(
+    db: AsyncSession,
+    hostprep: HostPrepClient | None,
+    lab_name: str,
+    previous: list[str],
+    needed: tuple[str, ...],
+) -> None:
+    """After a successful (re)deploy: drop bridges claimed by an earlier
+    definition version that the fresh topology no longer needs (clab has
+    rewired the lab, so their veths are gone). Never fails the deploy — a
+    bridge that can't be deleted stays on the claim so the next destroy
+    retries it; the claim always lists exactly what may exist on the host."""
+    if not previous and not needed:
+        return
+    stale = sorted(set(previous) - set(needed))
+    kept: list[str] = []
+    if stale:
+        if hostprep is None:
+            kept = stale
+        else:
+            pruned = await hostprep.delete_bridges(stale)
+            if isinstance(pruned, Err):
+                kept = stale
+            else:
+                kept = [o.name for o in pruned.value if o.status not in ("deleted", "absent")]
+    claim = sorted({*needed, *kept})
+    _ = await lab_store.set_host_bridges(db, lab_name, claim if claim else None)
+
+
+async def _release_host_bridges(
+    db: AsyncSession, hostprep: HostPrepClient | None, lab_name: str
+) -> None:
+    """Destroy-time cleanup of the lab's claimed host bridges (the teardown is
+    already done and recorded when this runs). Raises on anything left behind:
+    a bridge leaked on the host is an operator problem to surface, never to
+    swallow — the claim stays on the record, so a redeploy (idempotent ensure)
+    or a later delete retries it."""
+    lab = await lab_store.get_lab(db, lab_name, include_deleted=True)
+    bridges = list(lab.host_bridges or []) if lab else []
+    if not bridges:
+        return
+    if hostprep is None:
+        raise ApiError(
+            503,
+            "hostprep_unavailable",
+            f"lab claims host bridge(s) {', '.join(bridges)} but no hostprep sidecar "
+            "is configured to remove them",
+        )
+    deleted = await hostprep.delete_bridges(bridges)
+    if isinstance(deleted, Err):
+        raise ApiError(502, "hostprep_failed", deleted.error.message)
+    leftovers = [o for o in deleted.value if o.status not in ("deleted", "absent")]
+    if leftovers:
+        detail = "; ".join(
+            f"{o.name}: {o.status}" + (f" ({o.detail})" if o.detail else "") for o in leftovers
+        )
+        raise ApiError(409, "bridge_conflict", f"could not remove host bridge(s): {detail}")
+    _ = await lab_store.set_host_bridges(db, lab_name, None)
 
 
 async def _finish_deploy(
@@ -774,6 +895,7 @@ async def _deploy_job(
     session_factory: SessionFactory,
     clab: ClabApiClient,
     runner: RunnerClient,
+    hostprep: HostPrepClient | None,
     library: BuiltinLibrary,
     lab_name: str,
     *,
@@ -782,8 +904,10 @@ async def _deploy_job(
     skip_config_time: bool,
 ) -> DeployResponse:
     """The deploy operation, run inside a job task: fresh session, lab re-fetched.
-    A failed clab deploy restores the pre-deploy status before re-raising;
-    failures past mark_deployed (readiness, config push) leave the lab deployed."""
+    Generate -> prepare the host (bridges/kernel modules via hostprep) -> clab
+    deploy. A failure up to and including the clab deploy restores the pre-deploy
+    status before re-raising; failures past mark_deployed (readiness, config
+    push) leave the lab deployed."""
     async with session_factory() as db:
         lab = await lab_store.get_lab(db, lab_name)
         if lab is None or lab.definition is None:
@@ -791,19 +915,35 @@ async def _deploy_job(
             # submit) — typed anyway so a corrupt row fails the job loudly.
             raise ApiError(409, "no_definition", f"lab '{lab_name}' lost its definition")
         definition = lab.definition
-        deployed = await _run_deploy(
-            definition, clab, _config_fileset(library, lab), reconfigure=True
-        )
-        if isinstance(deployed, Err):
+        previous_bridges = list(lab.host_bridges or [])
+        generated = await _generate_topology(definition, _config_fileset(library, lab))
+        if isinstance(generated, Err):
             _ = await lab_store.set_status(db, lab_name, previous_status)
-            raise deployed.error
-        deployed_lab, links = deployed.value
+            raise generated.error
+        artifacts = generated.value
+        prep_failed = await _prepare_host(db, hostprep, lab_name, artifacts)
+        if prep_failed is not None:
+            _ = await lab_store.set_status(db, lab_name, previous_status)
+            raise prep_failed
+        # We deploy inline (topologyContent) and ship no files, so drop binds
+        # netlab points at its generated node_files/* (e.g. cisco_iol's ifstate)
+        # — the clab kind regenerates them, and clab-api would otherwise reject
+        # the bind path.
+        shippable = strip_generated_binds(artifacts.topology)
+        deployed = await clab.deploy(shippable, reconfigure=True)
+        if isinstance(deployed, Err):
+            # Bridges created above are left in place (harmless when idle, and
+            # possibly still wired mid-overwrite): the claim keeps them
+            # tracked, and the next deploy or destroy reconciles.
+            _ = await lab_store.set_status(db, lab_name, previous_status)
+            raise _deploy_failed(deployed.error.message)
+        await _prune_stale_bridges(db, hostprep, lab_name, previous_bridges, artifacts.host_bridges)
         # The deploy's own `netlab create` just produced the link table — refresh
         # the stored cache (free backfill for rows predating the column).
-        _ = await lab_store.set_links(db, lab_name, serialize_links(links))
+        _ = await lab_store.set_links(db, lab_name, serialize_links(artifacts.links))
         _ = await lab_store.mark_deployed(db, lab_name)
         return await _finish_deploy(
-            deployed_lab,
+            deployed.value,
             definition,
             runner,
             db,
@@ -822,6 +962,7 @@ async def deploy_lab(
     http_request: Request,
     clab: ClabClientDep,
     runner: RunnerClientDep,
+    hostprep: HostPrepDep,
     db: SessionDep,
     library: BuiltinLibraryDep,
     user: CurrentUserDep,
@@ -861,6 +1002,7 @@ async def deploy_lab(
             session_factory,
             clab,
             runner,
+            hostprep,
             library,
             lab_name,
             previous_status=previous_status,
@@ -1117,11 +1259,19 @@ async def put_custom_config(
 
 
 async def _destroy_job(
-    session_factory: SessionFactory, clab: ClabApiClient, lab_name: str, *, remove: bool
+    session_factory: SessionFactory,
+    clab: ClabApiClient,
+    hostprep: HostPrepClient | None,
+    lab_name: str,
+    *,
+    remove: bool,
 ) -> DestroyResponse:
     """The destroy operation, inside a job task. The submit pre-check already
     required a running lab for a plain destroy; a teardown-404 here (torn down
-    in the race window) still fails the job with `lab_not_running`."""
+    in the race window) still fails the job with `lab_not_running`. Claimed
+    host bridges are released AFTER the record is updated: the teardown really
+    happened either way, and on a cleanup failure the job fails loudly with the
+    claim kept for a retry."""
     async with session_factory() as db:
         result = await clab.destroy(lab_name)
         if isinstance(result, Err):
@@ -1141,10 +1291,12 @@ async def _destroy_job(
             if isinstance(deleted, lab_store.LabStoreError):
                 # Absent or already deleted — nothing to remove from the catalog.
                 raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+            await _release_host_bridges(db, hostprep, lab_name)
             return DestroyResponse(status="deleted", detail=teardown_detail)
 
         # Retain the definition, flip status. not_found (deployed out-of-band) is fine.
         _ = await lab_store.mark_destroyed(db, lab_name)
+        await _release_host_bridges(db, hostprep, lab_name)
         return DestroyResponse(status="destroyed", detail=teardown_detail)
 
 
@@ -1155,6 +1307,7 @@ async def destroy_lab(
     lab_name: LabName,
     http_request: Request,
     clab: ClabClientDep,
+    hostprep: HostPrepDep,
     db: SessionDep,
     user: CurrentUserDep,
     remove: bool = False,
@@ -1187,7 +1340,7 @@ async def destroy_lab(
     session_factory: SessionFactory = http_request.app.state.session_factory
 
     async def work() -> DestroyResponse:
-        return await _destroy_job(session_factory, clab, lab_name, remove=remove)
+        return await _destroy_job(session_factory, clab, hostprep, lab_name, remove=remove)
 
     spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)

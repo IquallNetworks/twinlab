@@ -40,12 +40,12 @@ backend now implements in full (sixteen deltas; delta 12 is the async job model,
 jump, delta 14 the link table, delta 15 the cross-lab job listing and delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 105 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 106 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
 
-The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of six services:
+The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of seven services:
 
 - **`frontend/`** — Vite + React + TypeScript (pnpm). **Rebuilt in place on the v1.0 wire**
   (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–5 ALL done —
@@ -57,7 +57,10 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   netem key and `['labs', name, 'links']`), and **cross-lab jobs + SSE job events DONE
   2026-07-30** (deltas 15/16: `lib/use-all-jobs.ts` is now ONE `GET /jobs` query instead of a
   per-lab fan-out — partial failure stopped being a state — and `useLabEvents` listens to the two
-  NAMED events, so the jobs poll fell to a 15s fallback for the gap a reconnect leaves); still
+  NAMED events, so the jobs poll fell to a 15s fallback for the gap a reconnect leaves), and
+  **host preparation DONE 2026-07-31** (the `hostprep/` sidecar + runner netns config path, both
+  below: multi-access LAN topologies now deploy end-to-end — `examples/campus-lan.yml` is the
+  worked example — and linux-node initial config actually applies); still
   parked: test-suites rework, definition
   input methods, scenarios, catalog endpoint, … — and the v1.0 release train
   (publish `twinlab-client` to PyPI + tag) goes LAST, after those land). Phase 1 (graphical
@@ -264,8 +267,38 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
 - **`netlab-runner/`** — FastAPI (uv) config-push sidecar. `POST /configure {definition}` runs
   `netlab create` (regenerate the inventory) then `netlab initial`, which drives Ansible over the
   `docker` connection (exec into `clab-<lab>-<node>` by name via the mounted Docker socket — no host
-  network, no SSH). Returns structured per-node results (parsed from Ansible's PLAY RECAP). netlab
+  network). Returns structured per-node results (parsed from Ansible's PLAY RECAP). netlab
   (MIT) is aggregated with ansible-core + community.docker (GPLv3) as separate processes.
+  **Plain-container nodes (linux, daemons) are NOT configured over Ansible**: netlab deploys their
+  config as host-side scripts via `sudo ip netns exec clab-<lab>-<node>` (the runner's full
+  iproute2/procps against the node's netns — alpine node images only carry busybox), so the runner
+  carries host pid namespace, SYS_ADMIN + SYS_PTRACE + NET_ADMIN, `/var/run/netns`, and
+  apparmor/systempaths unconfined (see compose comments; the Docker socket it already holds is
+  root-equivalent, so none of this widens its reach). Script-configured nodes never appear in the
+  PLAY RECAP, so they are absent from per-node results; their failures surface through netlab
+  initial's exit code as `status="config_failed"`.
+- **`hostprep/`** — FastAPI (uv, Python 3.14) host-preparation sidecar: the ONE component allowed
+  to touch host network devices. Does `netlab up`'s clab pre-start work, which Twinlab otherwise
+  never runs: creates/deletes the **host Linux bridges multi-access (3+ endpoint) links need**
+  (`name[0:10]_linkindex`; `ip link add` + up + `group_fwd_mask 65528` via netlink — the
+  container's /sys is read-only) and **modprobes kernel modules** (mpls/vrf/vxlan/lag + device
+  extras; never unloads — host-shared). A dumb, stateless executor behind `X-Hostprep-Token`
+  (compose-required `:?` secret): strict validation before any command (bridge-name regex bounded
+  to IFNAMSIZ, fixed module allowlist), fixed-argv subprocess only, per-item outcomes as data
+  (`created`/`existed`/`in_use`/`not_bridge`/...). Runs `network_mode: host` (bridges live in the
+  host netns) with `cap_drop: ALL` + exactly NET_ADMIN + SYS_MODULE, `/lib/modules:ro`, **no
+  Docker socket, no netlab, no definitions**; port 8091 beside clab-api's 8090, reached via the
+  same host-gateway pattern. ALL policy lives in the backend: the deploy job derives
+  `host_bridges`/`kernel_modules` from the expanded topology (`ClabArtifacts`; the kmods map is
+  mirrored from netlab's defaults with a drift-guard test), refuses **bridge-name collisions**
+  (names truncate the lab name to 10 chars — two labs sharing a prefix and linkindex would be
+  silently cross-wired by netlab itself; Twinlab 409s `bridge_conflict` off the persisted claims),
+  records the claim on `labs.host_bridges` BEFORE deploying, prunes stale names after a redeploy,
+  and releases it at destroy only when the bridges are confirmed gone (a failed cleanup fails the
+  job loudly and keeps the claim for retry). Deleting refuses a bridge with attached ports —
+  after a clean destroy the veths are gone, so ports mean someone else is wired to it. Job error
+  slugs: `hostprep_unavailable`, `hostprep_failed`, `bridge_conflict`, `kernel_module_missing`.
+  A stack without the sidecar still deploys every lab that needs no host prep.
 - **`jump/`** — the SSH jump host (delta 13): stock OpenSSH sshd (debian:trixie-slim, BSD-licensed)
   publishing `JUMP_PORT` (default 2222). One forwarding-only system account (`jump`, nologin, no
   PTY/agent/X11/sftp); per-key access is resolved LIVE by `AuthorizedKeysCommand` → the backend's

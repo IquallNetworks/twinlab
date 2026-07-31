@@ -1,5 +1,13 @@
+import importlib.util
+from pathlib import Path
+from typing import cast
+
+import yaml
+
 from twinlab_backend.result import Err, Ok
 from twinlab_backend.services.netlab import (
+    DEVICE_KMODS,
+    PROVIDER_KMODS,
     create_clab_topology,
     read_lab_name,
     read_mgmt_subnet,
@@ -63,6 +71,91 @@ def test_create_links_join_uses_clab_interface_name() -> None:
 def test_create_reports_error_on_invalid_definition() -> None:
     result = create_clab_topology("nodes: [r1]\nlinks: [r1-nonexistent]\n")
     assert isinstance(result, Err)
+
+
+def test_host_bridges_only_for_multi_access_links() -> None:
+    # netlab references a host bridge (name[0:10]_linkindex) only for links
+    # with 3+ endpoints. It ASSIGNS a bridge to a 2-endpoint host-to-host link
+    # too, but renders that as a plain veth pair — the exact trap: filter on
+    # endpoint count, not on the bridge attribute alone.
+    definition = (
+        "name: brlab\n"
+        "provider: clab\n"
+        "defaults.device: linux\n"
+        "nodes: [n1, n2, n3]\n"
+        "links:\n"
+        "- [n1, n2, n3]\n"  # linkindex 1: LAN -> bridge brlab_1
+        "- [n1, n2]\n"  # linkindex 2: two hosts, typed lan, NO host bridge
+    )
+    result = create_clab_topology(definition)
+    assert isinstance(result, Ok), result
+    assert result.value.host_bridges == ("brlab_1",)
+
+
+def test_host_bridges_empty_for_p2p_topology() -> None:
+    result = create_clab_topology(_VALID_DEFINITION)
+    assert isinstance(result, Ok), result
+    assert result.value.host_bridges == ()
+
+
+def test_kernel_modules_from_device_and_modules() -> None:
+    # vyos participates (its device data has a kmods key), so the provider map
+    # applies: the mpls module needs mpls-router + mpls-iptunnel, required.
+    definition = (
+        "provider: clab\n"
+        "defaults.device: vyos\n"
+        "module: [ospf, mpls]\n"
+        "nodes: [r1, r2]\n"
+        "links: [r1-r2]\n"
+    )
+    result = create_clab_topology(definition)
+    assert isinstance(result, Ok), result
+    assert {(m.name, m.required) for m in result.value.kernel_modules} == {
+        ("mpls-router", True),
+        ("mpls-iptunnel", True),
+    }
+
+
+def test_kernel_modules_empty_without_kmod_needing_modules() -> None:
+    # Plain linux hosts: participating device, but no module asks for kmods.
+    result = create_clab_topology(_VALID_DEFINITION)
+    assert isinstance(result, Ok), result
+    assert result.value.kernel_modules == ()
+
+
+def test_kernel_modules_optional_marker() -> None:
+    # frr's device extras mark vrf as optional at initial ('vrf?').
+    definition = "provider: clab\ndefaults.device: frr\nnodes: [r1, r2]\nlinks: [r1-r2]\n"
+    result = create_clab_topology(definition)
+    assert isinstance(result, Ok), result
+    assert {(m.name, m.required) for m in result.value.kernel_modules} == {("vrf", False)}
+
+
+def test_kmods_mirror_matches_installed_netlab() -> None:
+    # The drift guard: PROVIDER_KMODS / DEVICE_KMODS are mirrored from netlab's
+    # defaults so deploys don't pay a per-run lookup. A netlab upgrade that
+    # changes the map (or adds a participating device) must fail HERE, not
+    # silently skip a module on some future host.
+    spec = importlib.util.find_spec("netsim")
+    assert spec is not None and spec.submodule_search_locations is not None
+    root = Path(next(iter(spec.submodule_search_locations)))
+
+    provider = yaml.safe_load((root / "providers" / "clab.yml").read_text())
+    assert {module: tuple(mods) for module, mods in provider["kmods"].items()} == PROVIDER_KMODS
+
+    mirrored_devices: set[str] = set()
+    for path in [*(root / "devices").glob("*.yml"), *(root / "daemons").glob("*.yml")]:
+        device_data = yaml.safe_load(path.read_text())
+        clab = device_data.get("clab")
+        if not isinstance(clab, dict) or "kmods" not in clab:
+            continue  # non-participating device
+        mirrored_devices.add(path.stem)
+        extras = cast("dict[str, list[str]]", clab["kmods"] or {})
+        assert path.stem in DEVICE_KMODS, f"unmirrored participating device: {path.stem}"
+        assert {module: tuple(mods) for module, mods in extras.items()} == DEVICE_KMODS[
+            path.stem
+        ], path.stem
+    assert mirrored_devices == set(DEVICE_KMODS)
 
 
 def test_read_lab_name_returns_none_when_absent() -> None:

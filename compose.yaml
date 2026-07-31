@@ -55,6 +55,10 @@ services:
       # GET /ssh-access (keep the port in sync with JUMP_PORT).
       SSH_JUMP_TOKEN: ${JUMP_TOKEN:?set JUMP_TOKEN in .env (openssl rand -hex 32)}
       SSH_JUMP_ADDRESS: ${SSH_JUMP_ADDRESS:-localhost:2222}
+      # Host-preparation sidecar (lab bridges + kernel modules), on the host
+      # network like clab-api — reached through the same host gateway.
+      HOSTPREP_URL: http://host.docker.internal:8091
+      HOSTPREP_TOKEN: ${HOSTPREP_TOKEN:?set HOSTPREP_TOKEN in .env (openssl rand -hex 32)}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # No host port: the backend is reached only through the frontend's /api/v1
@@ -100,17 +104,37 @@ services:
   # Config-push runner: netlab + ansible-core + community.docker + the docker
   # CLI. `netlab initial` drives Ansible over the docker connection, exec-ing
   # into the lab nodes (deployed by clab-api on the host daemon) by container
-  # name — so it needs the Docker socket, but no host network or SSH. netlab
-  # (MIT) is aggregated with ansible-core / community.docker (GPLv3) as separate
+  # name — so it needs the Docker socket, but no host network. netlab (MIT) is
+  # aggregated with ansible-core / community.docker (GPLv3) as separate
   # processes in this sidecar; the Apache-2.0 backend never links them.
+  #
+  # Plain-container nodes (linux, daemons) are NOT configured over Ansible:
+  # netlab deploys their config as host-side scripts via `ip netns exec
+  # clab-<lab>-<node>` (full iproute2 against the node's netns; the alpine
+  # node images only carry busybox ip). containerlab's /var/run/netns entries
+  # are symlinks into /proc/<pid>/ns/net, hence the host pid namespace;
+  # opening another process's ns file needs SYS_PTRACE, entering it needs
+  # SYS_ADMIN, the address/route/sysctl writes inside it need NET_ADMIN, and
+  # the docker-default AppArmor profile denies the cross-process ns read
+  # outright — none of which meaningfully widens this container's reach, since
+  # the mounted Docker socket is already root-equivalent on the host.
   netlab-runner:
     build: ./netlab-runner
+    pid: host
+    cap_add: [SYS_ADMIN, SYS_PTRACE, NET_ADMIN]
+    security_opt:
+      - apparmor=unconfined
+      # Docker masks /proc/sys read-only in containers; the netns scripts
+      # write net.* sysctls of the TARGET node namespace through it.
+      - systempaths=unconfined
     environment:
       DOCKER_HOST: unix:///var/run/docker.sock
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # netlab create validates the vyos /lib/modules bind path in this fs.
       - /lib/modules:/lib/modules:ro
+      # The netns symlinks the ns config path resolves (see above).
+      - /var/run/netns:/var/run/netns
     healthcheck:
       test:
         - CMD
@@ -149,6 +173,39 @@ services:
       # ssh-keyscan ships with openssh). -t ed25519: one probe, not one per
       # host-key type — keeps the log quiet.
       test: ["CMD", "ssh-keyscan", "-T", "2", "-t", "ed25519", "-p", "2222", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Host-preparation sidecar: the ONE component allowed to touch host network
+  # devices. It creates/deletes the per-lab Linux bridges that multi-access
+  # (3+ endpoint) links need and modprobes the kernel modules netlab's clab
+  # provider asks for (mpls, vrf, vxlan, ...) — `netlab up` pre-start work,
+  # which Twinlab never runs. Host network because a bridge must be created in
+  # the host's network namespace; capabilities are the exact two the job needs
+  # (netlink + modprobe) on an otherwise fully-dropped set. Deliberately NO
+  # Docker socket, no netlab, no definitions: it executes only pre-validated
+  # primitives (fixed module allowlist, netlab-shaped bridge names) behind the
+  # shared token. The backend owns all bookkeeping (bridge ownership,
+  # collisions, required-vs-optional modules).
+  hostprep:
+    build: ./hostprep
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    environment:
+      HOSTPREP_TOKEN: ${HOSTPREP_TOKEN:?set HOSTPREP_TOKEN in .env (openssl rand -hex 32)}
+    volumes:
+      # modprobe resolves modules against the host's kernel tree.
+      - /lib/modules:/lib/modules:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8091/health')
       interval: 10s
       timeout: 5s
       retries: 5

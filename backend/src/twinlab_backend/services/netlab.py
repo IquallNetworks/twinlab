@@ -116,6 +116,14 @@ class _ExpandedLink(BaseModel):
     bandwidth: int | None = None
     mtu: int | None = None
     interfaces: list[_ExpandedLinkInterface] = Field(default_factory=list)
+    # The host bridge netlab assigns to shared segments (`name[0:10]_linkindex`).
+    # Assigned even to some 2-endpoint links; only 3+ endpoints make the clab
+    # provider actually reference it (see _host_bridges). Absent on p2p.
+    bridge: str | None = None
+    node_count: int
+    # Link-level clab attributes; only `external_bridge` (KEY presence, netlab's
+    # own check) matters here — it marks `bridge` as externally managed.
+    clab: dict[str, object] = Field(default_factory=dict)
 
 
 class _ExpandedNodeInterfaceClab(BaseModel):
@@ -129,6 +137,8 @@ class _ExpandedNodeInterface(BaseModel):
 
 
 class _ExpandedNode(BaseModel):
+    device: str
+    module: list[str] = Field(default_factory=list)
     interfaces: list[_ExpandedNodeInterface] = Field(default_factory=list)
 
 
@@ -196,14 +206,97 @@ def _extract_links(expanded: _ExpandedTopology) -> Result[list[TopologyLink], Ne
     return Ok(links)
 
 
+# --------------------------------------------------------------------------- #
+# Host preparation (what `netlab up` would do to the host before starting)
+#
+# Twinlab never runs `netlab up`, so its clab pre-start work — creating the
+# host bridges shared segments need, modprobing kernel modules — is derived
+# here and executed by the hostprep sidecar around deploy/destroy.
+# --------------------------------------------------------------------------- #
+
+# Mirrored from netlab's clab provider defaults (providers/clab.yml `kmods`
+# and the per-device `clab.kmods` extras): the kernel modules `netlab up`
+# would modprobe before starting containers, keyed by netlab module. A device
+# *participates* iff its device data carries a `kmods` key — VM/emulator kinds
+# (cisco_iol, ...) have none, their dataplane runs inside the image. A `?`
+# suffix marks a module netlab treats as optional (failure tolerated).
+# test_netlab.py cross-checks this mirror against the installed netlab, so an
+# upgrade that changes the map fails a test instead of silently drifting.
+PROVIDER_KMODS: dict[str, tuple[str, ...]] = {
+    "lag": ("bonding",),
+    "mpls": ("mpls-router", "mpls-iptunnel"),
+    "sr": ("mpls-router", "mpls-iptunnel"),
+    "vxlan": ("vxlan", "udp_tunnel", "ip6_udp_tunnel"),
+    "vrf": ("vrf",),
+}
+DEVICE_KMODS: dict[str, dict[str, tuple[str, ...]]] = {
+    "vyos": {},
+    "linux": {},
+    "frr": {"initial": ("vrf?",)},
+    "cumulus": {},
+    "cumulus_nvue": {"initial": ("ebtables",)},
+    "cisco8000v": {"initial": ("openvswitch",)},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class KernelModule:
+    name: str
+    # Mirrors netlab's `?` suffix: an optional module's load failure is
+    # tolerated; a required one failing must fail the deploy (the lab's
+    # dataplane silently won't work without it).
+    required: bool
+
+
+def _host_bridges(expanded: _ExpandedTopology) -> tuple[str, ...]:
+    """The host bridges this topology needs pre-created. Exactly netlab's own
+    filter (clab provider `list_bridges`): bridge assigned AND more than two
+    endpoints AND not `clab.external_bridge` (an external bridge is someone
+    else's to manage). netlab assigns `bridge` to some 2-endpoint links too
+    (e.g. host-to-host), but renders those as plain veth pairs."""
+    return tuple(
+        sorted(
+            {
+                link.bridge
+                for link in expanded.links
+                if link.bridge is not None
+                and link.node_count > 2
+                and "external_bridge" not in link.clab
+            }
+        )
+    )
+
+
+def _kernel_modules(expanded: _ExpandedTopology) -> tuple[KernelModule, ...]:
+    """The kernel modules this topology needs loaded, from each participating
+    node's device x netlab modules (netlab iterates `initial` + the node's
+    modules over the merged provider/device map). A module needed as required
+    by any node is required overall."""
+    needed: dict[str, bool] = {}
+    for node in expanded.nodes.values():
+        device_extras = DEVICE_KMODS.get(node.device)
+        if device_extras is None:
+            continue  # non-participating device: no kmods key in its defaults
+        merged = {**PROVIDER_KMODS, **device_extras}
+        for module in ("initial", *node.module):
+            for kmod in merged.get(module, ()):
+                name = kmod.removesuffix("?")
+                required = not kmod.endswith("?")
+                needed[name] = needed.get(name, False) or required
+    return tuple(KernelModule(name, required) for name, required in sorted(needed.items()))
+
+
 @dataclass(frozen=True, slots=True)
 class ClabArtifacts:
     """What Twinlab keeps from one `netlab create` run: the containerlab
-    topology (deployed inline through clab-api) and the logical link table
-    (persisted on the lab record)."""
+    topology (deployed inline through clab-api), the logical link table
+    (persisted on the lab record), and the host preparation the deploy needs
+    (bridges created / kernel modules loaded via the hostprep sidecar)."""
 
     topology: ClabTopology
     links: list[TopologyLink]
+    host_bridges: tuple[str, ...]
+    kernel_modules: tuple[KernelModule, ...]
 
 
 def serialize_links(links: list[TopologyLink]) -> dict[str, object]:
@@ -375,7 +468,14 @@ def create_clab_topology(
     links = _extract_links(expanded)
     if isinstance(links, Err):
         return Err(links.error)
-    return Ok(ClabArtifacts(topology=cast("ClabTopology", parsed), links=links.value))
+    return Ok(
+        ClabArtifacts(
+            topology=cast("ClabTopology", parsed),
+            links=links.value,
+            host_bridges=_host_bridges(expanded),
+            kernel_modules=_kernel_modules(expanded),
+        )
+    )
 
 
 def strip_generated_binds(topology: ClabTopology) -> ClabTopology:

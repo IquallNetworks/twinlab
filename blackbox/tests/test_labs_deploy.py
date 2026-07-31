@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
+from pathlib import Path
 
 import pytest
 from twinlab_client import (
@@ -31,7 +32,7 @@ from twinlab_client import (
     ValidationTest,
 )
 
-from _config import LINUX_LAB_DEFINITION, LabFactory, UserClientFactory
+from _config import LAN_LAB_DEFINITION, LINUX_LAB_DEFINITION, LabFactory, UserClientFactory
 
 pytestmark = pytest.mark.deploy
 
@@ -160,6 +161,69 @@ async def test_links_live_state(admin: TwinlabClient, make_lab: LabFactory) -> N
     for endpoint in link.endpoints:
         assert endpoint.state == "up"
         assert endpoint.interface in {iface.name for iface in inventory[endpoint.node]}
+
+
+async def test_lan_deploys_via_host_bridge_and_destroy_removes_it(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """A multi-access (3-endpoint) link end-to-end: the deploy creates the host
+    bridge netlab's clab provider references (`netlab up` pre-start work, done
+    by the hostprep sidecar), traffic actually crosses the segment, and the
+    destroy removes the bridge again.
+
+    DEVIATION from the suite's client-only rule: the bridge is host kernel
+    state invisible through the API, and leak-checking it is this test's
+    point — so two asserts read the host's /sys/class/net directly. The
+    deploy marker already assumes the suite runs on the stack's host (node
+    images, mgmt routes); this leans on the same assumption.
+    """
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LAN_LAB_DEFINITION)
+    job = await admin.deploy_lab(lab.name, configure=True)
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+    assert isinstance(done.result, DeployResponse)
+    assert done.result.status == "configured"
+
+    # ONE logical link, three endpoints, live and up.
+    table = await admin.links(lab.name)
+    assert table.live is True
+    (link,) = table.links
+    assert {endpoint.node for endpoint in link.endpoints} == {"n1", "n2", "n3"}
+    assert link.oper_state == "up"
+
+    # netlab names the bridge name[0:10]_linkindex.
+    bridge = Path("/sys/class/net") / f"{lab.name[:10]}_{link.index}"
+    assert (bridge / "bridge").is_dir(), f"host bridge {bridge.name} missing after deploy"
+
+    # Data-plane proof: n1 reaches n3 THROUGH the bridge. The target address
+    # comes from the link table (netlab-assigned), never hardcoded.
+    target = next(e.ipv4 for e in link.endpoints if e.node == "n3")
+    assert target is not None
+    ping = {
+        "reach": TestSuite(
+            tests={
+                "lan": ValidationTest(
+                    nodes=["n1"],
+                    command=f"ping -c 2 -W 2 {target.split('/')[0]}",
+                    # Leading space: "50% packet loss" must not match.
+                    expect=TestExpectation(contains=" 0% packet loss"),
+                )
+            },
+        )
+    }
+    _ = await admin.put_test_suites(lab.name, ping)
+    run = await admin.run_test_suite(lab.name, "reach")
+    run_done = await admin.wait_job(lab.name, run.id, timeout=JOB_WAIT)
+    assert run_done.status == "succeeded", run_done.error
+    report = run_done.result
+    assert isinstance(report, SuiteReport)
+    assert report.failed == 0 and report.passed >= 1
+
+    destroy = await admin.destroy_lab(lab.name)
+    destroy_done = await admin.wait_job(lab.name, destroy.id, timeout=JOB_WAIT)
+    assert destroy_done.status == "succeeded", destroy_done.error
+    assert not bridge.exists(), f"host bridge {bridge.name} leaked after destroy"
 
 
 async def test_netem_set_show_clear(admin: TwinlabClient, make_lab: LabFactory) -> None:

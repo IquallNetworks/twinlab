@@ -14,11 +14,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from twinlab_backend.config import Settings
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.custom_config import BuiltinLibrary
+from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.runner_client import RunnerClient
 
 
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def get_hostprep_client(request: Request) -> HostPrepClient | None:
+    """None when the sidecar isn't configured — the backend runs without it and
+    only a deploy that needs host preparation fails, with a clear job error."""
+    return request.app.state.hostprep_client
 
 
 def get_builtin_library(request: Request) -> BuiltinLibrary:
@@ -43,4 +50,5 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 BuiltinLibraryDep = Annotated[BuiltinLibrary, Depends(get_builtin_library)]
 ClabClientDep = Annotated[ClabApiClient, Depends(get_clab_client)]
 RunnerClientDep = Annotated[RunnerClient, Depends(get_runner_client)]
+HostPrepDep = Annotated[HostPrepClient | None, Depends(get_hostprep_client)]
 SessionDep = Annotated[AsyncSession, Depends(get_db)]

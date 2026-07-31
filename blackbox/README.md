@@ -46,6 +46,10 @@ it unset until the guard is implemented.
   live in `test_labs_deploy.py` behind the `deploy` marker — deselect with `-m "not deploy"` for
   the cheap contract run. Everything else (including lab lifecycle, authoring, and grants) works on
   lab *records* only and never deploys.
+- One deviation from client-only: the LAN test asserts the host bridge's existence (and its
+  removal after destroy) by reading `/sys/class/net` directly — bridge leak-checking is host
+  kernel state invisible through the API. It therefore assumes the suite runs on the stack's
+  host, which the `deploy` marker already implies.
 
 ## Slices
 
@@ -69,6 +73,6 @@ The backend implements the full v1.0 contract (sixteen deltas — delta 12 made 
 operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the
 SSH jump host the ssh slices exercise; delta 14 the link table; deltas 15/16 the cross-lab job
 listing and the stream's job events, both covered in the cheap slice), and the suite is
-**entirely green** (105/105 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+**entirely green** (106/106 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

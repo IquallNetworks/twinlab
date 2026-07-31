@@ -1,0 +1,80 @@
+# A small campus, written to exercise the parts of the topology view that
+# mpls-l3vpn.yml never reaches:
+#
+#   - multi-access LAN segments (3+ endpoints on ONE logical link), which the
+#     canvas draws as a hub pseudo-node and the link table lists as a single row
+#     with N endpoints — both link forms are used below, the dict form and the
+#     list form, to show they land the same way;
+#   - a STUB link (one endpoint): a real row in the link table with nothing to
+#     draw, so the canvas deliberately skips it;
+#   - named links, so the table reads "backbone" instead of "#1";
+#   - host devices beside routers (a different glyph on the canvas);
+#   - explicit link bandwidth and MTU;
+#   - a two-endpoint link between two hosts, which netlab types "lan" rather
+#     than "p2p" — the reason the canvas discriminates on ENDPOINT COUNT and
+#     treats netlab's `type` as a passthrough, never a rendering signal.
+#
+# Routing is deliberately minimal (OSPF on the four routers, nothing on the
+# hosts): this lab is about how a topology renders, not about convergence.
+
+provider: clab
+defaults.device: vyos
+
+nodes:
+  # Campus core and site edges — the routed part.
+  core1: { module: [ ospf ] }
+  core2: { module: [ ospf ] }
+  edge1: { module: [ ospf ] }
+  edge2: { module: [ ospf ] }
+  # Servers and workstations: no routing module, they just sit on a segment.
+  web1: { device: linux }
+  web2: { device: linux }
+  db1: { device: linux }
+  wks1: { device: linux }
+  wks2: { device: linux }
+
+links:
+  # --- Routed backbone: four p2p links in a redundant ring ----------------
+  - name: backbone
+    core1:
+    core2:
+
+  - name: uplink-a1
+    core1:
+    edge1:
+
+  - name: uplink-a2
+    core2:
+    edge1:
+
+  # Attributes ride alongside the node keys in the dict form.
+  - name: uplink-b
+    core2:
+    edge2:
+    bandwidth: 100000
+    mtu: 9000
+
+  # --- A four-endpoint LAN: edge1 plus the server segment -----------------
+  # One LOGICAL link, drawn as a hub with four spokes.
+  - name: dmz
+    edge1:
+    web1:
+    web2:
+    db1:
+
+  # --- A three-endpoint LAN in the terse list form ------------------------
+  - [ edge2, wks1, wks2 ]
+
+  # --- A stub: one endpoint, so there is nothing to connect ---------------
+  # netlab resolves this to type "loopback" on a dummy interface (edge2:dum1).
+  # The link table shows the row; the canvas draws nothing, because a line
+  # needs two ends. This is the one link form that is table-only.
+  - name: customer-drop
+    edge2:
+
+  # --- Two hosts, directly attached ---------------------------------------
+  # Two endpoints, but netlab types this "lan" (no router on it, so it gets a
+  # bridge). It still renders as a plain edge, because endpoint count decides.
+  - name: backup-path
+    web1:
+    db1:

@@ -16,8 +16,16 @@ ENV UV_COMPILE_BYTECODE=1 \
 # over SSH to the node mgmt IP (password auth: admin/admin), not the docker
 # socket, and its SSH-readiness check shells out to sshpass. Docker CLI is pinned
 # for reproducibility; only the client is needed (the daemon is the host's).
+# sudo + iproute2 + procps serve netlab's netns config path for plain-container
+# nodes (linux, and daemons): `netlab initial` deploys their config by running
+# the generated script as `sudo ip netns exec clab-<lab>-<node> sh <script>` —
+# the script runs THIS container's tools (full iproute2, procps sysctl) against
+# the node's network namespace (alpine node images only carry busybox). The
+# container runs as root, so sudo is a passthrough, but netlab hardcodes the
+# prefix. See compose.yaml for the namespace access this needs (host pid
+# namespace + /var/run/netns + SYS_ADMIN/SYS_PTRACE).
 ARG DOCKER_VERSION=27.5.1
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates openssh-client sshpass \
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates openssh-client sshpass sudo iproute2 procps \
     && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" \
        | tar -xz -C /usr/local/bin --strip-components=1 docker/docker \
     && apt-get purge -y curl \

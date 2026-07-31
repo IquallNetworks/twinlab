@@ -1,0 +1,43 @@
+[project]
+name = "hostprep"
+version = "0.1.0"
+description = "Twinlab host-preparation sidecar: lab bridges and kernel modules"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "basedpyright",
+    "pytest",
+    "pytest-asyncio",
+    # App tests drive the ASGI app through httpx (fully typed, unlike
+    # starlette's TestClient).
+    "httpx",
+]
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "hostprep"
+module-root = "src"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

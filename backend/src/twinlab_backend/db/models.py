@@ -198,6 +198,14 @@ class Lab(Base):
     # library on every configure. Built-ins live in code, not here. Never sent to
     # `netlab create`. NULL means the lab has no user templates.
     custom_config: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # The host bridges this lab's deploy created via the hostprep sidecar (the
+    # `name[0:10]_linkindex` bridges multi-access links need) — the lab's CLAIM
+    # on host state, written before the clab deploy so cleanup always knows
+    # what may exist, released when destroy confirms them gone. Also the input
+    # to the cross-lab collision check: truncated names can collide, and this
+    # record is what lets Twinlab refuse loudly where netlab would silently
+    # cross-wire. NULL = no bridges claimed.
+    host_bridges: Mapped[list[str] | None] = mapped_column(JSONB(), default=None)
     # The twinlab user who first created the lab — immutable creation audit. SET
     # NULL (not CASCADE): deleting a user must not erase the durable definition they
     # authored.

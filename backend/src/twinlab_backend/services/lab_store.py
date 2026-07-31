@@ -93,6 +93,11 @@ async def create_lab(
         lab.config_time_ok = None
         lab.custom_config = None
         lab.links = None
+        # A leaked claim (destroy-time bridge cleanup failed, then the name was
+        # removed and recreated) is dropped with the rest of the old record:
+        # the fresh lab's own deploys re-ensure idempotently and its destroy
+        # deletes the same names, so the leak self-heals on next use.
+        lab.host_bridges = None
         lab.deleted_at = None
         # A revived name starts with NO job history — the row keeps its id, so
         # without this the previous incarnation's jobs (possibly a different
@@ -234,6 +239,36 @@ async def set_links(
     lab.links = links
     await session.commit()
     return lab
+
+
+async def set_host_bridges(
+    session: AsyncSession, name: str, bridges: list[str] | None
+) -> Lab | LabStoreError:
+    """Persist a lab's host-bridge claim (the bridges its deploy created via
+    the hostprep sidecar; None = none). Written BEFORE the clab deploy and
+    released only when destroy confirms the bridges gone, so the record always
+    lists what may exist on the host. Finds soft-deleted rows too: a claim can
+    outlive removal (failed cleanup) and must stay visible to the collision
+    check until released."""
+    lab = await get_lab(session, name, include_deleted=True)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.host_bridges = bridges
+    await session.commit()
+    return lab
+
+
+async def bridge_owners(session: AsyncSession, exclude_lab: str) -> dict[str, str]:
+    """bridge name -> owning lab name, over every OTHER lab currently claiming
+    host bridges. Bridge names truncate the lab name to 10 characters, so two
+    labs can collide on them; the deploy path uses this to refuse loudly where
+    netlab itself would silently cross-wire two labs' segments. Soft-deleted
+    rows are INCLUDED: a claim that outlived removal still describes bridges
+    on the host."""
+    rows = await session.scalars(
+        select(Lab).where(Lab.host_bridges.is_not(None), Lab.name != exclude_lab)
+    )
+    return {bridge: lab.name for lab in rows.all() for bridge in (lab.host_bridges or [])}
 
 
 async def transfer_owner(

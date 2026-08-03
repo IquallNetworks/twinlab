@@ -78,6 +78,14 @@ export const testSuitesQueryOptions = (name: string) =>
     queryFn: () => api.getTestSuites(name),
   })
 
+// Definition-derived and server-cached; only a definition change moves it.
+export const labFactsQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'facts'],
+    queryFn: () => api.labFacts(name),
+    staleTime: 60_000,
+  })
+
 export const customConfigQueryOptions = (name: string) =>
   queryOptions({
     queryKey: ['labs', name, 'custom-config'],

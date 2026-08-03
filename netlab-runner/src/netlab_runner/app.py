@@ -72,6 +72,10 @@ class ExecRequest(BaseModel):
     # exec inventory is built with `netlab create`, which validates that every
     # `config:` template exists. Empty for a definition with no custom config.
     templates: dict[str, str] = Field(default_factory=dict)
+    # Delta 17: route the command through a persistent netmiko CLI channel when
+    # the node's transport is SSH (timed commands truncate on a one-shot exec
+    # channel). A no-op for docker-transport nodes.
+    interactive: bool = False
 
 
 class ExecResponse(BaseModel):
@@ -82,10 +86,17 @@ class ExecResponse(BaseModel):
 @app.post("/exec")
 async def exec_endpoint(request: ExecRequest) -> ExecResponse:
     # `netlab exec` is blocking subprocess work; keep it off the loop and serialize
-    # it (a cache-miss runs `netlab create`, which races on ~/.netlab).
+    # it (a cache-miss runs `netlab create`, which races on ~/.netlab; the
+    # interactive path rides the same lock — its inventory lookup is a
+    # subprocess too, and suite execs are sequential today anyway).
     async with _netlab_lock:
         outcome = await run_in_threadpool(
-            exec_command, request.definition, request.node, request.command, request.templates
+            exec_command,
+            request.definition,
+            request.node,
+            request.command,
+            request.templates,
+            interactive=request.interactive,
         )
     if isinstance(outcome, ExecOutcome):
         return ExecResponse(node=outcome.node, stdout=outcome.stdout)

@@ -1,0 +1,2 @@
+Template, Hostname, Platform, Command
+cisco_ios_show_mpls_ldp_neighbor.textfsm, .*, cisco_ios, sh[[ow]] mpls ldp nei[[ghbor]]

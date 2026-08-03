@@ -113,23 +113,33 @@ export const labOwnerSchema = z.object({
 })
 export type LabOwner = z.infer<typeof labOwnerSchema>
 
-// --- Test suites (see components/lab/test-suites). A suite groups tests; each
-// runs a command on nodes and matches its stdout with one safe primitive. A
-// suite's stage (config-time | runtime) controls only automatic execution. ---
+// --- Test suites (v2, contract delta 17; see components/lab/test-suites). A
+// suite groups tests; each test runs a device-keyed CASE on nodes — the case
+// renders Jinja templates against the lab's facts, executes, optionally
+// parses (json | textfsm), and asserts (raw matchers or a napalm-validate
+// compare spec). A suite's stage controls only automatic execution. ---
 
 export const testExpectationSchema = z.object({
   contains: z.string().nullable().optional(),
   not_contains: z.string().nullable().optional(),
   matches: z.string().nullable().optional(),
-  json_path: z.string().nullable().optional(),
-  equals: z.union([z.string(), z.number(), z.boolean()]).nullable().optional(),
+  compare: z.record(z.string(), z.unknown()).nullable().optional(),
 })
 export type TestExpectation = z.infer<typeof testExpectationSchema>
 
-export const validationTestSchema = z.object({
-  nodes: z.array(z.string()),
+export const testCaseSchema = z.object({
   command: z.string(),
   expect: testExpectationSchema,
+  parse: z.enum(['json', 'textfsm']).nullable().optional(),
+  interactive: z.boolean().optional(),
+})
+export type TestCase = z.infer<typeof testCaseSchema>
+
+export const validationTestSchema = z.object({
+  nodes: z.array(z.string()),
+  // One case for all nodes, or a device-keyed dict (a TestCase always carries
+  // `command`, so presence of that key discriminates the union).
+  run: z.union([testCaseSchema, z.record(z.string(), testCaseSchema)]),
   wait: z.number(),
   description: z.string(),
 })
@@ -146,12 +156,20 @@ export const testResultSchema = z.object({
   test: z.string(),
   node: z.string(),
   status: z.string(), // "pass" | "fail" | "skip" | "error"
-  command: z.string(),
+  command: z.string(), // the RENDERED command (what actually ran)
   output: z.string(),
   detail: z.string(),
+  diff: z.record(z.string(), z.unknown()).nullable().optional(),
   elapsed_ms: z.number(),
 })
 export type TestResult = z.infer<typeof testResultSchema>
+
+export const labFactsSchema = z.object({
+  // Raw netlab node dicts keyed by short node name — PROVISIONAL/unpinned
+  // until the pre-v1.0 pinning decision; the endpoint is the insulation.
+  nodes: z.record(z.string(), z.record(z.string(), z.unknown())),
+})
+export type LabFacts = z.infer<typeof labFactsSchema>
 
 export const suiteReportSchema = z.object({
   suite: z.string(),

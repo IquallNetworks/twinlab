@@ -25,6 +25,7 @@ from twinlab_client import (
     LabDetail,
     LabEvent,
     SuiteReport,
+    TestCase,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -197,17 +198,18 @@ async def test_lan_deploys_via_host_bridge_and_destroy_removes_it(
     assert (bridge / "bridge").is_dir(), f"host bridge {bridge.name} missing after deploy"
 
     # Data-plane proof: n1 reaches n3 THROUGH the bridge. The target address
-    # comes from the link table (netlab-assigned), never hardcoded.
-    target = next(e.ipv4 for e in link.endpoints if e.node == "n3")
-    assert target is not None
+    # is a delta-17 TEMPLATE rendered server-side from the lab's facts —
+    # nothing hardcoded, and the render pipeline is exercised live.
     ping = {
         "reach": TestSuite(
             tests={
                 "lan": ValidationTest(
                     nodes=["n1"],
-                    command=f"ping -c 2 -W 2 {target.split('/')[0]}",
-                    # Leading space: "50% packet loss" must not match.
-                    expect=TestExpectation(contains=" 0% packet loss"),
+                    run=TestCase(
+                        command="ping -c 2 -W 2 {{ nodes.n3.interfaces[0].ipv4 | address }}",
+                        # Leading space: "50% packet loss" must not match.
+                        expect=TestExpectation(contains=" 0% packet loss"),
+                    ),
                 )
             },
         )
@@ -219,6 +221,11 @@ async def test_lan_deploys_via_host_bridge_and_destroy_removes_it(
     report = run_done.result
     assert isinstance(report, SuiteReport)
     assert report.failed == 0 and report.passed >= 1
+    # The report's command is the RENDERED one: the fact's real address, and it
+    # agrees with the link table's endpoint for n3.
+    target = next(e.ipv4 for e in link.endpoints if e.node == "n3")
+    assert target is not None
+    assert report.results[0].command == f"ping -c 2 -W 2 {target.split('/')[0]}"
 
     destroy = await admin.destroy_lab(lab.name)
     destroy_done = await admin.wait_job(lab.name, destroy.id, timeout=JOB_WAIT)
@@ -334,8 +341,9 @@ async def test_configure_and_validation_pipeline(
             tests={
                 "ok": ValidationTest(
                     nodes=["n1", "n2"],
-                    command="echo bb-ready",
-                    expect=TestExpectation(contains="bb-ready"),
+                    run=TestCase(
+                        command="echo bb-ready", expect=TestExpectation(contains="bb-ready")
+                    ),
                 )
             },
             stage="config-time",
@@ -362,8 +370,10 @@ async def test_configure_and_validation_pipeline(
             tests={
                 "never": ValidationTest(
                     nodes=["n1"],
-                    command="echo bb-ready",
-                    expect=TestExpectation(contains="bb-will-never-match"),
+                    run=TestCase(
+                        command="echo bb-ready",
+                        expect=TestExpectation(contains="bb-will-never-match"),
+                    ),
                 )
             },
             stage="config-time",
@@ -372,8 +382,9 @@ async def test_configure_and_validation_pipeline(
             tests={
                 "ok": ValidationTest(
                     nodes=["n1"],
-                    command="echo bb-ready",
-                    expect=TestExpectation(contains="bb-ready"),
+                    run=TestCase(
+                        command="echo bb-ready", expect=TestExpectation(contains="bb-ready")
+                    ),
                 )
             },
         ),

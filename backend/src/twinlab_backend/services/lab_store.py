@@ -93,6 +93,7 @@ async def create_lab(
         lab.config_time_ok = None
         lab.custom_config = None
         lab.links = None
+        lab.node_facts = None
         # A leaked claim (destroy-time bridge cleanup failed, then the name was
         # removed and recreated) is dropped with the rest of the old record:
         # the fresh lab's own deploys re-ensure idempotently and its destroy
@@ -241,6 +242,20 @@ async def set_links(
     return lab
 
 
+async def set_node_facts(
+    session: AsyncSession, name: str, node_facts: dict[str, object]
+) -> Lab | LabStoreError:
+    """Persist a lab's derived fact namespace alone — same lifecycle as
+    `set_links`: lazy backfill for rows predating the cache and the
+    deploy-path refresh. `not_found` when the lab was never recorded here."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.node_facts = node_facts
+    await session.commit()
+    return lab
+
+
 async def set_host_bridges(
     session: AsyncSession, name: str, bridges: list[str] | None
 ) -> Lab | LabStoreError:
@@ -286,20 +301,27 @@ async def transfer_owner(
 
 
 async def update_definition(
-    session: AsyncSession, name: str, definition: str, mgmt_subnet: str, links: dict[str, object]
+    session: AsyncSession,
+    name: str,
+    definition: str,
+    mgmt_subnet: str,
+    links: dict[str, object],
+    node_facts: dict[str, object],
 ) -> Lab | LabStoreError:
     """Replace a lab's stored definition without touching its runtime. The caller
     validates the definition (and pins the lab's name and mgmt subnet into it)
-    first; here we only persist. `links` is the definition's derived link table
-    (serialized {"links": [...]}), a byproduct of the validating `netlab create`
-    — stored together so the cache can never describe a different definition.
-    `not_found` when the lab was never recorded here."""
+    first; here we only persist. `links` and `node_facts` are the definition's
+    derived link table (serialized {"links": [...]}) and fact namespace, both
+    byproducts of the validating `netlab create` — stored together so the caches
+    can never describe a different definition. `not_found` when the lab was
+    never recorded here."""
     lab = await get_lab(session, name)
     if lab is None:
         return LabStoreError("not_found", name)
     lab.definition = definition
     lab.mgmt_subnet = mgmt_subnet
     lab.links = links
+    lab.node_facts = node_facts
     try:
         await session.commit()
     except IntegrityError:

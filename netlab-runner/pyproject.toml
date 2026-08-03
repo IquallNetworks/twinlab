@@ -17,6 +17,7 @@ dependencies = [
     # paramiko.
     "paramiko",
     "pyyaml",
+    "netmiko>=4.7.0",
 ]
 
 [dependency-groups]

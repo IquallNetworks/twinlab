@@ -22,6 +22,7 @@ from twinlab_client.models import (
     LAB_STATUSES,
     LINK_OPER_STATES,
     NODE_CONFIG_STATUSES,
+    PARSE_MODES,
     PRINCIPAL_TYPES,
     READINESS_STATUSES,
     ROLE_SCOPES,
@@ -45,6 +46,7 @@ from twinlab_client.models import (
     LabActionResponse,
     LabDetail,
     LabEvent,
+    LabFacts,
     LabLink,
     LabLinks,
     LabNodeState,
@@ -67,6 +69,7 @@ from twinlab_client.models import (
     SshKey,
     SshKeyGenerated,
     SuiteReport,
+    TestCase,
     TestExpectation,
     TestResult,
     TestSuite,
@@ -623,31 +626,52 @@ def parse_job_event(value: object) -> JobEvent:
 # Test suites
 # --------------------------------------------------------------------------- #
 
-_EQUALS_TYPES = (str, int, float, bool)
-
 
 def parse_test_expectation(value: object) -> TestExpectation:
     where = "TestExpectation"
     obj = as_object(value, where)
-    equals = obj.get("equals")
-    if equals is not None and not isinstance(equals, _EQUALS_TYPES):
-        raise TwinlabProtocolError(where, f"'equals': unexpected type {type(equals).__name__}")
+    compare = obj.get("compare")
+    if compare is not None:
+        compare = dict(as_object(compare, f"{where}.compare"))
     return TestExpectation(
         contains=_get_opt_str(obj, "contains", where),
         not_contains=_get_opt_str(obj, "not_contains", where),
         matches=_get_opt_str(obj, "matches", where),
-        json_path=_get_opt_str(obj, "json_path", where),
-        equals=equals,
+        compare=compare,
+    )
+
+
+def parse_test_case(value: object) -> TestCase:
+    where = "TestCase"
+    obj = as_object(value, where)
+    parse_mode = obj.get("parse")
+    if parse_mode is not None and parse_mode not in PARSE_MODES:
+        raise TwinlabProtocolError(where, f"'parse': unexpected value {parse_mode!r}")
+    interactive = obj.get("interactive", False)
+    if not isinstance(interactive, bool):
+        raise TwinlabProtocolError(where, "'interactive': expected a bool")
+    return TestCase(
+        command=_get_str(obj, "command", where),
+        expect=parse_test_expectation(_req(obj, "expect", where)),
+        parse=parse_mode,
+        interactive=interactive,
     )
 
 
 def parse_validation_test(value: object) -> ValidationTest:
     where = "ValidationTest"
     obj = as_object(value, where)
+    run_value = _req(obj, "run", where)
+    run_obj = as_object(run_value, f"{where}.run")
+    # A TestCase carries "command"; a device-keyed dict maps device -> case.
+    run: TestCase | dict[str, TestCase] = (
+        parse_test_case(run_value)
+        if "command" in run_obj
+        else {device: parse_test_case(case) for device, case in run_obj.items()}
+    )
     return ValidationTest(
         nodes=_get_str_list(obj, "nodes", where),
-        command=_get_str(obj, "command", where),
-        expect=parse_test_expectation(_req(obj, "expect", where)),
+        run=run,
         wait=_get_int(obj, "wait", where),
         description=_get_str(obj, "description", where),
     )
@@ -670,6 +694,9 @@ def parse_test_suite(value: object) -> TestSuite:
 def parse_test_result(value: object) -> TestResult:
     where = "TestResult"
     obj = as_object(value, where)
+    diff = obj.get("diff")
+    if diff is not None:
+        diff = dict(as_object(diff, f"{where}.diff"))
     return TestResult(
         test=_get_str(obj, "test", where),
         node=_get_str(obj, "node", where),
@@ -677,6 +704,7 @@ def parse_test_result(value: object) -> TestResult:
         command=_get_str(obj, "command", where),
         output=_get_str(obj, "output", where),
         detail=_get_str(obj, "detail", where),
+        diff=diff,
         elapsed_ms=_get_int(obj, "elapsed_ms", where),
     )
 
@@ -712,6 +740,15 @@ def parse_test_suites_response(value: object) -> TestSuitesResponse:
         last_validation=last_validation,
         config_time_status=_get_literal(obj, "config_time_status", where, CONFIG_TIME_STATUSES),
     )
+
+
+def parse_lab_facts(value: object) -> LabFacts:
+    where = "LabFacts"
+    obj = as_object(value, where)
+    nodes: dict[str, dict[str, object]] = {}
+    for name, node_value in as_object(_req(obj, "nodes", where), where).items():
+        nodes[name] = dict(as_object(node_value, f"{where}.nodes[{name}]"))
+    return LabFacts(nodes=nodes)
 
 
 # --------------------------------------------------------------------------- #
@@ -800,18 +837,31 @@ def expectation_to_wire(expectation: TestExpectation) -> dict[str, object]:
         wire["not_contains"] = expectation.not_contains
     if expectation.matches is not None:
         wire["matches"] = expectation.matches
-    if expectation.json_path is not None:
-        wire["json_path"] = expectation.json_path
-    if expectation.equals is not None:
-        wire["equals"] = expectation.equals
+    if expectation.compare is not None:
+        wire["compare"] = expectation.compare
+    return wire
+
+
+def test_case_to_wire(case: TestCase) -> dict[str, object]:
+    wire: dict[str, object] = {
+        "command": case.command,
+        "expect": expectation_to_wire(case.expect),
+        "interactive": case.interactive,
+    }
+    if case.parse is not None:
+        wire["parse"] = case.parse
     return wire
 
 
 def validation_test_to_wire(test: ValidationTest) -> dict[str, object]:
+    run: dict[str, object] = (
+        test_case_to_wire(test.run)
+        if isinstance(test.run, TestCase)
+        else {device: test_case_to_wire(case) for device, case in test.run.items()}
+    )
     return {
         "nodes": list(test.nodes),
-        "command": test.command,
-        "expect": expectation_to_wire(test.expect),
+        "run": run,
         "wait": test.wait,
         "description": test.description,
     }

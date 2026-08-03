@@ -503,26 +503,48 @@ class LabEvent:
 # --------------------------------------------------------------------------- #
 
 
+PARSE_MODES = ("json", "textfsm")
+ParseMode = Literal["json", "textfsm"]
+
+
 @dataclass(frozen=True, slots=True)
 class TestExpectation:
-    """Exactly ONE of contains/not_contains/matches/json_path (server-checked);
-    `equals` required with — and only with — json_path. No expression eval."""
+    """Exactly ONE of contains/not_contains/matches/compare (server-checked).
+    Raw matchers work on unparsed stdout; `compare` asserts over PARSED data
+    with napalm-validate's grammar (nested partial match, `_mode: strict`,
+    numeric operators, list semantics) and requires the case to declare
+    `parse` — and vice versa. Still no expression eval anywhere."""
 
     contains: str | None = None
     not_contains: str | None = None
     matches: str | None = None  # regex, re.search on stdout
-    json_path: str | None = None  # dotted path into JSON-parsed stdout
-    equals: str | int | float | bool | None = None
+    compare: dict[str, object] | None = None  # napalm-validate spec over parsed data
+
+
+@dataclass(frozen=True, slots=True)
+class TestCase:
+    """What actually runs on a node: one command and how to judge its output.
+    `command` — and every string inside `expect` — may carry Jinja2 templates
+    rendered per node against the lab's fact namespace (see `facts()`).
+    `interactive` routes the exec through a persistent CLI channel where the
+    node's transport is SSH (IOS truncates timed commands on a one-shot exec
+    channel); a deliberate no-op over docker exec."""
+
+    command: str
+    expect: TestExpectation
+    parse: ParseMode | None = None
+    interactive: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class ValidationTest:
-    """Run `command` on each node; check stdout. `wait` (0-600 s) polls until
-    the expectation holds — the convergence knob."""
+    """Run a case on each node; poll until it passes. `run` is ONE case for
+    every node or a DEVICE-KEYED dict (netlab device names: "vyos", "iol",
+    "linux", …) — a node whose device has no case reports "skip". `wait`
+    (0-600 s) polls until the expectation holds — the convergence knob."""
 
     nodes: list[str]
-    command: str
-    expect: TestExpectation
+    run: TestCase | dict[str, TestCase]
     wait: int = 0
     description: str = ""
 
@@ -541,7 +563,10 @@ class TestSuite:
 @dataclass(frozen=True, slots=True)
 class TestResult:
     """One (test, node) outcome. "fail" = expectation never held (after
-    `wait`); "error" = command couldn't run; "skip" reserved, unused."""
+    `wait`); "error" = command couldn't run, render, or parse; "skip" = the
+    node's device has no case in a device-keyed test. `command` is the
+    RENDERED command; `diff` is napalm-validate's structured report, only
+    when a `compare` decided the outcome."""
 
     test: str
     node: str
@@ -549,6 +574,7 @@ class TestResult:
     command: str
     output: str
     detail: str
+    diff: dict[str, object] | None
     elapsed_ms: int
 
 
@@ -572,6 +598,16 @@ class TestSuitesResponse:
     test_suites: dict[str, TestSuite]
     last_validation: dict[str, SuiteReport]
     config_time_status: ConfigTimeStatus
+
+
+@dataclass(frozen=True, slots=True)
+class LabFacts:
+    """The per-node fact namespace test-suite templates render against, keyed
+    by SHORT node name. PROVISIONAL: values are netlab's raw node dicts,
+    deliberately unpinned until a stable subset is chosen (pre-v1.0) — this
+    endpoint is the discoverability and insulation layer for that decision."""
+
+    nodes: dict[str, dict[str, object]]
 
 
 # --------------------------------------------------------------------------- #

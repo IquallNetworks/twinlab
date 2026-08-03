@@ -68,6 +68,23 @@ def test_create_links_join_uses_clab_interface_name() -> None:
     }
 
 
+def test_create_extracts_node_facts() -> None:
+    # The fact namespace (delta 17): raw netlab node dicts, keyed by short
+    # name. Only the outer shape and a few load-bearing keys are asserted —
+    # the values are deliberately netlab's (provisional/unpinned).
+    result = create_clab_topology(_VALID_DEFINITION)
+    assert isinstance(result, Ok), result
+    facts = result.value.node_facts
+    assert set(facts) == {"r1", "r2"}
+    r1 = facts["r1"]
+    assert r1["device"] == "vyos"
+    # The keys suites will actually render: loopback address, interface IPs.
+    loopback = r1["loopback"]
+    assert isinstance(loopback, dict) and isinstance(loopback["ipv4"], str)
+    interfaces = r1["interfaces"]
+    assert isinstance(interfaces, list) and len(cast("list[object]", interfaces)) == 1
+
+
 def test_create_reports_error_on_invalid_definition() -> None:
     result = create_clab_topology("nodes: [r1]\nlinks: [r1-nonexistent]\n")
     assert isinstance(result, Err)

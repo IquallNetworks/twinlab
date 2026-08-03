@@ -518,6 +518,90 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     blackbox, deploy-marked split, etc.), and gating are designed when picked
     up.
 
+### Test-suites v2 — render → execute → parse → assert (contract delta 17) · **done**
+
+15. **The test-suites rework, designed greenfield after a tooling survey and
+    SHIPPED 2026-08-03.** Contract delta 17 in `docs/twinlab_client_shape.py`,
+    reviewed item-by-item and approved 2026-08-03; implemented the same day
+    across backend (facts + pipeline + migration 0015), runner (netmiko
+    interactive exec), client (v2 shapes + `facts()`), blackbox (110/110
+    green incl. a live fact-templated deploy test) and the frontend panel
+    (CodeEditor authoring, Facts viewer, rendered command + compare diff).
+    **Live verification on the IOL MPLS lab:** the unified device-keyed
+    example suite passed 25/25 (TextFSM OSPF + the Twinlab LDP template +
+    rendered VRF-loopback FIB checks) and the interactive runtime suite
+    proved both cross-VPN pings at 100% through the netmiko channel —
+    side-by-side with the one-shot exec path truncating after the first
+    packet. Also fixed en route: Ansible's libssh plugin resurrects
+    known_hosts via rename-over-symlink, breaking every post-redeploy config
+    push with "host key mismatch" — the runner now re-points the symlink
+    before each configure.
+
+    **Survey result — no framework adoptable as the engine** (verified against
+    repos/licenses 2026-08-03): netlab `validate` (plugins only for
+    eos/frr/cumulus/linux/crpd — nothing for vyos/iol; `valid:` is raw Python
+    eval of user strings; text-only output, CLI-only harness), NAPALM full
+    stack (napalm-vyos last tested on VyOS 1.1.7), nuts (stale 2024,
+    pytest-shaped), SuzieQ (poller app, no VyOS; license fine — plain
+    Apache-2.0), Batfish (offline snapshots, no live state), Robot Framework
+    (keyword DSL = user code), pyATS/genieparser (parsers require the
+    binary-only `genie.metaparser` wheel — fails the open-source bar in
+    spirit), ANTA (Arista-only, but its declarative catalog → typed inputs →
+    async runner → structured results architecture is the design reference).
+    Cross-cutting: nothing supports docker exec (our only channel to
+    sshd-less linux nodes), and VyOS is the coverage gap in every ecosystem.
+
+    **Live-verified foundations (2026-08-03):** VyOS needs no parsing layer —
+    FRR's `vtysh -c "show ... json"` over plain docker exec returned full
+    structured JSON for OSPF neighbor (`converged: Full`), LDP neighbor
+    (`state: OPERATIONAL`) and BGP VPNv4 (`show bgp ipv4 vpn summary json`,
+    NOT `vpnv4 unicast` — that spelling is unknown to FRR). IOL show output
+    parses cleanly through ntc-templates 9.2.0 (`parse_output("cisco_ios",
+    "show ip ospf neighbor", stdout)` → typed records; 143 cisco_ios
+    templates incl. BGP-VPNv4/cef/mpls-interfaces/vrf; NO template for
+    `show mpls ldp neighbor` — we ship our own; vyos has only 3 Vyatta-era
+    templates, irrelevant given vtysh JSON).
+
+    **Composition chosen instead** (user-decided 2026-08-03): keep the
+    runner's `netlab exec` transport, job model, RBAC and stage semantics;
+    each test becomes a pipeline — Jinja2-render command/expectations
+    against pinned per-node facts from the expanded topology (kills
+    hardcoded IPs; sandboxed + StrictUndefined), execute per NOS,
+    optionally parse (`json` | `textfsm` via ntc-templates + Twinlab
+    overlay templates), assert with napalm-validate's `compare` grammar
+    over parsed data (raw contains/not_contains/matches stay for unparsed
+    output — regex fallback is a user decision, always available).
+    Device-keyed `TestCase`s let one suite serve VyOS + IOL (missing device
+    → `skip`, the reserved status finally used). `interactive: true` routes
+    a case through netmiko's persistent channel where transport is SSH
+    (in scope NOW — fixes IOS truncating `ping ... repeat` on one-shot
+    exec; no-op over docker exec). Comparator: IMPORT napalm and use
+    `napalm.base.validate.compare` (own reimplementation only if the dep
+    proves painful — user's call 2026-08-03). Parse failure/missing
+    template = `error` result, never a silent raw fallback (netmiko's
+    use_textfsm footgun, excluded by design).
+
+    **Architecture (not in the contract):** rendering + parsing + compare in
+    the BACKEND (it already runs `netlab create`; node facts persist as a
+    regenerable JSONB beside the link table); netmiko in the RUNNER (the
+    inventory owns SSH creds — no Twinlab-owned cred handling). New deps
+    when approved for implementation: backend `napalm`, `ntc-templates`,
+    explicit `jinja2`; runner `netmiko`.
+
+    **Review resolutions (all user-decided 2026-08-03):** (a) the fact
+    namespace starts as netlab's RAW node dict — provisional, deliberately
+    unpinned; **pinning a stable subset is a pre-v1.0 decision** — and a
+    `GET /labs/{name}/facts` endpoint ships now (authoring discoverability
+    AND the insulation layer for that future pinning); (b) `compare` ⟺
+    `parse` stays strict; (c) NO v1→v2 data migration (dev-phase, no
+    real-world stored suites; repo example suites rewritten to v2); (d)
+    CASE-level device keying confirmed over field-level (one atomic recipe
+    per device, no key-consistency rules; a `default`-case merge is a
+    possible additive extension if duplication ever bites); (e)
+    `interactive` is a deliberate no-op over docker exec. Implementation
+    train: backend → client → blackbox → the frozen frontend panel
+    rebuild.
+
 ### Deferred items from the API review (2026-07-23) · **deferred**
 
 Surfaced while freezing the API shape for the Python client / black-box suite /

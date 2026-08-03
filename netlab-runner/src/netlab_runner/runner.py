@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from netmiko import ConnectHandler
+from netmiko.exceptions import NetmikoBaseException
 
 _CLAB_OUTPUT = "clab.yml"
 # Custom-config template paths the backend ships alongside a definition. netlab
@@ -185,11 +187,35 @@ def _write_templates(wd: Path, templates: dict[str, str]) -> RunnerError | None:
     return None
 
 
+def _reset_known_hosts() -> None:
+    """Re-point ~/.ssh/known_hosts at /dev/null before every config push.
+
+    The Dockerfile establishes the symlink at build time, but Ansible's libssh
+    connection plugin records accepted host keys via write-temp-then-RENAME —
+    which silently replaces the symlink with a real file. Lab nodes get a new
+    host key on every (re)deploy, and libssh hard-fails a MISMATCH ("host key
+    mismatch for <ip>") even with host-key checking off, so a resurrected file
+    breaks the next configure after any redeploy (found live 2026-08-03). A
+    per-run reset makes the build-time fix self-healing. Best-effort: if the
+    filesystem refuses, the push proceeds and fails with the explicit mismatch
+    error instead."""
+    known_hosts = Path.home() / ".ssh" / "known_hosts"
+    try:
+        known_hosts.parent.mkdir(parents=True, exist_ok=True)
+        if known_hosts.is_symlink():
+            return
+        known_hosts.unlink(missing_ok=True)
+        known_hosts.symlink_to("/dev/null")
+    except OSError:
+        return
+
+
 def configure(definition: str, templates: dict[str, str]) -> ConfigureOutcome | RunnerError:
     """Render the lab and push its config. `definition` must carry a stable
     `name:` so the regenerated inventory targets the deployed containers.
     `templates` is the custom-config fileset (built-in + user) — written into the
     workdir before create so `netlab initial` deploys the referenced ones."""
+    _reset_known_hosts()
     with tempfile.TemporaryDirectory() as workdir:
         wd = Path(workdir)
         _ = (wd / "topology.yml").write_text(definition)
@@ -303,21 +329,91 @@ def wait_ready(definition: str, templates: dict[str, str]) -> ReadyOutcome | Run
     return ReadyOutcome(ready=True)
 
 
+# The Ansible connections that mean "this node is reached over SSH" — where a
+# one-shot exec channel truncates timed commands and the interactive path
+# applies. Everything else (docker, …) already streams complete output.
+_SSH_CONNECTIONS = frozenset({"network_cli", "paramiko", "ssh"})
+# ansible_network_os -> netmiko device_type, for the supported NOS set.
+_NETMIKO_DEVICE_TYPES = {"ios": "cisco_ios", "vyos": "vyos"}
+
+
+def _host_vars(workdir: Path, node: str) -> dict[str, object] | RunnerError:
+    """The node's fully-resolved inventory vars (`ansible-inventory --host`) —
+    connection kind, mgmt address, credentials — from the same inventory
+    `netlab exec` uses, so both paths always agree on how to reach a node."""
+    result = _run(["ansible-inventory", "--host", node], workdir, 30)
+    if isinstance(result, str):
+        return RunnerError("internal", result)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "ansible-inventory failed").strip()
+        return RunnerError("netlab-exec", f"unknown node {node!r}: {message}")
+    try:
+        parsed: Any = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        return RunnerError("internal", f"unreadable inventory for {node!r}: {exc}")
+    if not isinstance(parsed, dict):
+        return RunnerError("internal", f"unexpected inventory shape for {node!r}")
+    return cast("dict[str, object]", parsed)
+
+
+def _interactive_exec(
+    host: dict[str, object], node: str, command: str
+) -> ExecOutcome | RunnerError:
+    """Run the command over a persistent netmiko CLI channel. IOS closes a
+    one-shot SSH exec channel on timed commands (`ping … repeat`, traceroute),
+    truncating output after the first packet; netmiko drives a real channel and
+    reads until the prompt returns (delta 17's `interactive: true`)."""
+    network_os = host.get("ansible_network_os")
+    device_type = _NETMIKO_DEVICE_TYPES.get(str(network_os))
+    if device_type is None:
+        return RunnerError(
+            "interactive", f"no interactive CLI driver for network_os {network_os!r}"
+        )
+    try:
+        with ConnectHandler(
+            device_type=device_type,
+            host=str(host.get("ansible_host", "")),
+            username=str(host.get("ansible_user", "")),
+            password=str(host.get("ansible_ssh_pass", "")),
+        ) as connection:
+            # Leave netmiko ~5s to notice a hung command before the HTTP layer's
+            # own exec timeout would kill the whole request.
+            output = connection.send_command(command, read_timeout=float(_EXEC_TIMEOUT_SECONDS - 5))
+    except (NetmikoBaseException, OSError, ValueError) as exc:
+        return RunnerError("interactive", f"interactive exec failed on {node}: {exc}")
+    return ExecOutcome(node=node, stdout=output if isinstance(output, str) else str(output))
+
+
 def exec_command(
-    definition: str, node: str, command: str, templates: dict[str, str]
+    definition: str,
+    node: str,
+    command: str,
+    templates: dict[str, str],
+    *,
+    interactive: bool = False,
 ) -> ExecOutcome | RunnerError:
     """Run one operational `command` on `node` via `netlab exec`, which picks the
     per-NOS transport (docker exec for VyOS/FRR, ssh for Cisco/Nokia/…) from the
     netlab inventory — so this stays NOS-agnostic. `definition` must carry the
     stable `name:`; `templates` is the custom-config fileset the definition may
-    reference (needed for the inventory's `netlab create`). Returns the command's
-    stdout (connection chatter stripped)."""
+    reference (needed for the inventory's `netlab create`). `interactive` routes
+    the command through a persistent netmiko channel when the node's transport
+    is SSH — and is a deliberate no-op otherwise (docker exec streams complete
+    output already). Returns the command's stdout (connection chatter
+    stripped)."""
     name = _definition_name(definition)
     if name is None:
         return RunnerError("internal", "definition has no name")
     workdir = _ensure_inventory(definition, name, templates)
     if isinstance(workdir, RunnerError):
         return workdir
+    if interactive:
+        host = _host_vars(workdir, node)
+        if isinstance(host, RunnerError):
+            return host
+        if str(host.get("ansible_connection")) in _SSH_CONNECTIONS:
+            return _interactive_exec(host, node, command)
+        # Docker-transport node: fall through to the plain exec path.
     argv = ["netlab", "exec", node, *shlex.split(command)]
     result = _run(argv, workdir, _EXEC_TIMEOUT_SECONDS)
     if isinstance(result, str):

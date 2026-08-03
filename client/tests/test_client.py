@@ -20,6 +20,7 @@ from twinlab_client import (
     SshAccess,
     SshKey,
     SshKeyGenerated,
+    TestCase,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -392,9 +393,19 @@ async def test_put_test_suites_omits_none_expectation_fields(
         "smoke": TestSuite(
             tests={
                 "ospf": ValidationTest(
-                    nodes=["r1"],
-                    command="show ip ospf neighbor",
-                    expect=TestExpectation(contains="Full"),
+                    nodes=["r1", "r2"],
+                    run={
+                        "vyos": TestCase(
+                            command="vtysh -c 'show ip ospf neighbor json'",
+                            expect=TestExpectation(compare={"neighbors": {"_mode": "strict"}}),
+                            parse="json",
+                        ),
+                        "iol": TestCase(
+                            command="ping {{ nodes.r1.loopback.ipv4 | address }} repeat 5",
+                            expect=TestExpectation(matches="Success rate is 100 percent"),
+                            interactive=True,
+                        ),
+                    },
                     wait=60,
                 )
             },
@@ -410,9 +421,20 @@ async def test_put_test_suites_omits_none_expectation_fields(
             "smoke": {
                 "tests": {
                     "ospf": {
-                        "nodes": ["r1"],
-                        "command": "show ip ospf neighbor",
-                        "expect": {"contains": "Full"},
+                        "nodes": ["r1", "r2"],
+                        "run": {
+                            "vyos": {
+                                "command": "vtysh -c 'show ip ospf neighbor json'",
+                                "expect": {"compare": {"neighbors": {"_mode": "strict"}}},
+                                "parse": "json",
+                                "interactive": False,
+                            },
+                            "iol": {
+                                "command": "ping {{ nodes.r1.loopback.ipv4 | address }} repeat 5",
+                                "expect": {"matches": "Success rate is 100 percent"},
+                                "interactive": True,
+                            },
+                        },
                         "wait": 60,
                         "description": "",
                     }
@@ -424,6 +446,111 @@ async def test_put_test_suites_omits_none_expectation_fields(
     }
     assert response.test_suites == suites
     assert response.config_time_status == "not_run"
+
+
+async def test_put_test_suites_shared_case_roundtrip(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "test_suites": _json_body(request)["test_suites"],
+                "last_validation": {},
+                "config_time_status": "not_run",
+            },
+        )
+
+    suites = {
+        "ping": TestSuite(
+            tests={
+                "lo": ValidationTest(
+                    nodes=["h1"],
+                    run=TestCase(
+                        command="ping -c 3 {{ nodes.h2.loopback.ipv4 | address }}",
+                        expect=TestExpectation(matches=" 0% packet loss"),
+                    ),
+                )
+            }
+        )
+    }
+    async with make_client(handler) as client:
+        response = await client.put_test_suites("lab1", suites)
+    # The shared-case form (one TestCase for every node) round-trips as itself,
+    # not as a device-keyed dict.
+    assert response.test_suites == suites
+
+
+async def test_facts_returns_raw_node_namespace(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/facts"
+        return httpx.Response(
+            200,
+            json={"nodes": {"r1": {"device": "vyos", "loopback": {"ipv4": "10.0.0.1/32"}}}},
+        )
+
+    async with make_client(handler) as client:
+        facts = await client.facts("lab1")
+    assert facts.nodes["r1"]["device"] == "vyos"
+
+
+async def test_facts_no_definition_is_api_error(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409, json={"code": "no_definition", "message": "no definition", "extras": {}}
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabApiError) as excinfo:
+            _ = await client.facts("lab1")
+    assert excinfo.value.code == "no_definition"
+
+
+async def test_suite_report_with_diff_and_skip_parses(make_client: ClientFactory) -> None:
+    report: dict[str, object] = {
+        "suite": "conv",
+        "stage": "runtime",
+        "passed": 1,
+        "failed": 0,
+        "skipped": 1,
+        "errored": 0,
+        "ran_at": "2026-08-03T12:00:00+00:00",
+        "results": [
+            {
+                "test": "bgp",
+                "node": "r1",
+                "status": "pass",
+                "command": "show bgp ipv4 vpn summary json",
+                "output": "{}",
+                "detail": "compare spec held",
+                "diff": {"complies": True, "present": {}, "missing": [], "extra": []},
+                "elapsed_ms": 12,
+            },
+            {
+                "test": "bgp",
+                "node": "h1",
+                "status": "skip",
+                "command": "",
+                "output": "",
+                "detail": "no case for device 'linux'",
+                "elapsed_ms": 0,
+            },
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "test_suites": {},
+                "last_validation": {"conv": report},
+                "config_time_status": "passed",
+            },
+        )
+
+    async with make_client(handler) as client:
+        response = await client.get_test_suites("lab1")
+    results = response.last_validation["conv"].results
+    assert results[0].diff is not None and results[0].diff["complies"] is True
+    assert results[1].status == "skip" and results[1].diff is None
 
 
 async def test_set_netem_replace_semantics_body(make_client: ClientFactory) -> None:

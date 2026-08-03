@@ -151,13 +151,22 @@ class RunnerClient:
         return Ok(ReadyReport(ready=parsed.ready))
 
     async def exec_command(
-        self, definition: str, node: str, command: str, templates: dict[str, str]
+        self,
+        definition: str,
+        node: str,
+        command: str,
+        templates: dict[str, str],
+        *,
+        interactive: bool = False,
     ) -> Result[str, RunnerError]:
         """Run one operational command on a node via the runner's `netlab exec`
         (per-NOS transport). `definition` carries the stable `name:` so the runner
         can (re)build the matching inventory; `templates` is the custom-config
         fileset it references (the inventory's `netlab create` validates them).
-        Returns the command's stdout."""
+        `interactive` asks for a persistent CLI channel where the node's
+        transport is SSH (delta 17 — timed commands truncate on a one-shot exec
+        channel); a no-op for docker-transport nodes. Returns the command's
+        stdout."""
         try:
             resp = await self.client.post(
                 f"{self.base_url}/exec",
@@ -166,6 +175,7 @@ class RunnerClient:
                     "node": node,
                     "command": command,
                     "templates": templates,
+                    "interactive": interactive,
                 },
                 timeout=_EXEC_TIMEOUT_SECONDS,
             )

@@ -37,6 +37,7 @@ from twinlab_client.models import (
     LabActionResponse,
     LabDetail,
     LabEvent,
+    LabFacts,
     LabLinks,
     LabOwner,
     LabPowerAction,
@@ -538,9 +539,19 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         payload = await self._send_json("GET", f"/labs/{name}/test-suites")
         return _wire.parse_test_suites_response(payload)
 
+    async def facts(self, name: str) -> LabFacts:
+        """GET /labs/{name}/facts — lab:read. The per-node fact namespace suite
+        templates render against (PROVISIONAL raw netlab node data until pinned,
+        pre-v1.0). 409 ``no_definition`` on a bare created record — no
+        definition, no facts."""
+        payload = await self._send_json("GET", f"/labs/{name}/facts")
+        return _wire.parse_lab_facts(payload)
+
     async def put_test_suites(self, name: str, suites: dict[str, TestSuite]) -> TestSuitesResponse:
         """PUT /labs/{name}/test-suites — lab:edit. Full replace; takes effect
-        on the next run."""
+        on the next run. 422 ``template_invalid`` when a Jinja template fails
+        to parse — or, when the lab has a definition (facts exist), to
+        dry-render (``extras['problems']`` names each suite/test/field)."""
         payload = await self._send_json(
             "PUT",
             f"/labs/{name}/test-suites",

@@ -6,6 +6,7 @@ configure, which never happens here.
 
 import pytest
 from twinlab_client import (
+    TestCase,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -20,11 +21,28 @@ _SUITES = {
         tests={
             "lo_up": ValidationTest(
                 nodes=["n1", "n2"],
-                command="ip -o link show lo",
-                expect=TestExpectation(contains="UP"),
+                run=TestCase(
+                    command="ip -o link show lo",
+                    expect=TestExpectation(contains="UP"),
+                ),
                 wait=10,
                 description="loopback is up",
-            )
+            ),
+            "keyed": ValidationTest(
+                nodes=["n1"],
+                run={
+                    "linux": TestCase(
+                        command="echo {{ node.name }}",
+                        expect=TestExpectation(contains="n1"),
+                    ),
+                    "iol": TestCase(
+                        command="show version",
+                        expect=TestExpectation(compare={"list": [{"version": ".+"}]}),
+                        parse="textfsm",
+                        interactive=True,
+                    ),
+                },
+            ),
         },
         stage="config-time",
         description="black-box smoke suite",
@@ -65,8 +83,9 @@ async def test_expectation_requires_exactly_one_matcher(
             tests={
                 "t": ValidationTest(
                     nodes=["n1"],
-                    command="true",
-                    expect=TestExpectation(contains="a", matches="b"),
+                    run=TestCase(
+                        command="true", expect=TestExpectation(contains="a", matches="b")
+                    ),
                 )
             }
         )
@@ -74,6 +93,89 @@ async def test_expectation_requires_exactly_one_matcher(
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await admin.put_test_suites(lab.name, two_matchers)
     assert excinfo.value.status_code == 422
+
+
+async def test_compare_without_parse_is_422(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    # compare asserts over PARSED data — a case declaring one without the
+    # other is a schema error (delta 17, server-checked both ways).
+    lab = await make_lab(None)
+    unpaired = {
+        "bad": TestSuite(
+            tests={
+                "t": ValidationTest(
+                    nodes=["n1"],
+                    run=TestCase(command="true", expect=TestExpectation(compare={"a": "b"})),
+                )
+            }
+        )
+    }
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.put_test_suites(lab.name, unpaired)
+    assert excinfo.value.status_code == 422
+
+
+async def test_template_invalid_is_422_with_problems(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    lab = await make_lab(None)
+    # Bad SYNTAX is rejected even on a bare record (no facts needed) …
+    bad_syntax = {
+        "bad": TestSuite(
+            tests={
+                "t": ValidationTest(
+                    nodes=["n1"],
+                    run=TestCase(command="{{ oops", expect=TestExpectation(contains="x")),
+                )
+            }
+        )
+    }
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.put_test_suites(lab.name, bad_syntax)
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "template_invalid"
+    assert excinfo.value.extras.get("problems")
+
+    # … and once the lab has a definition (facts exist), an undefined
+    # reference fails the dry render too.
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    bad_ref = {
+        "bad": TestSuite(
+            tests={
+                "t": ValidationTest(
+                    nodes=["n1"],
+                    run=TestCase(
+                        command="ping {{ nodes.ghost.loopback.ipv4 }}",
+                        expect=TestExpectation(contains="x"),
+                    ),
+                )
+            }
+        )
+    }
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.put_test_suites(lab.name, bad_ref)
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "template_invalid"
+
+
+async def test_facts_before_definition_is_409(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    lab = await make_lab(None)
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.facts(lab.name)
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.code == "no_definition"
+
+
+async def test_facts_namespace_from_authored_record(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    facts = await admin.facts(lab.name)
+    # The namespace is netlab's raw node data (provisional/unpinned): only its
+    # outer shape and load-bearing keys are asserted.
+    assert set(facts.nodes) == {"n1", "n2"}
+    assert facts.nodes["n1"]["device"] == "linux"
+    assert isinstance(facts.nodes["n1"].get("interfaces"), list)
 
 
 async def test_run_unknown_suite_is_404(admin: TwinlabClient, make_lab: LabFactory) -> None:

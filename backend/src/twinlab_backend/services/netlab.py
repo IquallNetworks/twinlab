@@ -290,11 +290,15 @@ def _kernel_modules(expanded: _ExpandedTopology) -> tuple[KernelModule, ...]:
 class ClabArtifacts:
     """What Twinlab keeps from one `netlab create` run: the containerlab
     topology (deployed inline through clab-api), the logical link table
-    (persisted on the lab record), and the host preparation the deploy needs
-    (bridges created / kernel modules loaded via the hostprep sidecar)."""
+    (persisted on the lab record), the per-node fact namespace test-suite
+    templates render against (contract delta 17 — netlab's RAW node dicts,
+    deliberately unpinned until a pre-v1.0 pinning decision), and the host
+    preparation the deploy needs (bridges created / kernel modules loaded
+    via the hostprep sidecar)."""
 
     topology: ClabTopology
     links: list[TopologyLink]
+    node_facts: dict[str, dict[str, object]]
     host_bridges: tuple[str, ...]
     kernel_modules: tuple[KernelModule, ...]
 
@@ -302,6 +306,23 @@ class ClabArtifacts:
 def serialize_links(links: list[TopologyLink]) -> dict[str, object]:
     """The JSONB payload stored on the lab record's `links` column."""
     return {"links": [link.model_dump() for link in links]}
+
+
+def _extract_node_facts(raw_expanded: object) -> Result[dict[str, dict[str, object]], NetlabError]:
+    """The expanded topology's `nodes` as RAW dicts — the template fact
+    namespace. Shape-checked only one level deep (a node's data must be a
+    mapping); everything below is netlab's to define."""
+    if not isinstance(raw_expanded, dict):
+        return Err(NetlabError(f"{_EXPANDED_OUTPUT} was not a mapping", ""))
+    nodes = cast("dict[str, object]", raw_expanded).get("nodes", {})
+    if not isinstance(nodes, dict):
+        return Err(NetlabError(f"{_EXPANDED_OUTPUT} `nodes` was not a mapping", ""))
+    facts: dict[str, dict[str, object]] = {}
+    for name, data in cast("dict[str, object]", nodes).items():
+        if not isinstance(data, dict):
+            return Err(NetlabError(f"{_EXPANDED_OUTPUT} node {name!r} was not a mapping", ""))
+        facts[name] = cast("dict[str, object]", data)
+    return Ok(facts)
 
 
 def read_lab_name(definition: str) -> str | None:
@@ -461,17 +482,22 @@ def create_clab_topology(
         return Err(NetlabError(f"{_CLAB_OUTPUT} was not a mapping", proc.stderr))
 
     try:
-        expanded = _ExpandedTopology.model_validate(json.loads(raw_expanded))
+        raw_doc: Any = json.loads(raw_expanded)
+        expanded = _ExpandedTopology.model_validate(raw_doc)
     except (json.JSONDecodeError, ValidationError) as exc:
         return Err(NetlabError(f"could not parse {_EXPANDED_OUTPUT}: {exc}", proc.stderr))
 
     links = _extract_links(expanded)
     if isinstance(links, Err):
         return Err(links.error)
+    node_facts = _extract_node_facts(raw_doc)
+    if isinstance(node_facts, Err):
+        return Err(node_facts.error)
     return Ok(
         ClabArtifacts(
             topology=cast("ClabTopology", parsed),
             links=links.value,
+            node_facts=node_facts.value,
             host_bridges=_host_bridges(expanded),
             kernel_modules=_kernel_modules(expanded),
         )

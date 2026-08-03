@@ -36,11 +36,12 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (sixteen deltas; delta 12 is the async job model, delta 13 the SSH
-jump, delta 14 the link table, delta 15 the cross-lab job listing and delta 16 job events on the
-SSE stream — 14/15/16 approved 2026-07-30). Two non-compose
+backend now implements in full (seventeen deltas; delta 12 is the async job model, delta 13 the
+SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
+SSE stream — 14/15/16 approved 2026-07-30 — and delta 17 test-suites v2, approved item-by-item
+2026-08-03). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 106 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 110 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -60,8 +61,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   NAMED events, so the jobs poll fell to a 15s fallback for the gap a reconnect leaves), and
   **host preparation DONE 2026-07-31** (the `hostprep/` sidecar + runner netns config path, both
   below: multi-access LAN topologies now deploy end-to-end — `examples/campus-lan.yml` is the
-  worked example — and linux-node initial config actually applies); still
-  parked: test-suites rework, definition
+  worked example — and linux-node initial config actually applies), and
+  **test-suites v2 DONE 2026-08-03** (contract delta 17 — see the backend bullet; the frontend
+  panel was rebuilt on the v2 wire: CodeEditor JSON authoring, a Facts viewer dialog, rendered
+  command + compare diff in results); still
+  parked: definition
   input methods, scenarios, catalog endpoint, …; after that batch comes a
   comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
   the browser-layer complement to the blackbox suite), and only then the v1.0
@@ -86,7 +90,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   plus per-lab job history through one shared `JobsTable` (row → detail sheet with request/
   result/error JSON; aggregation is one `GET /jobs` query keyed `['jobs', 'all', limit]`, under
   the same `['jobs']` root as the per-lab lists so one invalidation refreshes either). Long ops submit **202 async jobs** awaited via `waitJob`
-  (`src/lib/api.ts`); the frozen **test-suites** panel and custom-config live on the
+  (`src/lib/api.ts`); the **test-suites** panel (rebuilt on the v2 wire 2026-08-03) and
+  custom-config live on the
   Operations tab. **Whole-lab power + save-config are header-menu entries**, not a Controls card
   — `components/lab/lab-power-menu.tsx` renders them into the lab header's `⋯` menu above a
   separator from destroy/delete, each offered only where it acts (a MIXED lab shows both Start
@@ -201,20 +206,35 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   **last-admin guard**: 409 on deactivating or deleting the only active admin), `groups/*`,
   `roles`, `principals`, `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
   live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
-  `permissions` MASKED to the lab-scoped set). **Test suites** (Twinlab's own validation, not `netlab
-  validate` — see ROADMAP Phase 5): declarative assertions stored on the lab record (never sent to
-  `netlab create`), each running a command over clab-api `exec` and matching stdout with a safe
-  primitive (contains/not_contains/matches/json_path; no expression eval), polled until they pass or
-  a per-test `wait` elapses. `GET/PUT /labs/{name}/test-suites` (read/author), `POST
-  /labs/{name}/test-suites/{suite}/run` (run one on demand — an async job like the other long
-  operations). A suite's `stage` (`config-time` |
-  `runtime`) controls only *automatic* execution: `config-time` suites run at the end of a configure
-  (deploy/configure, gated by `skip_config_time_checks` — a skip RETAINS the previous gate) and gate
-  "config done" — a failure leaves the lab deployed with `config_time_status="failed"` and returns
-  status `validation_failed`, so a failed config is unambiguous. **HTTP errors mean "could not
-  run"**: a config push that ran but failed on ≥1 node is a 2xx `status="config_failed"` with
-  per-node results. The runner + pure matcher
-  live in `services/validation.py`; results persist per-suite in `last_validation`.
+  `permissions` MASKED to the lab-scoped set). **Test suites v2** (contract delta 17, shipped
+  2026-08-03 — Twinlab's own validation, not `netlab validate`, see ROADMAP item 15): declarative
+  assertions stored on the lab record (never sent to `netlab create`), each test a **render →
+  execute → parse → assert pipeline**, all data, no user code. A test's `run` is one `TestCase`
+  `{command, expect, parse, interactive}` or a DEVICE-KEYED dict of cases (one suite serves the
+  VyOS and IOL flavors; a node whose device has no case reports `skip`). Commands and expectation
+  strings carry Jinja2 templates rendered per node against the lab's **fact namespace** — netlab's
+  RAW node dicts from the expanded topology (PROVISIONAL, pinning is a pre-v1.0 decision), served
+  by `GET /labs/{name}/facts` (lazy-backfilled JSONB cache like the link table) with one `address`
+  filter; rendering is sandboxed + StrictUndefined, PUT syntax-checks always and dry-renders when
+  facts exist (422 `template_invalid` naming suite/test/field). `parse` is `json` (free on VyOS —
+  FRR's `vtysh -c "show … json"`, incl. `show bgp ipv4 vpn summary json`; the `vpnv4 unicast`
+  spelling doesn't exist) or `textfsm` (ntc-templates' cisco_ios set overlaid by Twinlab-packaged
+  templates in `services/textfsm_templates/` — e.g. our own `show mpls ldp neighbor`; a missing
+  template/failed parse is an `error` result, NEVER a silent raw fallback). `expect` is exactly one
+  of contains/not_contains/matches/`compare` — compare pairs with parse (both ways, server-checked)
+  and asserts via `napalm.base.validate.compare` (nested partial match, `_mode: strict`, numeric
+  operators; napalm MUTATES its args — deep-copy first; the structured diff lands on
+  `TestResult.diff`, the RENDERED command on `.command`). `interactive: true` routes SSH-transport
+  nodes through a persistent netmiko channel in the runner (host/creds via `ansible-inventory
+  --host`; IOS truncates `ping … repeat` on a one-shot exec — proven side-by-side) and is a
+  deliberate no-op over docker exec. Suite `stage` semantics are unchanged (`config-time` gates a
+  configure, skip RETAINS the prior gate, failure = deployed + `validation_failed`); the pipeline
+  lives in `services/validation.py`, results persist per-suite in `last_validation`, and
+  `examples/mpls-l3vpn.test-suites.json` is ONE device-keyed file serving both MPLS labs with every
+  address rendered from facts (verified live: 25/25 + interactive VRF pings on IOL). Local
+  `typings/` stubs give the untyped napalm/textfsm/ntc imports precise types. **HTTP errors mean
+  "could not run"**: a config push that ran but failed on ≥1 node is a 2xx `status="config_failed"`
+  with per-node results.
   **Runtime control/observability** over live clab-api state (not
   the definition): `POST /labs/{name}/nodes/{node}/{start|stop|restart|pause|unpause}` and
   `POST /labs/{name}/{start|stop|restart}` (power control), `POST /labs/{name}/{pause|unpause}`

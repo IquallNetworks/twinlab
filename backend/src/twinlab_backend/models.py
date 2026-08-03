@@ -29,8 +29,13 @@ type ContainerState = Literal[
 _Name = Annotated[
     str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", min_length=1, max_length=64)
 ]
-# A JSON scalar an expectation can assert equality against (json_path form).
-type JsonScalar = str | int | float | bool
+# How a test case turns stdout into data `compare` can assert on (contract
+# delta 17): "json" = stdout must parse as JSON (free on VyOS — FRR's vtysh
+# emits it natively); "textfsm" = stdout parses into a list of records via a
+# TextFSM template resolved from the node's device + the rendered command
+# (ntc-templates overlaid by Twinlab-packaged templates). A missing template
+# or failed parse is an "error" result — never a silent raw fallback.
+type ParseMode = Literal["json", "textfsm"]
 
 # A custom-config template path: a relative, traversal-free `.j2` path (flat like
 # `nat.j2` or per-device like `nat/ios.j2`). The runner enforces the same contract
@@ -44,17 +49,19 @@ type CustomConfigFileset = dict[_TemplatePath, str]
 
 
 class TestExpectation(BaseModel):
-    """How a test decides pass/fail from a command's stdout. Exactly one matcher is
-    set. Deliberately a constrained, safe set — no arbitrary expression eval (a
-    netlab-style expression form is a possible later addition). `contains` /
-    `not_contains` are literal substrings; `matches` is a regex; `json_path` parses
-    stdout as JSON and asserts a dotted path equals `equals`."""
+    """How a test case decides pass/fail (contract delta 17). Exactly one matcher
+    is set. The raw matchers work on unparsed stdout: `contains`/`not_contains`
+    are literal substrings, `matches` is a regex. `compare` asserts over PARSED
+    data with napalm-validate's grammar (nested partial match by default,
+    `_mode: strict` for exhaustiveness, numeric operators like "<15" /
+    "10<->20" / "5%10", `list` semantics) — a compare spec is data, never
+    expression eval. The compare ⟺ parse pairing is checked on TestCase, the
+    first place both fields exist."""
 
     contains: str | None = None
     not_contains: str | None = None
     matches: str | None = None  # regex, searched against stdout
-    json_path: str | None = None  # dotted path into JSON-parsed stdout, e.g. "a.b.0.c"
-    equals: JsonScalar | None = None  # required with json_path
+    compare: dict[str, object] | None = None  # napalm-validate spec over parsed data
 
     @model_validator(mode="after")
     def _exactly_one_matcher(self) -> TestExpectation:
@@ -62,15 +69,11 @@ class TestExpectation(BaseModel):
             "contains": self.contains,
             "not_contains": self.not_contains,
             "matches": self.matches,
-            "json_path": self.json_path,
+            "compare": self.compare,
         }
         set_matchers = [name for name, value in matchers.items() if value is not None]
         if len(set_matchers) != 1:
-            raise ValueError("exactly one of contains/not_contains/matches/json_path is required")
-        if self.json_path is not None and self.equals is None:
-            raise ValueError("json_path requires equals")
-        if self.json_path is None and self.equals is not None:
-            raise ValueError("equals is only valid with json_path")
+            raise ValueError("exactly one of contains/not_contains/matches/compare is required")
         if self.matches is not None:
             try:
                 _ = re.compile(self.matches)
@@ -79,16 +82,49 @@ class TestExpectation(BaseModel):
         return self
 
 
-class ValidationTest(BaseModel):
-    """One assertion: run `command` on each of `nodes` and check its stdout against
-    `expect`. `wait` polls for a converged result (seconds; 0 = a single attempt),
-    which is what lets a config-time convergence check tolerate protocols settling."""
+class TestCase(BaseModel):
+    """What actually runs on a node (contract delta 17): one command and how to
+    judge its output. `command` — and every string inside `expect` — may carry
+    Jinja2 templates rendered per executing node against the lab's fact
+    namespace (`node` / `nodes.<name>`, see GET /labs/{name}/facts).
+    `interactive` routes the exec through a persistent CLI channel when the
+    node's transport is SSH (IOS truncates timed commands like `ping ...
+    repeat` on a one-shot exec channel); it is a deliberate no-op over docker
+    exec, which already captures everything."""
 
-    nodes: list[_Name] = Field(min_length=1)
     command: str = Field(min_length=1)
     expect: TestExpectation
+    parse: ParseMode | None = None
+    interactive: bool = False
+
+    @model_validator(mode="after")
+    def _compare_requires_parse(self) -> TestCase:
+        if (self.expect.compare is not None) != (self.parse is not None):
+            raise ValueError(
+                "compare and parse go together: compare asserts over parsed data, "
+                "and parsed data is only asserted with compare"
+            )
+        return self
+
+
+class ValidationTest(BaseModel):
+    """One assertion: run a case on each of `nodes` and check the outcome.
+    `run` is ONE case for every node or a DEVICE-KEYED dict (netlab device
+    names: "vyos", "iol", "linux", ...) — case-level keying (delta 17): each
+    node picks its device's complete recipe, and a node whose device has no
+    case reports `skip`, not an error. `wait` polls for a converged result
+    (seconds; 0 = a single attempt) — the convergence knob."""
+
+    nodes: list[_Name] = Field(min_length=1)
+    run: TestCase | dict[_Name, TestCase]
     wait: int = Field(default=0, ge=0, le=600)  # seconds to poll before failing
     description: str = ""
+
+    @model_validator(mode="after")
+    def _device_keyed_run_not_empty(self) -> ValidationTest:
+        if isinstance(self.run, dict) and not self.run:
+            raise ValueError("a device-keyed run needs at least one case")
+        return self
 
 
 class TestSuite(BaseModel):
@@ -103,10 +139,12 @@ class TestSuite(BaseModel):
 
 
 class TestResult(BaseModel):
-    """One (test, node) outcome. `pass`: expectation met. `fail`: command ran but
-    the expectation did not hold (after any `wait`). `error`: the command could not
-    be run or its output could not be evaluated. `skip` is reserved for future
-    "not applicable" cases and unused by today's runner."""
+    """One (test, node) outcome. `pass`: expectation met. `fail`: the command ran
+    but the expectation did not hold (after any `wait`). `error`: the command
+    could not run, render, or parse. `skip`: the node's device has no case in a
+    device-keyed test. `command` is the RENDERED command (what actually ran);
+    `diff` is napalm-validate's structured complies/present/missing/extra
+    report, populated only when a `compare` decided the outcome."""
 
     test: str
     node: str
@@ -114,6 +152,7 @@ class TestResult(BaseModel):
     command: str
     output: str  # captured stdout (may be truncated for display)
     detail: str  # what was expected, or why it errored
+    diff: dict[str, object] | None = None
     elapsed_ms: int
 
 
@@ -146,6 +185,16 @@ class TestSuitesResponse(BaseModel):
     test_suites: dict[str, TestSuite]
     last_validation: dict[str, SuiteReport]
     config_time_status: ConfigTimeStatus
+
+
+class LabFactsResponse(BaseModel):
+    """The per-node fact namespace test-suite templates render against (contract
+    delta 17), keyed by SHORT node name. PROVISIONAL: values are netlab's raw
+    node dicts from the expanded topology, deliberately unpinned until a stable
+    subset is chosen (pre-v1.0) — this endpoint is the discoverability and
+    insulation layer for that decision."""
+
+    nodes: dict[str, dict[str, object]]
 
 
 class BuiltinTemplateOut(BaseModel):

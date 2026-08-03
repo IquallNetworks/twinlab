@@ -51,6 +51,7 @@ from twinlab_backend.models import (
     JobOut,
     LabActionResponse,
     LabDetail,
+    LabFactsResponse,
     LabLink,
     LabLinksResponse,
     LabNodeState,
@@ -99,7 +100,13 @@ from twinlab_backend.services.netlab import (
     strip_generated_binds,
 )
 from twinlab_backend.services.runner_client import ConfigureReport, RunnerClient, RunnerError
-from twinlab_backend.services.validation import NodeExecutor, run_config_time_suites, run_suite
+from twinlab_backend.services.validation import (
+    NodeExecutor,
+    NodeFacts,
+    check_suite_templates,
+    run_config_time_suites,
+    run_suite,
+)
 
 router = APIRouter(prefix="/labs", tags=["labs"])
 
@@ -282,13 +289,35 @@ def _runner_executor(
     custom-config fileset — the inventory's `netlab create` validates any `config:`
     reference, so a lab using custom config needs them here too."""
 
-    async def execute(node: str, command: str) -> Result[str, str]:
-        result = await runner.exec_command(definition, node, command, templates)
+    async def execute(node: str, command: str, interactive: bool) -> Result[str, str]:
+        result = await runner.exec_command(
+            definition, node, command, templates, interactive=interactive
+        )
         if isinstance(result, Err):
             return Err(result.error.message)
         return Ok(result.value)
 
     return execute
+
+
+async def _node_facts_for(db: AsyncSession, lab: Lab, library: BuiltinLibrary) -> NodeFacts:
+    """The lab's fact namespace (delta 17), from the record's cache — lazily
+    regenerated from the stored definition when the cache predates the column.
+    Callers guarantee `lab.definition` is set."""
+    stored = _stored_node_facts(lab)
+    if stored is not None:
+        return stored
+    if lab.definition is None:  # callers pre-check; defensive for typing
+        raise ApiError(409, "no_definition", f"lab '{lab.name}' has no stored definition yet")
+    artifacts = await run_in_threadpool(
+        create_clab_topology, lab.definition, _config_fileset(library, lab)
+    )
+    if isinstance(artifacts, Err):
+        # Unexpected — the stored definition passed its PUT-time dry run.
+        raise _netlab_failed(artifacts.error.message, artifacts.error.stderr)
+    facts = artifacts.value.node_facts
+    _ = await lab_store.set_node_facts(db, lab.name, dict(facts))
+    return facts
 
 
 async def _run_config_time(
@@ -309,7 +338,8 @@ async def _run_config_time(
     if skip or not any(s.stage == "config-time" for s in suites.values()):
         return "configured", None
     executor = _runner_executor(runner, definition, _config_fileset(library, lab))
-    reports = await run_config_time_suites(executor, suites)
+    facts = await _node_facts_for(db, lab, library)
+    reports = await run_config_time_suites(executor, facts, suites)
     ok = all(r.ok for r in reports)
     stored: dict[str, object] = {r.suite: r.model_dump(mode="json") for r in reports}
     _ = await lab_store.record_validation(
@@ -508,6 +538,20 @@ def _stored_links(lab: Lab) -> list[TopologyLink] | None:
         return [TopologyLink.model_validate(item) for item in cast("list[object]", raw)]
     except ValidationError:
         return None
+
+
+def _stored_node_facts(lab: Lab) -> dict[str, dict[str, object]] | None:
+    """The lab's cached fact namespace; None = absent (rows predating the
+    column) — healed by regeneration. Values are raw netlab node dicts
+    (delta 17: provisional, unpinned), so only the outer shape is checked."""
+    if lab.node_facts is None:
+        return None
+    facts: dict[str, dict[str, object]] = {}
+    for name, data in lab.node_facts.items():
+        if not isinstance(data, dict):
+            return None
+        facts[name] = cast("dict[str, object]", data)
+    return facts
 
 
 async def _live_link_state(
@@ -849,7 +893,12 @@ async def update_lab_definition(
         raise _netlab_failed(validated.error.message, validated.error.stderr)
 
     updated = await lab_store.update_definition(
-        db, lab_name, definition, mgmt_subnet, serialize_links(validated.value.links)
+        db,
+        lab_name,
+        definition,
+        mgmt_subnet,
+        serialize_links(validated.value.links),
+        dict(validated.value.node_facts),
     )
     if isinstance(updated, lab_store.LabStoreError):
         if updated.reason == "subnet_taken":
@@ -938,9 +987,11 @@ async def _deploy_job(
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise _deploy_failed(deployed.error.message)
         await _prune_stale_bridges(db, hostprep, lab_name, previous_bridges, artifacts.host_bridges)
-        # The deploy's own `netlab create` just produced the link table — refresh
-        # the stored cache (free backfill for rows predating the column).
+        # The deploy's own `netlab create` just produced the link table and the
+        # fact namespace — refresh both stored caches (free backfill for rows
+        # predating the columns).
         _ = await lab_store.set_links(db, lab_name, serialize_links(artifacts.links))
+        _ = await lab_store.set_node_facts(db, lab_name, dict(artifacts.node_facts))
         _ = await lab_store.mark_deployed(db, lab_name)
         return await _finish_deploy(
             deployed.value,
@@ -1139,9 +1190,24 @@ async def get_test_suites(lab_name: LabName, db: SessionDep) -> TestSuitesRespon
 async def put_test_suites(
     lab_name: LabName, request: UpdateTestSuitesRequest, db: SessionDep
 ) -> TestSuitesResponse:
-    # Authoring a lab's tests is authoring the lab, so it takes lab:create (like
+    # Authoring a lab's tests is authoring the lab, so it takes lab:edit (like
     # editing the definition). Suites are stored on the record, not in the netlab
     # definition, and take effect on the next validation run.
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    # Delta 17: templates are syntax-checked always, and dry-rendered per target
+    # node when the lab has facts (a definition). A suite authored before the
+    # definition passes on syntax alone; a later run surfaces render problems as
+    # per-check errors.
+    problems = check_suite_templates(request.test_suites, _stored_node_facts(lab))
+    if problems:
+        raise ApiError(
+            422,
+            "template_invalid",
+            "test-suite template(s) failed to render",
+            {"problems": problems},
+        )
     stored: dict[str, object] = {
         name: suite.model_dump(mode="json") for name, suite in request.test_suites.items()
     }
@@ -1172,7 +1238,8 @@ async def _suite_run_job(
         if definition is None:
             raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
         executor = _runner_executor(runner, definition, _config_fileset(library, lab))
-        report = await run_suite(executor, suite, target)
+        facts = await _node_facts_for(db, lab, library)
+        report = await run_suite(executor, facts, suite, target)
         _ = await lab_store.record_validation(
             db,
             lab_name,
@@ -1513,6 +1580,23 @@ async def lab_links(
         _ = await lab_store.set_links(db, lab_name, serialize_links(stored))
     inventory, impairments = await _live_link_state(clab, lab, stored)
     return merge_links(stored, inventory, impairments)
+
+
+@router.get("/{lab_name}/facts", dependencies=[Depends(require_lab(perms.LAB_READ))])
+async def lab_facts(
+    lab_name: LabName, db: SessionDep, library: BuiltinLibraryDep
+) -> LabFactsResponse:
+    """The per-node fact namespace suite templates render against (contract
+    delta 17): served from the record's cached extract, lazily regenerated from
+    the stored definition when the cache predates the column."""
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    if lab.definition is None:
+        raise ApiError(
+            409, "no_definition", f"lab '{lab_name}' has no definition to derive facts from"
+        )
+    return LabFactsResponse(nodes=await _node_facts_for(db, lab, library))
 
 
 async def _lab_lifecycle(

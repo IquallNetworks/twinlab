@@ -1,0 +1,11 @@
+Value Required PEER_LDP_IDENT (\S+)
+Value LOCAL_LDP_IDENT (\S+)
+Value STATE (\w+)
+Value MSGS_SENT (\d+)
+Value MSGS_RCVD (\d+)
+Value UPTIME (\S+)
+
+Start
+  ^\s*Peer LDP Ident: ${PEER_LDP_IDENT}; Local LDP Ident ${LOCAL_LDP_IDENT}\s*$$
+  ^\s*State: ${STATE}; Msgs sent/rcvd: ${MSGS_SENT}/${MSGS_RCVD};
+  ^\s*Up time: ${UPTIME}\s*$$ -> Record

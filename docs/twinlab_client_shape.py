@@ -97,6 +97,34 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     keep a slow fallback poll. (wire today: every event is unnamed — a
     default-``message`` container event; naming them is the breaking part of
     this delta.)
+17. Test-suites v2 (APPROVED 2026-08-03): the validation pipeline becomes
+    **render → execute → parse → assert**, all still declarative data — no
+    user code. Commands and expected values may carry Jinja2 templates
+    rendered per node against facts from the netlab-expanded topology
+    (``{{ nodes.pe4.loopback.ipv4 | address }}``), replacing the
+    hardcoded-IP suites that broke on every re-address; rendering is
+    sandboxed with strict undefined. The fact namespace starts as netlab's
+    RAW node data — PROVISIONAL, deliberately unpinned; a pinned subset is
+    a decision to make before v1.0 — and is discoverable via the new ``GET
+    /labs/{name}/facts`` endpoint (which also insulates consumers from the
+    future pinning). A test's action becomes a per-device CASE (``run`` =
+    one ``TestCase`` or a device-keyed dict; case-level keying chosen over
+    netlab-style field-level — one atomic recipe per device, no
+    key-consistency rules) so one suite serves VyOS and IOL; a node whose
+    device has no case reports "skip" (the reserved status, now used). A
+    case may declare ``parse`` ("json" | "textfsm") turning stdout into
+    structured data asserted with ``compare`` — napalm-validate's grammar
+    (nested partial match, strict mode, numeric operators, ranges) — while
+    the raw matchers (contains/not_contains/matches) remain for unparsed
+    output; json_path/equals are RETIRED (a dotted path is the degenerate
+    compare spec; NO stored-suite migration — dev-phase, no real-world
+    data; the repo examples are rewritten to v2). ``interactive: true``
+    routes a case through a persistent CLI channel where the node's
+    transport is SSH — IOS truncates timed commands (``ping … repeat``,
+    ``traceroute``) on a one-shot exec channel — and is a deliberate no-op
+    over docker exec, which already captures everything. (wire today: one
+    command string per test, raw + json_path matchers only, no rendering,
+    no parse stage, no interactive mode, no facts endpoint.)
 
 Conventions:
 
@@ -643,30 +671,100 @@ class LabEvent:
 
 
 # --------------------------------------------------------------------------- #
-# Test-suite shapes
+# Test-suite shapes (v2 — delta 17, APPROVED 2026-08-03)
 # --------------------------------------------------------------------------- #
+
+ParseMode = Literal["json", "textfsm"]
+# How a case turns stdout into data `compare` can assert on:
+# - "json": stdout must parse as JSON. On VyOS this costs nothing — FRR's
+#   `vtysh -c "show ... json"` emits it natively (verified live on OSPF
+#   neighbor / LDP neighbor / BGP VPNv4 summary), so routing-state gates
+#   need no template layer at all.
+# - "textfsm": stdout is parsed into a list of records via TextFSM — the
+#   template resolved from the node's DEVICE plus the rendered command,
+#   out of ntc-templates' library (cisco_ios: 143 templates) overlaid by
+#   Twinlab-packaged templates (e.g. our own `show mpls ldp neighbor` for
+#   cisco_ios, which ntc lacks).
+# A missing template or a failed parse is an "error" result — NEVER a
+# silent raw-string fallback (netmiko's use_textfsm footgun, deliberately
+# excluded).
 
 
 @dataclass(frozen=True, slots=True)
 class TestExpectation:
-    """Exactly ONE of contains/not_contains/matches/json_path (server-checked);
-    `equals` required with — and only with — json_path. No expression eval."""
+    """Exactly ONE of contains/not_contains/matches/compare (server-checked).
+
+    The raw matchers pair with unparsed stdout; `compare` REQUIRES the case
+    to declare `parse` — and vice versa (server-checked both ways). It
+    asserts over the parsed data with napalm-validate's grammar (Apache-2.0,
+    `napalm.base.validate.compare`): nested partial match by default,
+    ``_mode: strict`` for exhaustiveness, numeric operators (``"<15"``,
+    ranges ``"10<->20"``, percent tolerance), list semantics. A compare spec
+    is DATA — still no expression eval anywhere.
+
+    APPROVED (delta 17): json_path/equals RETIRED — a dotted path is the
+    degenerate nested compare spec. No stored-suite migration (dev-phase,
+    no real-world data); the repo's example suites are rewritten to v2."""
 
     contains: str | None = None
     not_contains: str | None = None
     matches: str | None = None  # regex, re.search on stdout
-    json_path: str | None = None  # dotted path into JSON-parsed stdout
-    equals: str | int | float | bool | None = None
+    compare: dict[str, object] | None = None  # napalm-validate spec, see above
+
+
+@dataclass(frozen=True, slots=True)
+class TestCase:
+    """What actually runs on a node: one command and how to judge its output.
+
+    `command` — and every string inside `expect` — may carry Jinja2
+    ``{{ ... }}`` rendered per executing node against the fact namespace:
+    ``node`` (the executing node) and ``nodes.<name>`` (any node), each
+    exposing that node's data from the netlab-expanded topology (the same
+    artifact behind the link table) — e.g. ``loopback.ipv4``, ``mgmt.ipv4``,
+    ``interfaces[].{ifname, ipv4, neighbors}``, ``vrfs.<vrf>.loopback`` —
+    plus one filter ``address`` stripping a CIDR's prefix length
+    ("10.0.0.5/32" → "10.0.0.5"). APPROVED (delta 17): the namespace is
+    netlab's RAW node dict for now — PROVISIONAL and deliberately unpinned
+    (netlab-shaped, may drift across netlab versions); pinning a stable
+    subset is a decision to make BEFORE v1.0. Inspect it with `facts()`.
+    Rendering is SANDBOXED (jinja2 SandboxedEnvironment, no attribute
+    escapes) with StrictUndefined: at PUT, templates are always
+    syntax-checked and — when the lab has a definition, so facts exist —
+    dry-rendered, either failure a 422 ``template_invalid``; a render
+    failure at run time (suite authored before the definition, later
+    drifted) is that check's "error" result, never a crashed job.
+
+    `interactive` routes the exec through a persistent CLI channel when the
+    node's transport is SSH (a no-op over docker exec): IOS closes a
+    one-shot exec channel on timed commands (``ping ... repeat``,
+    ``traceroute``), truncating output after the first packet — the
+    persistent channel captures it all. Off by default: gates should assert
+    programmed state, not live traffic."""
+
+    command: str
+    expect: TestExpectation
+    parse: ParseMode | None = None
+    interactive: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class ValidationTest:
-    """Run `command` on each node; check stdout. `wait` (0-600 s) polls until
-    the expectation holds — the convergence knob."""
+    """Run a case on each node; poll until it passes.
+
+    `run` is ONE case for every node, or a DEVICE-KEYED dict (netlab device
+    names: "vyos", "iol", "linux", ...) — the multi-vendor mechanism, so a
+    single suite serves the VyOS and IOL flavors of a topology: each node
+    picks its device's case, and a node whose device has none reports
+    "skip", not an error. APPROVED (delta 17): keying is CASE-level (one
+    atomic command/parse/expect recipe per device), not netlab's
+    field-level parallel dicts — no key-consistency rules, one union in
+    the types; the accepted cost is repeating a shared matcher across
+    cases (a `default`-case merge is a possible ADDITIVE later extension).
+    `wait` (0-600 s) polls until the expectation holds — the convergence
+    knob."""
 
     nodes: list[str]
-    command: str
-    expect: TestExpectation
+    run: TestCase | dict[str, TestCase]
     wait: int = 0
     description: str = ""
 
@@ -685,7 +783,11 @@ class TestSuite:
 @dataclass(frozen=True, slots=True)
 class TestResult:
     """One (test, node) outcome. "fail" = expectation never held (after
-    `wait`); "error" = command couldn't run; "skip" reserved, unused."""
+    `wait`); "error" = command couldn't run, render, or parse; "skip" = the
+    node's device has no case in a device-keyed test. `command` is the
+    RENDERED command (what actually ran — the debugging artifact); `diff`
+    is napalm-validate's structured complies/present/missing/extra report,
+    populated only when a `compare` decided the outcome."""
 
     test: str
     node: str
@@ -693,6 +795,7 @@ class TestResult:
     command: str
     output: str
     detail: str
+    diff: dict[str, object] | None
     elapsed_ms: int
 
 
@@ -716,6 +819,21 @@ class TestSuitesResponse:
     test_suites: dict[str, TestSuite]
     last_validation: dict[str, SuiteReport]
     config_time_status: ConfigTimeStatus  # APPROVED — wire today: config_time_ok
+
+
+@dataclass(frozen=True, slots=True)
+class LabFacts:
+    """PROPOSED (delta 17, APPROVED, not served yet) the per-node fact
+    namespace test-suite templates render against — netlab's node data
+    from the expanded topology, keyed by SHORT node name.
+
+    `nodes[n]` is exactly what `nodes.<n>` (and `node`, for the executing
+    node) resolves to in a template. PROVISIONAL: the values are
+    netlab-shaped raw dicts, deliberately unpinned until a stable subset
+    is chosen (before v1.0) — this endpoint is the insulation layer, so
+    consumers discover the namespace instead of assuming it."""
+
+    nodes: dict[str, dict[str, object]]
 
 
 # --------------------------------------------------------------------------- #
@@ -1250,11 +1368,27 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         """GET /labs/{name}/test-suites — lab:read."""
         raise NotImplementedError
 
+    async def facts(self, name: str) -> LabFacts:
+        """PROPOSED (delta 17, APPROVED, not served yet) GET
+        /labs/{name}/facts — lab:read. The per-node fact namespace suite
+        templates render against (see LabFacts: PROVISIONAL raw netlab
+        node data until pinned, pre-v1.0). 409 ``no_definition`` on a bare
+        created record — no definition, no facts. Derived from the same
+        dry `netlab create` that validates a PUT and persisted like the
+        link table, so reads never pay the subprocess cost."""
+        raise NotImplementedError
+
     async def put_test_suites(
         self, name: str, suites: dict[str, TestSuite]
     ) -> TestSuitesResponse:
         """PUT /labs/{name}/test-suites — lab:edit. Full replace; takes effect
-        on the next run."""
+        on the next run.
+
+        PROPOSAL (delta 17, APPROVED): schema violations (two matchers,
+        compare without parse, bad regex) stay 422 as today; Jinja templates
+        are syntax-checked always and dry-rendered against the lab's node
+        facts when a definition exists — either failure is 422
+        ``template_invalid`` naming the suite/test/field."""
         raise NotImplementedError
 
     async def run_test_suite(self, name: str, suite: str) -> Job:

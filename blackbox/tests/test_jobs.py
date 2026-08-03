@@ -25,6 +25,7 @@ from twinlab_client import (
     JobEvent,
     LabEvent,
     SuiteReport,
+    TestCase,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -42,8 +43,9 @@ _TRIVIAL_SUITES = {
         tests={
             "probe": ValidationTest(
                 nodes=["n1"],
-                command="echo bb-probe",
-                expect=TestExpectation(contains="bb-probe"),
+                run=TestCase(
+                    command="echo bb-probe", expect=TestExpectation(contains="bb-probe")
+                ),
                 wait=0,
             )
         },

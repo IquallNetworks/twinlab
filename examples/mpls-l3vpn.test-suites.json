@@ -1,49 +1,152 @@
 {
   "convergence": {
     "stage": "config-time",
-    "description": "Gate config-done on the VyOS MPLS L3VPN converging. Show-based (no live ping): asserts the programmed state — OSPF Full, LDP OPERATIONAL, and a label-switched VRF route (show ip route vrf … with a label stack) toward each remote customer site. Runs via the netlab-runner's `netlab exec` (per-NOS transport; VyOS → docker exec vtysh). Companion to examples/mpls-l3vpn.yml; seed it via the deploy request's test_suites, or PUT it to an existing lab. Customer loopbacks (10.2.0.1-.4) are netlab-derived and hardcoded — see the test-suite-hardcoded-ips follow-up.",
+    "description": "Gate config-done on the MPLS L3VPN converging — ONE suite for BOTH platform flavors (test-suites v2, contract delta 17): each test carries a device-keyed case, so the same file PUTs onto examples/mpls-l3vpn.yml (vyos) and examples/mpls-l3vpn.iol.yml (iol). Show-based (no live ping): asserts the programmed state — OSPF adjacency, LDP session (VyOS via vtysh JSON + compare; IOL via the Twinlab TextFSM template + compare), VPNv4 sessions Established toward every remote PE (rendered peer addresses), and a label-switched VRF route toward each remote customer site (VRF loopbacks rendered from the lab's facts — nothing hardcoded). TE tunnels and IP SLA are IOL-only (the mpls_te/ip_sla built-ins ship ios templates only), so those tests simply skip on the VyOS lab.",
     "tests": {
       "ospf_full": {
         "nodes": ["pe1", "pe2", "pe3", "pe4", "p1", "p2", "p3"],
-        "command": "vtysh -c \"show ip ospf neighbor\"",
-        "expect": { "contains": "Full" },
         "wait": 180,
-        "description": "Every node has a Full OSPF adjacency (the area-0 core is up)."
+        "description": "Every node has a Full OSPF adjacency (the area-0 core is up).",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show ip ospf neighbor\"",
+            "expect": { "contains": "Full" }
+          },
+          "iol": {
+            "command": "show ip ospf neighbor",
+            "parse": "textfsm",
+            "expect": { "compare": { "list": [{ "state": "FULL.*" }] } }
+          }
+        }
       },
       "ldp_operational": {
         "nodes": ["pe1", "pe2", "pe3", "pe4", "p1", "p2", "p3"],
-        "command": "vtysh -c \"show mpls ldp neighbor\"",
-        "expect": { "contains": "OPERATIONAL" },
         "wait": 180,
-        "description": "Every node has an OPERATIONAL LDP session (MPLS transport LSPs up)."
+        "description": "Every node has an operational LDP session (MPLS transport LSPs up).",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show mpls ldp neighbor json\"",
+            "parse": "json",
+            "expect": { "compare": { "neighbors": { "list": [{ "state": "OPERATIONAL" }] } } }
+          },
+          "iol": {
+            "command": "show mpls ldp neighbor",
+            "parse": "textfsm",
+            "expect": { "compare": { "list": [{ "state": "Oper" }] } }
+          }
+        }
       },
-      "fib_reach_pe1_to_pe2": {
+      "vpnv4_established": {
         "nodes": ["pe1"],
-        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.2\"",
-        "expect": { "matches": "label [0-9]" },
-        "wait": 120,
-        "description": "pe1's VRF FIB label-switches toward pe2's customer site (VPNv4 imported + LSP programmed)."
-      },
-      "fib_reach_pe1_to_pe3": {
-        "nodes": ["pe1"],
-        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.3\"",
-        "expect": { "matches": "label [0-9]" },
-        "wait": 120,
-        "description": "pe1's VRF FIB label-switches toward pe3's customer site."
+        "wait": 180,
+        "description": "pe1's VPNv4 iBGP sessions to every other PE are Established with routes received — peer addresses rendered from the lab's facts.",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show bgp ipv4 vpn summary json\"",
+            "parse": "json",
+            "expect": {
+              "compare": {
+                "peers": {
+                  "{{ nodes.pe2.loopback.ipv4 | address }}": { "state": "Established", "pfxRcd": ">0" },
+                  "{{ nodes.pe3.loopback.ipv4 | address }}": { "state": "Established", "pfxRcd": ">0" },
+                  "{{ nodes.pe4.loopback.ipv4 | address }}": { "state": "Established", "pfxRcd": ">0" }
+                }
+              }
+            }
+          },
+          "iol": {
+            "command": "show ip bgp vpnv4 all summary",
+            "expect": { "matches": "{{ nodes.pe4.loopback.ipv4 | address }} .* [1-9][0-9]*" }
+          }
+        }
       },
       "fib_reach_pe1_to_pe4": {
         "nodes": ["pe1"],
-        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.4\"",
-        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe1's VRF FIB label-switches toward pe4's customer site."
+        "description": "pe1's VRF FIB label-switches toward pe4's customer site (VPNv4 imported + LSP programmed) — the customer loopback rendered from the facts, not hardcoded.",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show ip route vrf vpn_a {{ nodes.pe4.vrfs.vpn_a.loopback_address.ipv4 | address }}\"",
+            "expect": { "matches": "label [0-9]" }
+          },
+          "iol": {
+            "command": "show ip cef vrf vpn_a {{ nodes.pe4.vrfs.vpn_a.loopback_address.ipv4 | address }} detail",
+            "expect": { "matches": "label [0-9]" }
+          }
+        }
       },
       "fib_reach_pe4_to_pe1": {
         "nodes": ["pe4"],
-        "command": "vtysh -c \"show ip route vrf vpn_a 10.2.0.1\"",
-        "expect": { "matches": "label [0-9]" },
         "wait": 120,
-        "description": "pe4's VRF FIB label-switches toward pe1's customer site (reverse path)."
+        "description": "pe4's VRF FIB label-switches toward pe1's customer site (reverse path).",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show ip route vrf vpn_a {{ nodes.pe1.vrfs.vpn_a.loopback_address.ipv4 | address }}\"",
+            "expect": { "matches": "label [0-9]" }
+          },
+          "iol": {
+            "command": "show ip cef vrf vpn_a {{ nodes.pe1.vrfs.vpn_a.loopback_address.ipv4 | address }} detail",
+            "expect": { "matches": "label [0-9]" }
+          }
+        }
+      },
+      "te_tunnels_up": {
+        "nodes": ["pe1", "pe2", "pe3", "pe4"],
+        "wait": 180,
+        "description": "Each PE has at least one MPLS-TE head-end tunnel signalled up/up (RSVP-TE mesh from the mpls_te built-in; ios-only, so this skips on the VyOS lab).",
+        "run": {
+          "iol": {
+            "command": "show mpls traffic-eng tunnels brief",
+            "expect": { "matches": "up/up" }
+          }
+        }
+      },
+      "ip_sla_ok": {
+        "nodes": ["pe1", "pe2", "pe3", "pe4"],
+        "wait": 180,
+        "description": "Each PE's IP SLA ICMP-echo probes into the L3VPN return OK (the ip_sla built-in; ios-only, so this skips on the VyOS lab).",
+        "run": {
+          "iol": {
+            "command": "show ip sla statistics",
+            "expect": { "contains": "return code: OK" }
+          }
+        }
+      }
+    }
+  },
+  "reachability": {
+    "stage": "runtime",
+    "description": "On-demand cross-VPN traffic proof: ping pe4's customer loopback from inside pe1's VRF (and back). Live traffic, so a runtime suite, not a config-time gate. The IOL case is interactive — IOS truncates timed commands on a one-shot exec channel, so it rides the persistent netmiko CLI channel (delta 17).",
+    "tests": {
+      "vpn_ping_pe1_to_pe4": {
+        "nodes": ["pe1"],
+        "wait": 60,
+        "run": {
+          "vyos": {
+            "command": "ping {{ nodes.pe4.vrfs.vpn_a.loopback_address.ipv4 | address }} vrf vpn_a count 5",
+            "expect": { "contains": " 0% packet loss" }
+          },
+          "iol": {
+            "command": "ping vrf vpn_a {{ nodes.pe4.vrfs.vpn_a.loopback_address.ipv4 | address }} repeat 5",
+            "interactive": true,
+            "expect": { "contains": "Success rate is 100 percent" }
+          }
+        }
+      },
+      "vpn_ping_pe4_to_pe1": {
+        "nodes": ["pe4"],
+        "wait": 60,
+        "run": {
+          "vyos": {
+            "command": "ping {{ nodes.pe1.vrfs.vpn_a.loopback_address.ipv4 | address }} vrf vpn_a count 5",
+            "expect": { "contains": " 0% packet loss" }
+          },
+          "iol": {
+            "command": "ping vrf vpn_a {{ nodes.pe1.vrfs.vpn_a.loopback_address.ipv4 | address }} repeat 5",
+            "interactive": true,
+            "expect": { "contains": "Success rate is 100 percent" }
+          }
+        }
       }
     }
   }

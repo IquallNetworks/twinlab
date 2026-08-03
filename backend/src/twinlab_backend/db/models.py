@@ -193,6 +193,12 @@ class Lab(Base):
     # never pays the subprocess cost. NULL = not yet generated (rows predating
     # the feature) — the GET lazily regenerates and persists.
     links: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # The per-node fact namespace test-suite templates render against (contract
+    # delta 17): netlab's RAW node dicts from the expanded topology, keyed by
+    # short node name — PROVISIONAL/unpinned until the pre-v1.0 pinning
+    # decision. Same lifecycle as `links`: a regenerable cache written by the
+    # PUT dry-run, refreshed on deploy, lazily backfilled by GET .../facts.
+    node_facts: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
     # User-authored netlab custom-config templates: a {relpath: content} fileset
     # (e.g. {"nat/ios.j2": "..."}), shipped to the runner alongside the built-in
     # library on every configure. Built-ins live in code, not here. Never sent to

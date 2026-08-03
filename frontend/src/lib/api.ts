@@ -12,6 +12,7 @@ import {
   labActionResponseSchema,
   labDetailSchema,
   labInterfacesSchema,
+  labFactsSchema,
   labLinksSchema,
   labListSchema,
   labOwnerSchema,
@@ -291,10 +292,14 @@ export const api = {
       { method: 'POST', body: JSON.stringify(input) },
     ),
 
-  // Test suites. Read/author (lab:read / lab:create); run one on demand
+  // Test suites. Read/author (lab:read / lab:edit); run one on demand
   // (lab:validate). `testSuites` is the raw suite map, validated server-side.
   getTestSuites: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/test-suites`, testSuitesResponseSchema),
+  // The fact namespace suite templates render against (delta 17): raw netlab
+  // node dicts, provisional until pinned; 409 no_definition on a bare record.
+  labFacts: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}/facts`, labFactsSchema),
   putTestSuites: (name: string, testSuites: unknown) =>
     request(`/labs/${encodeURIComponent(name)}/test-suites`, testSuitesResponseSchema, {
       method: 'PUT',

@@ -23,18 +23,45 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Textarea } from '@/components/ui/textarea'
+import { CodeEditor } from '@/components/code-editor'
 import { api, waitJob } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
 import { formatDateTime, testStatusBadgeVariant } from '@/lib/format'
-import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
-import { suiteReportSchema, type SuiteReport, type TestSuite } from '@/lib/schemas'
+import {
+  labFactsQueryOptions,
+  labQueryOptions,
+  labsQueryOptions,
+  testSuitesQueryOptions,
+} from '@/lib/queries'
+import { suiteReportSchema, type SuiteReport, type TestResult, type TestSuite } from '@/lib/schemas'
 
 function summaryLine(report: SuiteReport): string {
   const parts = [`${report.passed} passed`, `${report.failed} failed`]
   if (report.skipped > 0) parts.push(`${report.skipped} skipped`)
   if (report.errored > 0) parts.push(`${report.errored} errored`)
   return `${parts.join(' · ')} · ${formatDateTime(report.ran_at)}`
+}
+
+/** One result's detail cell: the human line, the RENDERED command (what
+ * actually ran — the debugging artifact for templated tests), and the compare
+ * diff when one decided the outcome. */
+function ResultDetail({ result }: { result: TestResult }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span>{result.detail}</span>
+      {result.command !== '' && (
+        <span className="text-muted-foreground/70 font-mono text-[11px]">{result.command}</span>
+      )}
+      {result.diff != null && (
+        <details>
+          <summary className="cursor-pointer select-none text-[11px]">compare diff</summary>
+          <pre className="bg-muted/50 mt-1 max-h-48 overflow-auto rounded p-2 text-[11px]">
+            {JSON.stringify(result.diff, null, 1)}
+          </pre>
+        </details>
+      )}
+    </div>
+  )
 }
 
 function ResultsTable({ report }: { report: SuiteReport }) {
@@ -56,11 +83,56 @@ function ResultsTable({ report }: { report: SuiteReport }) {
             <TableCell>
               <Badge variant={testStatusBadgeVariant(r.status)}>{r.status}</Badge>
             </TableCell>
-            <TableCell className="text-muted-foreground text-xs">{r.detail}</TableCell>
+            <TableCell className="text-muted-foreground text-xs">
+              <ResultDetail result={r} />
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
+  )
+}
+
+/** Read-only viewer for the lab's fact namespace — what suite templates like
+ * `{{ nodes.pe1.loopback.ipv4 | address }}` resolve against. Loaded lazily on
+ * open (a bare record has no facts; the 409 renders as the error line). */
+function FactsViewer({ name }: { name: string }) {
+  const [open, setOpen] = useState(false)
+  const facts = useQuery({ ...labFactsQueryOptions(name), enabled: open })
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="sm">
+          Facts
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="flex flex-col sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Node facts</DialogTitle>
+          <DialogDescription>
+            The per-node namespace test templates render against — reference it as{' '}
+            <span className="font-mono">{'{{ node.… }}'}</span> (the executing node) or{' '}
+            <span className="font-mono">{'{{ nodes.<name>.… }}'}</span>, with the{' '}
+            <span className="font-mono">| address</span> filter stripping a CIDR&apos;s prefix
+            length. Derived from the definition (netlab&apos;s data, unpinned pre-v1.0).
+          </DialogDescription>
+        </DialogHeader>
+        {facts.isPending && open ? (
+          <p className="text-muted-foreground text-sm">Loading…</p>
+        ) : facts.isError ? (
+          <p className="text-destructive text-sm">
+            {facts.error instanceof Error ? facts.error.message : 'Failed to load facts'}
+          </p>
+        ) : facts.data ? (
+          <CodeEditor
+            value={JSON.stringify(facts.data.nodes, null, 2)}
+            language="json"
+            readOnly
+            className="max-h-[60vh] min-h-48 flex-1"
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -181,15 +253,21 @@ function SuitesEditor({ name, suitesJson }: { name: string; suitesJson: string }
         <DialogHeader>
           <DialogTitle>Edit test suites</DialogTitle>
           <DialogDescription>
-            A JSON map of suite name → {'{ stage, description, tests }'}. Each test runs a command on
-            nodes and matches its stdout (contains / not_contains / matches / json_path).
+            A JSON map of suite name → {'{ stage, description, tests }'}. A test&apos;s{' '}
+            <span className="font-mono">run</span> is one case{' '}
+            <span className="font-mono">{'{ command, expect, parse?, interactive? }'}</span> or a
+            device-keyed map of cases. Commands and expectations may template lab facts (
+            <span className="font-mono">{'{{ nodes.pe1.loopback.ipv4 | address }}'}</span>);{' '}
+            <span className="font-mono">expect</span> is one of contains / not_contains / matches /
+            compare (compare pairs with <span className="font-mono">parse</span>).
           </DialogDescription>
         </DialogHeader>
-        <Textarea
-          className="min-h-48 flex-1 resize-none font-mono text-xs"
+        <CodeEditor
           value={text}
-          onChange={(e) => setText(e.target.value)}
-          spellCheck={false}
+          onChange={setText}
+          language="json"
+          lint
+          className="max-h-[60vh] min-h-48 flex-1"
         />
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
@@ -262,7 +340,10 @@ export function TestSuites({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base">Test suites</CardTitle>
-        {canEdit && data && <SuitesEditor name={name} suitesJson={suitesJson} />}
+        <div className="flex items-center gap-1">
+          <FactsViewer name={name} />
+          {canEdit && data && <SuitesEditor name={name} suitesJson={suitesJson} />}
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {isPending ? (

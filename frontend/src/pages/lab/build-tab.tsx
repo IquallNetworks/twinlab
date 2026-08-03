@@ -33,6 +33,7 @@ import { toastError } from '@/lib/error-toast'
 import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
 import { labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import type { LabDetail } from '@/lib/schemas'
+import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { parseTopology } from '@/lib/topology'
 
 type Mode = 'visual' | 'text'
@@ -44,7 +45,10 @@ type Mode = 'visual' | 'text'
 export function BuildTab({ name }: { name: string }) {
   // Same cached query the layout resolved; never pending in practice.
   const { data: lab } = useQuery(labQueryOptions(name))
-  if (!lab) return null
+  // Waited for (settled, not necessarily live) so the parse gate and the
+  // palette agree on ONE device list for the life of the mount.
+  const catalog = useDeviceCatalog()
+  if (!lab || !catalog.ready) return null
   if (!lab.permissions.includes(PERM_LAB_EDIT)) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -52,10 +56,10 @@ export function BuildTab({ name }: { name: string }) {
       </p>
     )
   }
-  return <BuildTabInner lab={lab} />
+  return <BuildTabInner lab={lab} knownDevices={catalog.devices.map((d) => d.device)} />
 }
 
-function BuildTabInner({ lab }: { lab: LabDetail }) {
+function BuildTabInner({ lab, knownDevices }: { lab: LabDetail; knownDevices: string[] }) {
   const name = lab.name
   const queryClient = useQueryClient()
 
@@ -65,8 +69,9 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
     () =>
       lab.definition === null
         ? ({ ok: true, doc: emptyBuildDoc() } as const)
-        : parseBuildDoc(lab.definition),
-    [lab.definition],
+        : parseBuildDoc(lab.definition, knownDevices),
+    // knownDevices is settled for the mount's lifetime (BuildTab gates on it).
+    [lab.definition, knownDevices],
   )
 
   const [mode, setMode] = useState<Mode>(parsed.ok ? 'visual' : 'text')
@@ -109,9 +114,11 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
     if (lab.definition === syncedDefinition || dirty) return
     setSyncedDefinition(lab.definition)
     const next =
-      lab.definition === null ? ({ ok: true, doc: emptyBuildDoc() } as const) : parseBuildDoc(lab.definition)
+      lab.definition === null
+        ? ({ ok: true, doc: emptyBuildDoc() } as const)
+        : parseBuildDoc(lab.definition, knownDevices)
     if (next.ok) rawDispatch({ type: 'reset', doc: next.doc })
-  }, [lab.definition, syncedDefinition, dirty])
+  }, [lab.definition, syncedDefinition, dirty, knownDevices])
   const serverChanged = dirty && lab.definition !== syncedDefinition
 
   const [saveError, setSaveError] = useState<ApiError | null>(null)
@@ -127,7 +134,7 @@ function BuildTabInner({ lab }: { lab: LabDetail }) {
       setSaveError(null)
       toast.success(`Definition saved. Deploy ${name} to apply it.`)
       if (updated.definition !== null) {
-        const reparsed = parseBuildDoc(updated.definition)
+        const reparsed = parseBuildDoc(updated.definition, knownDevices)
         if (reparsed.ok) {
           rawDispatch({ type: 'reset', doc: reparsed.doc })
         } else {

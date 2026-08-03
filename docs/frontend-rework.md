@@ -243,8 +243,19 @@ User-stated, for after the frontend work:
 
 Frontend-driven wants that surfaced in this roadmap:
 
-- **Device/image catalog endpoint** — what devices/images can this deployment actually run
-  (feeds the builder palette; replaces the curated client-side list).
+- **Device/image catalog endpoint** — **DONE 2026-08-03 (contract delta 18, APPROVED)**.
+  `GET /catalog` serves the curated supported-device set (the tested platforms + linux host;
+  policy lives in `backend/services/device_catalog.py`, widening it is the NOS sweep's job) with
+  per-device netlab module support under the clab provider and the default clab image — both
+  mirrored from the installed netlab with drift-guard tests (the kmods pattern; the module rule
+  is provider-aware: linux's libvirt-only dhcp does NOT count) — plus best-effort image presence:
+  the runner (the Docker-socket holder) gained a dumb `GET /images` repo:tag listing, and the
+  backend owns the matching (untagged defaults normalize to `:latest`). Runner unreachable →
+  every `image_present` null behind `live=false`, never an error. Frontend: the builder's
+  hardcoded list became `use-device-catalog.ts` over the server catalog (modules intersected with
+  `BUILDER_MODULES`, static fallback until the query settles), the Build tab waits for the
+  catalog so `parseBuildDoc`'s (now parameterized) known-device gate and the palette agree on one
+  list per mount, and the palette + node inspector flag a missing default image.
 - **Cross-lab jobs endpoint** — **DONE 2026-07-30 (contract delta 15, APPROVED)**.
   `GET /jobs?limit=` (1-200, default 20) serves recent jobs over every readable lab in one
   indexed query, filtered by the events stream's readable-lab set — any authenticated user, and

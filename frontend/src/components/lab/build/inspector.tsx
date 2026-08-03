@@ -32,7 +32,8 @@ import {
   type BuildNode,
   type BuilderModule,
 } from '@/lib/build-doc'
-import { DEVICE_CATALOG, catalogDevice, deviceSupports } from '@/lib/device-catalog'
+import { catalogDevice, deviceSupports } from '@/lib/device-catalog'
+import { useDeviceCatalog } from '@/lib/use-device-catalog'
 
 import type { BuilderAction, BuilderState } from './build-state'
 
@@ -108,6 +109,7 @@ function toggled(list: readonly BuilderModule[], module: BuilderModule, checked:
 }
 
 function LabInspector({ doc, dispatch }: { doc: BuildDoc; dispatch: Dispatch<BuilderAction> }) {
+  const { devices } = useDeviceCatalog()
   const [vrfDraft, setVrfDraft] = useState('')
   const vrfError = vrfNameError(vrfDraft, doc)
   const memberCount = (vrf: string) =>
@@ -130,7 +132,7 @@ function LabInspector({ doc, dispatch }: { doc: BuildDoc; dispatch: Dispatch<Bui
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">(none — every node picks its own)</SelectItem>
-            {DEVICE_CATALOG.map((device) => (
+            {devices.map((device) => (
               <SelectItem key={device.device} value={device.device}>
                 {device.label}
               </SelectItem>
@@ -278,6 +280,7 @@ function NodeInspector({
   node: BuildNode
   dispatch: Dispatch<BuilderAction>
 }) {
+  const { devices } = useDeviceCatalog()
   const [nameDraft, setNameDraft] = useState(node.name)
   const draftError = nameError(nameDraft, doc, node.name)
   const commitName = () => {
@@ -287,7 +290,7 @@ function NodeInspector({
   }
 
   const effectiveDevice = node.device ?? doc.defaultDevice
-  const catalog = effectiveDevice !== undefined ? catalogDevice(effectiveDevice) : undefined
+  const catalog = effectiveDevice !== undefined ? catalogDevice(devices, effectiveDevice) : undefined
   const overridden = node.modules !== undefined
   const effectiveModules = node.modules ?? doc.modules
   const mplsVpnReady = (['mpls', 'bgp', 'vrf'] as const).every((m) => effectiveModules.includes(m))
@@ -331,7 +334,7 @@ function NodeInspector({
             {doc.defaultDevice !== undefined && (
               <SelectItem value="inherit">default ({doc.defaultDevice})</SelectItem>
             )}
-            {DEVICE_CATALOG.map((device) => (
+            {devices.map((device) => (
               <SelectItem key={device.device} value={device.device}>
                 {device.label}
               </SelectItem>
@@ -341,6 +344,12 @@ function NodeInspector({
         {effectiveDevice === undefined && (
           <p className="text-xs text-destructive">
             No device and no lab default — a device is required to save.
+          </p>
+        )}
+        {catalog !== undefined && catalog.imagePresent === false && (
+          <p className="text-xs text-muted-foreground">
+            {catalog.label}&apos;s default image is not present on the host — deploy will try to
+            pull it.
           </p>
         )}
       </div>
@@ -359,7 +368,7 @@ function NodeInspector({
                   modules: overridden
                     ? undefined
                     : doc.modules.filter(
-                        (m) => effectiveDevice === undefined || deviceSupports(effectiveDevice, m),
+                        (m) => effectiveDevice === undefined || deviceSupports(devices, effectiveDevice, m),
                       ),
                 },
               })
@@ -380,7 +389,7 @@ function NodeInspector({
               })
             }
             isDisabled={(module) =>
-              effectiveDevice !== undefined && !deviceSupports(effectiveDevice, module)
+              effectiveDevice !== undefined && !deviceSupports(devices, effectiveDevice, module)
             }
             disabledHint={
               catalog !== undefined ? `${catalog.label} does not support this module` : undefined

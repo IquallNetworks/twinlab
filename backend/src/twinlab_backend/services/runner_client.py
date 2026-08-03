@@ -27,6 +27,8 @@ _EXEC_TIMEOUT_SECONDS = 120.0
 # Readiness polls each node's SSH/console until the NOS boots (netlab budget ~100s
 # per node); allow more than the runner's own 200s cap so the HTTP call outlives it.
 _READY_TIMEOUT_SECONDS = 240.0
+# A local docker CLI read; outlive the runner's own 30s subprocess cap.
+_IMAGES_TIMEOUT_SECONDS = 40.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +71,10 @@ class _ConfigureResponse(BaseModel):
 class _ExecResponse(BaseModel):
     node: str
     stdout: str
+
+
+class _ImagesResponse(BaseModel):
+    images: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +155,24 @@ class RunnerClient:
         except ValidationError as exc:
             return Err(RunnerError("runner", f"unexpected ready response: {exc}"))
         return Ok(ReadyReport(ready=parsed.ready))
+
+    async def list_images(self) -> Result[frozenset[str], RunnerError]:
+        """The repo:tag image names present on the host Docker daemon (delta 18:
+        the catalog's image-presence source). The runner reports raw names;
+        normalization and matching stay here in the backend."""
+        try:
+            resp = await self.client.get(f"{self.base_url}/images", timeout=_IMAGES_TIMEOUT_SECONDS)
+        except httpx.HTTPError as exc:
+            return Err(RunnerError("transport", f"images request failed: {exc}"))
+
+        if resp.status_code != HTTPStatus.OK:
+            return Err(RunnerError("runner", f"images rejected: {resp.text}"))
+
+        try:
+            parsed = _ImagesResponse.model_validate_json(resp.content)
+        except ValidationError as exc:
+            return Err(RunnerError("runner", f"unexpected images response: {exc}"))
+        return Ok(frozenset(parsed.images))
 
     async def exec_command(
         self,

@@ -1,7 +1,12 @@
-// The builder's curated device catalog. Deliberately client-side and limited
-// to the devices this deployment has actually proven (CLAUDE.md "Current
-// State"); a backend catalog endpoint — what can THIS deployment run — is the
-// parked replacement (docs/frontend-rework.md).
+// The builder's device catalog SHAPE and module set. Since delta 18 the
+// device list itself comes from the server (`GET /catalog` — what THIS
+// deployment can run, with live image presence) via use-device-catalog.ts;
+// this module keeps the pure pieces: the builder's representable module set,
+// the catalog entry shape, list-parameterized lookups, and a static fallback
+// used only until the server catalog resolves (or when it errors).
+//
+// Pure module (no React, no zod) so lib/build-doc.ts stays runnable under a
+// plain node bundle.
 
 // The builder's module set: the netlab modules the visual builder can
 // represent (enough to build examples/mpls-l3vpn.yml). Everything else is
@@ -10,29 +15,44 @@ export const BUILDER_MODULES = ['ospf', 'bgp', 'mpls', 'vrf'] as const
 export type BuilderModule = (typeof BUILDER_MODULES)[number]
 
 export interface CatalogDevice {
-  device: 'vyos' | 'iol' | 'linux'
+  device: string
   label: string
   kind: 'router' | 'host'
-  // Which of the builder's modules the device can run, per
-  // `netlab show module-support` — the builder greys out the rest.
+  // Which of the builder's modules the device can run (the server catalog's
+  // netlab matrix intersected with BUILDER_MODULES) — the builder greys out
+  // the rest.
   modules: readonly BuilderModule[]
+  // Whether the device's default image exists on the host Docker daemon.
+  // null = unknown (catalog not live, or the static fallback).
+  imagePresent: boolean | null
 }
 
-export const DEVICE_CATALOG: readonly CatalogDevice[] = [
-  // VyOS and Cisco IOL are the two supported NOS platforms (the tested set —
-  // maintainer's call 2026-07-31); linux is the host/endpoint device. FRR was
-  // dropped: untested, and its clab config path (sh-mode via binds) is known
-  // not to survive Twinlab's inline deploy. A definition using another device
-  // still works — it just edits as text, not in the builder.
-  { device: 'vyos', label: 'VyOS', kind: 'router', modules: BUILDER_MODULES },
-  { device: 'iol', label: 'Cisco IOL', kind: 'router', modules: BUILDER_MODULES },
-  { device: 'linux', label: 'Linux host', kind: 'host', modules: [] },
+// Used only until `GET /catalog` answers: the last-known supported set (the
+// tested platforms + linux host), with image presence unknown. The server
+// catalog is authoritative the moment it resolves.
+export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
+  { device: 'vyos', label: 'VyOS', kind: 'router', modules: BUILDER_MODULES, imagePresent: null },
+  {
+    device: 'iol',
+    label: 'Cisco IOL',
+    kind: 'router',
+    modules: BUILDER_MODULES,
+    imagePresent: null,
+  },
+  { device: 'linux', label: 'Linux host', kind: 'host', modules: [], imagePresent: null },
 ]
 
-export function catalogDevice(device: string): CatalogDevice | undefined {
-  return DEVICE_CATALOG.find((entry) => entry.device === device)
+export function catalogDevice(
+  catalog: readonly CatalogDevice[],
+  device: string,
+): CatalogDevice | undefined {
+  return catalog.find((entry) => entry.device === device)
 }
 
-export function deviceSupports(device: string, module: BuilderModule): boolean {
-  return catalogDevice(device)?.modules.includes(module) ?? false
+export function deviceSupports(
+  catalog: readonly CatalogDevice[],
+  device: string,
+  module: BuilderModule,
+): boolean {
+  return catalogDevice(catalog, device)?.modules.includes(module) ?? false
 }

@@ -15,9 +15,11 @@ from starlette.concurrency import run_in_threadpool
 from netlab_runner.runner import (
     ConfigureOutcome,
     ExecOutcome,
+    ImagesOutcome,
     ReadyOutcome,
     configure,
     exec_command,
+    list_images,
     wait_ready,
 )
 
@@ -60,6 +62,27 @@ class ConfigureResponse(BaseModel):
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+class ImagesResponse(BaseModel):
+    images: list[str]
+
+
+@app.get("/images")
+async def images_endpoint() -> ImagesResponse:
+    # A local docker CLI read (delta 18: the backend's catalog checks image
+    # presence through it). No netlab state involved, so it skips the lock.
+    outcome = await run_in_threadpool(list_images)
+    if isinstance(outcome, ImagesOutcome):
+        return ImagesResponse(images=outcome.images)
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "stage": outcome.stage,
+            "message": outcome.message,
+            "output": outcome.output[-2000:],
+        },
+    )
 
 
 class ExecRequest(BaseModel):

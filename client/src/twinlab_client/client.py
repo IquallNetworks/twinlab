@@ -29,6 +29,7 @@ from twinlab_client.models import (
     ApiKey,
     ApiKeyCreated,
     CustomConfigResponse,
+    DeviceCatalog,
     Duration,
     Grant,
     GroupSummary,
@@ -381,6 +382,14 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def list_principals(self) -> Principals:
         """GET /principals — id+name of all users/groups, for grantors."""
         return _wire.parse_principals(await self._send_json("GET", "/principals"))
+
+    async def device_catalog(self) -> DeviceCatalog:
+        """GET /catalog — the deployable-device catalog (delta 18): the
+        supported device set with per-device module support, the default clab
+        image, and best-effort image presence (`live` False = presence could
+        not be checked). Image presence is advisory — deploy does not
+        pre-flight it."""
+        return _wire.parse_device_catalog(await self._send_json("GET", "/catalog"))
 
     # ------------------------------------------------------------------ #
     # Labs — lifecycle: create (record) -> author (PUTs) -> deploy

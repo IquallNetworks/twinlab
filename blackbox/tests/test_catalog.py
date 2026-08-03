@@ -1,4 +1,5 @@
-"""Role catalog and principals directory (any authenticated user)."""
+"""Role catalog, principals directory, and the device catalog (any
+authenticated user)."""
 
 from twinlab_client import TwinlabClient
 
@@ -48,6 +49,40 @@ async def test_catalog_visible_without_admin_roles(
     _, plain = await make_user_client(None)
     catalog = {role.name for role in await plain.list_roles()}
     assert catalog >= _EXPECTED_ROLES
+
+
+async def test_device_catalog_serves_supported_set(admin: TwinlabClient) -> None:
+    catalog = await admin.device_catalog()
+    by_device = {device.device: device for device in catalog.devices}
+    # The tested platforms (CLAUDE.md Current State) plus the linux host.
+    assert set(by_device) == {"vyos", "iol", "linux"}
+
+    # The builder's proven module set must be advertised by both routers.
+    for router in ("vyos", "iol"):
+        assert by_device[router].role == "router"
+        assert set(by_device[router].modules) >= {"ospf", "bgp", "mpls", "vrf"}, router
+    assert by_device["linux"].role == "host"
+
+    for device in catalog.devices:
+        assert device.label
+        assert device.image
+        # Presence is best-effort truth about THIS host, so assert its type,
+        # not its value — except that live must pin the None-ness either way.
+        if catalog.live:
+            assert device.image_present is not None
+        else:
+            assert device.image_present is None
+
+    # The compose stack ships the runner, so a healthy stack answers live.
+    assert catalog.live
+
+
+async def test_device_catalog_visible_without_admin_roles(
+    make_user_client: UserClientFactory,
+) -> None:
+    _, plain = await make_user_client(None)
+    catalog = await plain.device_catalog()
+    assert {device.device for device in catalog.devices} == {"vyos", "iol", "linux"}
 
 
 async def test_principals_visible_to_any_authenticated_user(

@@ -171,6 +171,22 @@ export const labFactsSchema = z.object({
 })
 export type LabFacts = z.infer<typeof labFactsSchema>
 
+export const catalogDeviceSchema = z.object({
+  device: z.string(), // netlab device slug; unpinned — the set widens by testing
+  label: z.string(),
+  role: z.enum(['router', 'host']),
+  modules: z.array(z.string()), // netlab vocabulary; the builder intersects
+  image: z.string(), // netlab's default clab image (untagged = ":latest")
+  image_present: z.boolean().nullable(), // null = presence unknown (see live)
+})
+export type CatalogDeviceWire = z.infer<typeof catalogDeviceSchema>
+
+export const deviceCatalogSchema = z.object({
+  devices: z.array(catalogDeviceSchema),
+  live: z.boolean(), // false = image presence could not be resolved
+})
+export type DeviceCatalogWire = z.infer<typeof deviceCatalogSchema>
+
 export const suiteReportSchema = z.object({
   suite: z.string(),
   stage: z.string(),

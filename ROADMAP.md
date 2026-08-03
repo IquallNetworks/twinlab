@@ -503,14 +503,14 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     Revocation (key delete, grant removal, user deactivation) bites on the
     next connection; established tunnels survive until closed.
 
-### Playwright e2e UX suite · **planned** (after the parked backend batch, BEFORE the release train)
+### Playwright e2e UX suite · **planned** (after the parked backend batch AND the NOS sweep, BEFORE the release train)
 
 14. **A comprehensive end-to-end test suite driving the real frontend with
     Playwright (Apache-2.0), verifying the UX** — decided 2026-07-31. Sequencing
-    is locked: it lands after the parked backend batch (test-suites rework,
-    definition input methods, scenarios, catalog endpoint, …) so the surfaces it
-    pins down are final, and before the v1.0 release train, which must not ship
-    without it. The black-box suite already proves the API contract through the
+    is locked: it lands after the parked backend batch (definition input
+    methods, scenarios, catalog endpoint, …) and the NOS platform sweep
+    (item 17) so the surfaces it pins down are final, and before the v1.0
+    release train, which must not ship without it. The black-box suite already proves the API contract through the
     client; this suite covers what that cannot — the browser layer: login/auth
     flows, role-gated affordances actually hidden/shown, the dashboard → lab
     tabs → builder → deploy → operate journeys, dialogs/toasts/empty states,
@@ -601,6 +601,48 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     `interactive` is a deliberate no-op over docker exec. Implementation
     train: backend → client → blackbox → the frozen frontend panel
     rebuild.
+
+### Parked backend batch — order agreed 2026-08-03 · **planned**
+
+16. **The remaining parked backend items** (detailed in
+    `docs/frontend-rework.md`'s parked list) run in this order, small quick
+    wins first, the two design-heavy items last:
+    1. **Device/image catalog endpoint** — **DONE 2026-08-03 (contract delta
+       18)**: `GET /catalog`, curated set + drift-guarded module/image
+       mirrors + best-effort presence via the runner's `GET /images`; the
+       builder now consumes it (outcome in `docs/frontend-rework.md`).
+    2. **Deployed-definition snapshot** ("definition drifted since deploy"
+       hints) + **server-side topology layout** (shared manual arrangements) —
+       a second small pair.
+    3. **Definition input methods** — full-network templates, single-node
+       templates, definitions built from real config files. Starts with a
+       design discussion, not a sketch.
+    4. **Scenario definition** — traffic between nodes/attached clients,
+       impairment schedules. The least-specified item; also starts with a
+       design discussion.
+    Each contract-touching item goes through the review gate
+    (sketch → user review → implement). Also due before the tag, independent
+    of this batch: **pin the fact-namespace subset** (the delta 17 resolution —
+    the raw netlab node dict is provisional; `GET /labs/{name}/facts` is the
+    insulation layer).
+
+### NOS platform sweep · **planned** (after the batch, BEFORE the Playwright suite; added 2026-08-03)
+
+17. **Research, obtain, and test as many NOSes as possible** — containerlab's
+    kinds list is the starting inventory, netlab's device list the cross-check.
+    We cannot *distribute* proprietary images (the open-source constraint
+    applies to what we ship, not what we test against), but we can obtain them
+    legitimately, confirm or deny Twinlab support per platform, and use them
+    ourselves. The expected side effect is the real payoff: every new NOS
+    stresses deploy, config push, interface naming, facts, parsing and
+    validation differently, so the sweep is also a bug hunt across the whole
+    stack before v1.0. Widening CLAUDE.md's supported set (VyOS + IOL) is
+    explicitly "a maintainer decision that starts with testing" — this item IS
+    that testing. Prior art: Nokia SR Linux is already proven end-to-end in the
+    parallel `nokia/` work; SR OS (TiMOS) is blocked on a client-provided
+    qcow2 + license (see `docs/nokia-sros.md`). Scope, the platform matrix, and
+    what "supported" formally requires (deploy? config push? facts? suites?)
+    are designed when picked up.
 
 ### Deferred items from the API review (2026-07-23) · **deferred**
 

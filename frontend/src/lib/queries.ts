@@ -23,6 +23,14 @@ export const rolesQueryOptions = queryOptions({
   staleTime: 300_000,
 })
 
+// The device catalog changes only with a backend upgrade or an image
+// pull/removal on the host; cache it like the role catalog.
+export const deviceCatalogQueryOptions = queryOptions({
+  queryKey: ['catalog'],
+  queryFn: () => api.deviceCatalog(),
+  staleTime: 300_000,
+})
+
 export const groupsQueryOptions = queryOptions({
   queryKey: ['groups'],
   queryFn: () => api.listGroups(),

@@ -39,6 +39,8 @@ _INITIAL_TIMEOUT_SECONDS = 600
 # One `netlab exec` (a single show command over ssh/docker) is quick; cap it so a
 # hung connection can't stall a validation poll.
 _EXEC_TIMEOUT_SECONDS = 60
+# `docker image ls` is a local daemon query; generous headroom for a busy host.
+_IMAGES_TIMEOUT_SECONDS = 30
 # `netlab initial --ready` polls each node's SSH/console until the NOS has booted;
 # netlab's default budget is 20 retries x 5s = 100s per node (concurrent), so give
 # it headroom for a slow IOL boot.
@@ -132,6 +134,40 @@ def aggregate(rows: list[NodeResult]) -> list[NodeResult]:
             )
         )
     return list(totals.values())
+
+
+@dataclass(frozen=True, slots=True)
+class ImagesOutcome:
+    images: list[str]
+
+
+def parse_image_lines(text: str) -> list[str]:
+    """`docker image ls --format '{{.Repository}}:{{.Tag}}'` output → repo:tag
+    names. Dangling/untagged entries (`<none>` on either side) are dropped —
+    nothing can deploy from them."""
+    return [
+        line for line in (raw.strip() for raw in text.splitlines()) if line and "<none>" not in line
+    ]
+
+
+def list_images() -> ImagesOutcome | RunnerError:
+    """The repo:tag names present on the host Docker daemon (via the mounted
+    socket). The runner only reports; matching a device's default image against
+    this list is the backend's policy (delta 18)."""
+    result = _run(
+        ["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"],
+        Path("/"),
+        _IMAGES_TIMEOUT_SECONDS,
+    )
+    if isinstance(result, str):
+        return RunnerError(stage="docker-images", message=result)
+    if result.returncode != 0:
+        return RunnerError(
+            stage="docker-images",
+            message=f"docker image ls exited {result.returncode}",
+            output=result.stdout + result.stderr,
+        )
+    return ImagesOutcome(images=parse_image_lines(result.stdout))
 
 
 def _lab_name(workdir: Path) -> str | None:

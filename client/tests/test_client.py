@@ -479,6 +479,67 @@ async def test_put_test_suites_shared_case_roundtrip(make_client: ClientFactory)
     assert response.test_suites == suites
 
 
+async def test_device_catalog_parses(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/catalog"
+        return httpx.Response(
+            200,
+            json={
+                "devices": [
+                    {
+                        "device": "vyos",
+                        "label": "VyOS",
+                        "role": "router",
+                        "modules": ["bgp", "mpls", "ospf", "vrf"],
+                        "image": "ghcr.io/sysoleg/vyos-container",
+                        "image_present": True,
+                    },
+                    {
+                        "device": "linux",
+                        "label": "Linux host",
+                        "role": "host",
+                        "modules": [],
+                        "image": "python:3.13-alpine",
+                        "image_present": None,
+                    },
+                ],
+                "live": True,
+            },
+        )
+
+    async with make_client(handler) as client:
+        catalog = await client.device_catalog()
+    assert catalog.live
+    assert [d.device for d in catalog.devices] == ["vyos", "linux"]
+    assert catalog.devices[0].role == "router"
+    assert catalog.devices[0].image_present is True
+    assert catalog.devices[1].image_present is None
+
+
+async def test_device_catalog_unknown_role_is_protocol_error(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "devices": [
+                    {
+                        "device": "vyos",
+                        "label": "VyOS",
+                        "role": "switch",
+                        "modules": [],
+                        "image": "x",
+                        "image_present": None,
+                    }
+                ],
+                "live": False,
+            },
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabProtocolError):
+            _ = await client.device_catalog()
+
+
 async def test_facts_returns_raw_node_namespace(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/labs/lab1/facts"

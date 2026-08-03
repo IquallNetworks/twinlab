@@ -60,7 +60,7 @@ it unset until the guard is implemented.
 | `test_api_keys.py`     | key lifecycle, Bearer auth, revocation, deactivation kills keys |
 | `test_users.py`        | CRUD, roles, password reset, activate toggle, last-admin guard |
 | `test_groups.py`       | CRUD, membership replace, global-only roles, permission inheritance |
-| `test_catalog.py`      | role catalog shapes, principals directory                    |
+| `test_catalog.py`      | role catalog shapes, principals directory, device catalog    |
 | `test_labs.py`         | create-record/author/visibility/destroy — the lifecycle split |
 | `test_lab_authoring.py`| test suites + custom-config templates on a record            |
 | `test_jobs.py`         | async jobs without deploys: remove-job pollable after delete, hiding, history |
@@ -69,13 +69,14 @@ it unset until the guard is implemented.
 | `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, power, terminal, events |
 | `test_ssh_jump.py`     | (`deploy`) real `ssh` probes through the jump host: permitopen scoping, revocation, fail-safe |
 
-The backend implements the full v1.0 contract (seventeen deltas — delta 12 made the four long
+The backend implements the full v1.0 contract (eighteen deltas — delta 12 made the four long
 operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the
 SSH jump host the ssh slices exercise; delta 14 the link table; deltas 15/16 the cross-lab job
 listing and the stream's job events, both covered in the cheap slice; delta 17 reworked test
 suites into the render/execute/parse/assert pipeline — the authoring slice covers the schema,
 facts endpoint and template validation, and the deploy slice runs a fact-templated ping whose
-RENDERED command is asserted against the link table), and the suite is
-**entirely green** (110/110 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+RENDERED command is asserted against the link table; delta 18 the device catalog, covered in the
+catalog slice), and the suite is
+**entirely green** (112/112 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

@@ -36,12 +36,12 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (seventeen deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (eighteen deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
-SSE stream — 14/15/16 approved 2026-07-30 — and delta 17 test-suites v2, approved item-by-item
-2026-08-03). Two non-compose
+SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
+2026-08-03, and delta 18 the device/image catalog, approved same day). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 110 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 112 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -64,9 +64,16 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   worked example — and linux-node initial config actually applies), and
   **test-suites v2 DONE 2026-08-03** (contract delta 17 — see the backend bullet; the frontend
   panel was rebuilt on the v2 wire: CodeEditor JSON authoring, a Facts viewer dialog, rendered
-  command + compare diff in results); still
-  parked: definition
-  input methods, scenarios, catalog endpoint, …; after that batch comes a
+  command + compare diff in results), and
+  **device catalog DONE 2026-08-03** (contract delta 18: `GET /catalog` — the curated supported
+  set with per-device netlab module support, default clab image, and best-effort image presence
+  via the runner's `GET /images`, behind a `live` honesty flag; the builder's hardcoded
+  `device-catalog.ts` became `use-device-catalog.ts` over the server list with a static fallback
+  until the query settles, `parseBuildDoc`'s known-device gate is a parameter so the parse gate
+  and palette share one list per mount, and palette/inspector flag a missing default image); still
+  parked, order agreed 2026-08-03 (ROADMAP item 16): snapshot + server-side
+  layout → definition input methods → scenarios; after that batch comes the **NOS platform
+  sweep** (ROADMAP item 17), then a
   comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
   the browser-layer complement to the blackbox suite), and only then the v1.0
   release train (publish `twinlab-client` to PyPI + tag) goes LAST). Phase 1 (graphical
@@ -204,7 +211,13 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   → 502 so the lookup script fails closed), `users/*`
   (list/create/get/roles/password-reset/activate-toggle/delete, with a
   **last-admin guard**: 409 on deactivating or deleting the only active admin), `groups/*`,
-  `roles`, `principals`, `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
+  `roles`, `principals`, **`GET /catalog`** (delta 18: the deployable-device catalog — curated
+  supported set (`services/device_catalog.py`), per-device module support under the clab provider
+  and default clab image both mirrored from the installed netlab with drift-guard tests, plus
+  best-effort image presence via the runner's `GET /images` — matching policy stays in the
+  backend, untagged names normalize to `:latest`; runner unreachable degrades to
+  `image_present=null` + `live=false`, never an error; any authenticated user),
+  `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
   live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
   `permissions` MASKED to the lab-scoped set). **Test suites v2** (contract delta 17, shipped
   2026-08-03 — Twinlab's own validation, not `netlab validate`, see ROADMAP item 15): declarative
@@ -346,7 +359,10 @@ exactly these. Other netlab devices are out of scope for now, not merely unpolis
 particular is untested AND its clab config path (sh-mode scripts delivered as clab binds) is known
 not to survive Twinlab's inline deploy, which strips `node_files/*` binds. A definition naming
 another device is not rejected — it edits as text and may even deploy — but nothing about it is
-promised. Widening the set is a maintainer decision that starts with testing, not a catalog edit.
+promised. Widening the set is a maintainer decision that starts with testing, not a catalog edit —
+a pre-v1.0 **NOS platform sweep** (ROADMAP item 17, added 2026-08-03) is planned as exactly that
+testing: obtain and exercise as many containerlab-kind NOSes as possible (images are used, never
+distributed) to confirm or deny support and shake out bugs before the release.
 
 **End-to-end deploy + config push is proven:** create → `PUT` the definition → `POST
 /labs/{name}/deploy` with `configure: true` (202 + job) → poll the job to `succeeded` → nodes

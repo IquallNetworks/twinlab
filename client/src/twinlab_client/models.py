@@ -249,6 +249,42 @@ class Grant:
     role: str
 
 
+# Pinned because Twinlab derives it (delta 18): netlab's own vocabulary for
+# linux devices is `role: host`; everything configurable is a router here.
+DeviceRole = Literal["router", "host"]
+DEVICE_ROLES: Final[tuple[DeviceRole, ...]] = ("router", "host")
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogDevice:
+    """One deployable device this deployment supports (delta 18).
+
+    The set is server-curated policy — the tested platforms plus the linux
+    host device. A definition naming an uncataloged device is not rejected;
+    it is simply unpromised."""
+
+    device: str  # netlab device slug ("vyos", "iol", "linux") — what a
+    #              definition's `device:` takes; the set widens as platforms
+    #              get tested, so it is not pinned.
+    label: str  # display name, e.g. "Cisco IOL"
+    role: DeviceRole
+    modules: list[str]  # netlab config modules the device can run (netlab's
+    #                     vocabulary; consumers intersect with what they author)
+    image: str  # netlab's default clab image (untagged means ":latest")
+    image_present: bool | None  # default image exists on the host Docker
+    #                             daemon — best-effort; None = could not check
+    #                             (see DeviceCatalog.live)
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceCatalog:
+    """`GET /catalog` — what this deployment can actually run (delta 18)."""
+
+    devices: list[CatalogDevice]
+    live: bool  # False = image presence could not be resolved; every
+    #             image_present is then None
+
+
 # --------------------------------------------------------------------------- #
 # Health shapes
 # --------------------------------------------------------------------------- #

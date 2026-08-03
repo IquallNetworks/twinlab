@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   apiKeyCreatedSchema,
   apiKeyListSchema,
+  deviceCatalogSchema,
   grantSchema,
   grantListSchema,
   groupListSchema,
@@ -162,6 +163,10 @@ export const api = {
   // The role catalog (names + scopes + permissions), served from the backend so
   // role pickers don't hardcode the list. Any authenticated user may read it.
   listRoles: () => request('/roles', roleListSchema),
+
+  // The deployable-device catalog (delta 18): supported devices with module
+  // support, default images, best-effort image presence. Any authenticated user.
+  deviceCatalog: () => request('/catalog', deviceCatalogSchema),
 
   // Minimal user+group directory (id + name) for the grant picker, available to any
   // authenticated caller (a lab owner may lack the global user/group-manage rights).

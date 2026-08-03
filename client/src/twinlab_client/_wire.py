@@ -16,6 +16,7 @@ from twinlab_client.models import (
     CONTAINER_STATES,
     DEPLOY_STATUSES,
     DESTROY_STATUSES,
+    DEVICE_ROLES,
     DURATION_UNITS,
     JOB_KINDS,
     JOB_STATUSES,
@@ -31,10 +32,12 @@ from twinlab_client.models import (
     ApiKey,
     ApiKeyCreated,
     BuiltinTemplate,
+    CatalogDevice,
     ConfigureResponse,
     CustomConfigResponse,
     DeployResponse,
     DestroyResponse,
+    DeviceCatalog,
     Duration,
     Grant,
     GroupMember,
@@ -138,6 +141,15 @@ def _get_opt_int(obj: dict[str, object], key: str, where: str) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise TwinlabProtocolError(where, f"{key!r}: expected integer, got {type(value).__name__}")
+    return value
+
+
+def _get_opt_bool(obj: dict[str, object], key: str, where: str) -> bool | None:
+    value = obj.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise TwinlabProtocolError(where, f"{key!r}: expected boolean, got {type(value).__name__}")
     return value
 
 
@@ -340,6 +352,28 @@ def parse_ssh_access(value: object) -> SshAccess:
         host=_get_opt_str(obj, "host", where),
         port=_get_opt_int(obj, "port", where),
         user=_get_opt_str(obj, "user", where),
+    )
+
+
+def parse_catalog_device(value: object) -> CatalogDevice:
+    where = "CatalogDevice"
+    obj = as_object(value, where)
+    return CatalogDevice(
+        device=_get_str(obj, "device", where),
+        label=_get_str(obj, "label", where),
+        role=_get_literal(obj, "role", where, DEVICE_ROLES),
+        modules=_get_str_list(obj, "modules", where),
+        image=_get_str(obj, "image", where),
+        image_present=_get_opt_bool(obj, "image_present", where),
+    )
+
+
+def parse_device_catalog(value: object) -> DeviceCatalog:
+    where = "DeviceCatalog"
+    obj = as_object(value, where)
+    return DeviceCatalog(
+        devices=[parse_catalog_device(v) for v in as_list(_req(obj, "devices", where), where)],
+        live=_get_bool(obj, "live", where),
     )
 
 

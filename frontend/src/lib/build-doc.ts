@@ -1,6 +1,6 @@
 import { parse, stringify } from 'yaml'
 
-import { BUILDER_MODULES, catalogDevice, type BuilderModule } from './device-catalog'
+import { BUILDER_MODULES, FALLBACK_DEVICE_CATALOG, type BuilderModule } from './device-catalog'
 
 // The builder's document model: a STRICT, typed subset of netlab syntax the
 // visual builder can faithfully edit and re-emit. parseBuildDoc is a gate,
@@ -107,12 +107,17 @@ function parseModuleList(value: unknown, where: string, reasons: string[]): Buil
   return modules
 }
 
-function parseDevice(value: unknown, where: string, reasons: string[]): string | undefined {
+function parseDevice(
+  value: unknown,
+  where: string,
+  reasons: string[],
+  knownDevices: readonly string[],
+): string | undefined {
   if (typeof value !== 'string') {
     reasons.push(`${where} must be a device name, got ${describe(value)}`)
     return undefined
   }
-  if (catalogDevice(value) === undefined) {
+  if (!knownDevices.includes(value)) {
     reasons.push(`${where} device "${value}" is not in the builder's catalog`)
     return undefined
   }
@@ -184,6 +189,7 @@ function parseNode(
   attrs: unknown,
   globalVrfs: readonly string[],
   reasons: string[],
+  knownDevices: readonly string[],
 ): BuildNode {
   const node: BuildNode = { name }
   if (!EXISTING_NAME_RE.test(name) || name.length > NODE_NAME_MAX) {
@@ -199,7 +205,7 @@ function parseNode(
   for (const [key, value] of Object.entries(attrs)) {
     switch (key) {
       case 'device':
-        node.device = parseDevice(value, `node "${name}":`, reasons)
+        node.device = parseDevice(value, `node "${name}":`, reasons, knownDevices)
         break
       case 'image':
         if (typeof value === 'string') node.image = value
@@ -305,7 +311,13 @@ function parseLinks(
 /** The strict gate: parse a stored definition into the builder's model,
  * collecting EVERY reason it can't be represented (never fail-fast — the
  * notice lists them all). */
-export function parseBuildDoc(definition: string): BuildDocResult {
+export function parseBuildDoc(
+  definition: string,
+  // The device slugs the builder may represent — the server catalog's set
+  // when available; the static fallback keeps the pure round-trip harness
+  // (and a degraded backend) working.
+  knownDevices: readonly string[] = FALLBACK_DEVICE_CATALOG.map((entry) => entry.device),
+): BuildDocResult {
   let raw: unknown
   try {
     raw = parse(definition)
@@ -331,12 +343,12 @@ export function parseBuildDoc(definition: string): BuildDocResult {
         else reasons.push('top-level "provider" must be a string')
         break
       case 'defaults.device':
-        doc.defaultDevice = parseDevice(value, 'default', reasons)
+        doc.defaultDevice = parseDevice(value, 'default', reasons, knownDevices)
         break
       case 'defaults':
         if (isRecord(value)) {
           for (const [defKey, defValue] of Object.entries(value)) {
-            if (defKey === 'device') doc.defaultDevice = parseDevice(defValue, 'default', reasons)
+            if (defKey === 'device') doc.defaultDevice = parseDevice(defValue, 'default', reasons, knownDevices)
             else reasons.push(`defaults key "${defKey}" is not supported by the builder`)
           }
         } else {
@@ -405,12 +417,13 @@ export function parseBuildDoc(definition: string): BuildDocResult {
     // A bare document (fresh lab) is representable; emit blocks an empty save.
   } else if (Array.isArray(rawNodes)) {
     for (const entry of rawNodes) {
-      if (typeof entry === 'string') doc.nodes.push(parseNode(entry, null, doc.vrfs, reasons))
+      if (typeof entry === 'string')
+        doc.nodes.push(parseNode(entry, null, doc.vrfs, reasons, knownDevices))
       else reasons.push(`node list entry ${describe(entry)} is not a plain name`)
     }
   } else if (isRecord(rawNodes)) {
     for (const [name, attrs] of Object.entries(rawNodes)) {
-      doc.nodes.push(parseNode(name, attrs, doc.vrfs, reasons))
+      doc.nodes.push(parseNode(name, attrs, doc.vrfs, reasons, knownDevices))
     }
   } else {
     reasons.push('"nodes" must be a mapping or a list of names')

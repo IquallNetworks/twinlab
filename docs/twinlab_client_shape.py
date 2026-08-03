@@ -125,6 +125,24 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     over docker exec, which already captures everything. (wire today: one
     command string per test, raw + json_path matchers only, no rendering,
     no parse stage, no interactive mode, no facts endpoint.)
+18. Device/image catalog (APPROVED 2026-08-03): ``GET /catalog`` serves what THIS
+    deployment can actually run — the server-curated supported device set
+    (the tested platforms of CLAUDE.md's Current State: vyos + iol, plus
+    the linux host/endpoint device). Per device: a display label, its
+    ``role`` (router | host), the netlab config modules it supports (the
+    FULL netlab matrix, mirrored with a drift-guard test — consumers
+    intersect it with whatever module set they can author), netlab's
+    default clab container image, and whether that image is PRESENT on the
+    host Docker daemon right now (best-effort via the netlab-runner, the
+    component that owns the Docker socket; ``live`` is the honesty flag —
+    the link-table pattern). Replaces the frontend builder's hardcoded
+    device list. Any authenticated user. The device SET is policy: the NOS
+    sweep (ROADMAP item 17) widens it by testing, never by a catalog edit;
+    a definition naming an uncataloged device stays accepted-but-unpromised
+    (text authoring is the escape hatch). Image presence is ADVISORY —
+    deploy does not pre-flight it (a separate parked decision). (wire
+    today: no catalog surface — `frontend/src/lib/device-catalog.ts`
+    hardcodes the list.)
 
 Conventions:
 
@@ -351,6 +369,54 @@ class Grant:
     principal_id: UUID
     principal_name: str | None
     role: str
+
+
+# --------------------------------------------------------------------------- #
+# Device catalog shapes (delta 18, APPROVED 2026-08-03)
+# --------------------------------------------------------------------------- #
+
+
+# Pinned because WE derive it (netlab's own vocabulary for linux devices is
+# `role: host`; everything configurable is a router here).
+DEVICE_ROLES = ("router", "host")
+DeviceRole = Literal["router", "host"]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogDevice:
+    """One deployable device this deployment supports (delta 18, APPROVED).
+
+    The set is server-curated POLICY — the tested platforms (CLAUDE.md's
+    Current State) plus the linux host device, NOT everything netlab could
+    name. A definition naming an uncataloged device is not rejected; it is
+    simply unpromised (text authoring stays the escape hatch)."""
+
+    device: str  # netlab device slug ("vyos", "iol", "linux") — the value a
+    #              definition's `device:` takes. Deliberately NOT a Literal:
+    #              the set widens as platforms get tested (the NOS sweep).
+    label: str  # display name, e.g. "Cisco IOL"
+    role: DeviceRole  # "router" = configurable NOS; "host" = plain container
+    modules: list[str]  # netlab config modules the device can run — the FULL
+    #                     netlab support matrix ("ospf", "bgp", …; passthrough,
+    #                     netlab owns the vocabulary). Consumers intersect it
+    #                     with whatever module set THEY can author (the visual
+    #                     builder's representable set is a frontend concern).
+    image: str  # netlab's default clab image for the device (an untagged name
+    #             means ":latest"); a definition may override per node, which
+    #             the catalog does not see.
+    image_present: bool | None  # default image exists on the host Docker
+    #                             daemon — best-effort; None = could not check
+    #                             (see DeviceCatalog.live)
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceCatalog:
+    """`GET /catalog` — what this deployment can actually run (delta 18)."""
+
+    devices: list[CatalogDevice]
+    live: bool  # False = image presence could not be resolved (the runner —
+    #             the Docker-socket holder — was unreachable); every
+    #             image_present is then None. Same honesty flag as LabLinks.
 
 
 # --------------------------------------------------------------------------- #
@@ -1220,6 +1286,16 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         """GET /principals. QUIRK (recorded in ROADMAP): exposes all
         user/group names to any authenticated user — accepted for now; revisit
         if enumeration becomes a concern."""
+        raise NotImplementedError
+
+    async def device_catalog(self) -> DeviceCatalog:
+        """PROPOSED (delta 18, APPROVED, not served yet) GET /catalog — the
+        deployable-device catalog: the supported device set with per-device
+        module support, the default clab image, and best-effort image
+        presence. Any authenticated user (it names no lab, and a deploy
+        error would reveal a missing image anyway). Image presence is
+        advisory — deploy does NOT pre-flight it; that check is a separate
+        parked decision."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #

@@ -18,7 +18,12 @@ import {
   labLinksSchema,
   labListSchema,
   labOwnerSchema,
+  networkTemplateListSchema,
+  networkTemplateSchema,
+  networkTemplateSummarySchema,
   nodeLogsResponseSchema,
+  nodeTemplateListSchema,
+  nodeTemplateSchema,
   nodeNetemSchema,
   principalsResponseSchema,
   roleListSchema,
@@ -136,6 +141,12 @@ export interface CreateGrantInput {
   role: string
 }
 
+export interface CreateNodeTemplateInput {
+  name: string
+  description: string
+  content: string // YAML node-attribute mapping; must name `device`
+}
+
 export const api = {
   me: () => request('/auth/me', userInfoSchema),
   login: (username: string, password: string) =>
@@ -212,6 +223,27 @@ export const api = {
 
   listLabs: () => request('/labs', labListSchema),
   getLab: (name: string) => request(`/labs/${encodeURIComponent(name)}`, labDetailSchema),
+
+  // Template library (delta 21): reads are any authenticated user; mutations
+  // ride the GLOBAL template:manage. Instantiation has no verb — compose
+  // networkTemplate() -> createLab() -> updateLabDefinition().
+  networkTemplates: () => request('/templates/network', networkTemplateListSchema),
+  networkTemplate: (name: string) =>
+    request(`/templates/network/${encodeURIComponent(name)}`, networkTemplateSchema),
+  nodeTemplates: () => request('/templates/node', nodeTemplateListSchema),
+  createNodeTemplate: (input: CreateNodeTemplateInput) =>
+    request('/templates/node', nodeTemplateSchema, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteNodeTemplate: (name: string) =>
+    requestVoid(`/templates/node/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  // The "use as a template" toggle: publish serves the entry, withdraw null.
+  setLabTemplate: (name: string, published: boolean, description: string | null) =>
+    request(`/labs/${encodeURIComponent(name)}/template`, networkTemplateSummarySchema.nullable(), {
+      method: 'PUT',
+      body: JSON.stringify({ published, description }),
+    }),
 
   // The lifecycle split: create a bare record (name only), author the definition
   // via PUT, then deploy from the stored definition. The four long operations

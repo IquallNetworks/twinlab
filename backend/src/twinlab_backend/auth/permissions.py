@@ -31,11 +31,16 @@ LAB_GRANT: Final = "lab:grant"  # manage bindings on this lab (delegate roles)
 LAB_CREATE: Final = "lab:create"  # create a brand-new lab (creator becomes owner)
 USER_MANAGE: Final = "user:manage"
 GROUP_MANAGE: Final = "group:manage"
+# Author the template library's user tier (delta 21): the lab publish toggle +
+# node-template CRUD. Library READS need no permission — any authenticated user.
+TEMPLATE_MANAGE: Final = "template:manage"
 
 LAB_SCOPED_PERMISSIONS: Final[frozenset[str]] = frozenset(
     {LAB_READ, LAB_EDIT, LAB_CONFIGURE, LAB_VALIDATE, LAB_TERMINAL, LAB_DESTROY, LAB_GRANT}
 )
-GLOBAL_ONLY_PERMISSIONS: Final[frozenset[str]] = frozenset({LAB_CREATE, USER_MANAGE, GROUP_MANAGE})
+GLOBAL_ONLY_PERMISSIONS: Final[frozenset[str]] = frozenset(
+    {LAB_CREATE, USER_MANAGE, GROUP_MANAGE, TEMPLATE_MANAGE}
+)
 ALL_PERMISSIONS: Final[tuple[str, ...]] = tuple(
     sorted(LAB_SCOPED_PERMISSIONS | GLOBAL_ONLY_PERMISSIONS)
 )
@@ -73,8 +78,11 @@ _LAB_VIEWER: Final = frozenset({LAB_READ})
 ROLE_CATALOG: Final[dict[str, RoleSpec]] = {
     # Global-bindable
     ADMIN_ROLE: RoleSpec(frozenset(ALL_PERMISSIONS), frozenset({SCOPE_GLOBAL})),
+    # template:manage: operators author labs, so curating the library's starting
+    # points fits the role (delta 21, approved 2026-08-04).
     "global_operator": RoleSpec(
-        frozenset({LAB_CREATE}) | LAB_SCOPED_PERMISSIONS, frozenset({SCOPE_GLOBAL})
+        frozenset({LAB_CREATE, TEMPLATE_MANAGE}) | LAB_SCOPED_PERMISSIONS,
+        frozenset({SCOPE_GLOBAL}),
     ),
     "global_viewer": RoleSpec(frozenset({LAB_READ}), frozenset({SCOPE_GLOBAL})),
     "creator": RoleSpec(frozenset({LAB_CREATE}), frozenset({SCOPE_GLOBAL})),

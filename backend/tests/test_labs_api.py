@@ -27,6 +27,7 @@ def _lab(name: str, status: str, owner: User | None) -> Lab:
     # server_default only fills on flush; set explicitly for the unsaved instance.
     lab.created_at = _TS
     lab.updated_at = _TS
+    lab.template_published = False
     return lab
 
 

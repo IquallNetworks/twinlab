@@ -36,14 +36,15 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (twenty deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (twenty-one deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
 2026-08-03, delta 18 the device/image catalog, delta 19 the deployed-definition snapshot +
-shared topology layout — both approved same day — and delta 20 group canvas styling on the
-layout resource, approved 2026-08-04). Two non-compose
+shared topology layout — both approved same day — delta 20 group canvas styling on the
+layout resource, approved 2026-08-04, and delta 21 the template library — input methods part
+one, approved same day with the reviewer-directed per-kind split). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 114 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 123 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -80,9 +81,18 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `layout-store.ts` (deleted; `SavedPositions` now lives in `topology/flow-types.ts`), the Build
   tab is the ONLY layout writer (auto-PUT on drag end, full-replace) and the Overview canvas is
   **read/operate-only** — `nodesDraggable={false}`, it renders the shared arrangement and waits
-  for the layout query to settle so the saved positions apply on first paint); still
+  for the layout query to settle so the saved positions apply on first paint), and
+  **template library DONE 2026-08-04** (contract delta 21 — see the backend bullet; the
+  create-lab dialog gained a "Start from" selector composing create + PUT of the template's
+  content, the builder's Add menu lists node templates stamped through `parseNodeFragment` —
+  the same typed-vs-extras split the doc parser applies, so a stamped node is indistinguishable
+  from a hand-authored one — the node inspector's General tab gained "Save as template", and
+  the lab header wears a `template` badge with a publish-toggle dialog in its `⋯` menu; the
+  library queries live under their own `['templates']` root so SSE lab bursts don't churn
+  them); still
   parked, order agreed 2026-08-03 (ROADMAP item 16; **builder link forms DONE 2026-08-04** —
-  see Phase 4 below): definition input methods → scenarios;
+  see Phase 4 below): definitions from real config files (input methods part two, deliberately
+  deferred at the 2026-08-04 design discussion — "gets a lot more complex") → scenarios;
   after that batch comes the **NOS platform
   sweep** (ROADMAP item 17), then a
   comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
@@ -253,6 +263,20 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   best-effort image presence via the runner's `GET /images` — matching policy stays in the
   backend, untagged names normalize to `:latest`; runner unreachable degrades to
   `image_present=null` + `live=false`, never an error; any authenticated user),
+  the **template library** (delta 21: TWO sibling collections with independent namespaces —
+  `GET /templates/network` (+`/{name}`) serves the builtin tier (packaged mirrors of
+  `examples/` in `services/network_templates.py`, drift-guard test keeps them byte-identical)
+  merged with PUBLISHED labs, each user-tier entry a LIVE view of its lab's stored definition
+  (published via `PUT /labs/{name}/template` — `template:manage` + `lab:read`, existence-hiding
+  checked FIRST; description required at publish, 409 `no_definition` on a bare record, 409
+  `name_taken` against a builtin; soft-delete and name revival withdraw, migration 0019); and
+  `GET/POST /templates/node` + `GET/PUT/DELETE /templates/node/{name}` — snapshot node
+  fragments, STRUCTURAL validation only (YAML mapping naming `device`, 64KB bound → 422
+  `invalid_template`; the receiving lab's PUT stays the real validator), `device` denormalized
+  for the list, the builtin node namespace reserved-but-empty. Reads any authenticated user;
+  mutations ride the NEW global-only `template:manage` (admin + global_operator);
+  `LabDetail.template_published` renders the toggle; NO instantiate verb — clients compose the
+  lifecycle),
   `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
   live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
   `permissions` MASKED to the lab-scoped set; **delta 19**: both carry `definition_drifted` —
@@ -343,7 +367,9 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   contract's catalog appendix): `lab:read` for reads/events/netem-show/suite-read, `lab:edit` for
   edit/deploy/suite-and-template-author, `lab:configure` for configure/power/save/netem-set (the
   automatic config-time run rides it), `lab:validate` for on-demand suite runs, `lab:terminal`,
-  `lab:destroy`, `lab:grant`; global-only `lab:create`, `user:manage`, `group:manage`. The clab-api
+  `lab:destroy`, `lab:grant`; global-only `lab:create`, `user:manage`, `group:manage`,
+  `template:manage` (delta 21 — authors the template library's user tier; reads need no
+  permission). The clab-api
   client (`services/clab_api.py`) routes every authenticated call through one `_authed` helper.
   Errors-as-values throughout; `try`/`except` only at the subprocess/httpx/pydantic boundaries.
 - **`netlab-runner/`** — FastAPI (uv) config-push sidecar. `POST /configure {definition}` runs

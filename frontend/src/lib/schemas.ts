@@ -109,6 +109,9 @@ export const labDetailSchema = z.object({
   updated_at: z.string(),
   nodes: z.array(labNodeStateSchema),
   config_time_status: configTimeStatusSchema,
+  // Delta 21: true while this lab is published as a network template (the
+  // PUT /labs/{name}/template toggle) — the header renders the toggle state.
+  template_published: z.boolean(),
   permissions: z.array(z.string()), // the caller's effective permissions on this lab
 })
 export type LabDetail = z.infer<typeof labDetailSchema>
@@ -206,6 +209,36 @@ export const deviceCatalogSchema = z.object({
   live: z.boolean(), // false = image presence could not be resolved
 })
 export type DeviceCatalogWire = z.infer<typeof deviceCatalogSchema>
+
+// --- Template library (delta 21): two sibling collections with independent
+// namespaces — /templates/network (complete definitions; builtin tier is
+// shipped, user tier is a PUBLISHED lab served live) and /templates/node
+// (single-node fragments the builder stamps into an open doc). ---
+export const templateTierSchema = z.enum(['builtin', 'user'])
+
+export const networkTemplateSummarySchema = z.object({
+  name: z.string(),
+  tier: templateTierSchema,
+  description: z.string(), // the library-card text
+  source_lab: z.string().nullable(), // user tier: the published lab (live view)
+})
+export type NetworkTemplateSummary = z.infer<typeof networkTemplateSummarySchema>
+export const networkTemplateListSchema = z.array(networkTemplateSummarySchema)
+
+export const networkTemplateSchema = networkTemplateSummarySchema.extend({
+  content: z.string(), // a complete netlab definition; PUT re-pins name/subnet
+})
+export type NetworkTemplate = z.infer<typeof networkTemplateSchema>
+
+export const nodeTemplateSchema = z.object({
+  name: z.string(),
+  tier: templateTierSchema,
+  description: z.string(),
+  device: z.string(), // the fragment's device (required in the fragment)
+  content: z.string(), // YAML node-attribute mapping, no node name
+})
+export type NodeTemplateWire = z.infer<typeof nodeTemplateSchema>
+export const nodeTemplateListSchema = z.array(nodeTemplateSchema)
 
 export const suiteReportSchema = z.object({
   suite: z.string(),

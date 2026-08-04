@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, CircleDot, Trash2, Unlink, X } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bookmark, ChevronDown, ChevronRight, CircleDot, Trash2, Unlink, X } from 'lucide-react'
 import { useState, type Dispatch } from 'react'
+import { toast } from 'sonner'
 
 import {
   AlertDialog,
@@ -15,6 +16,14 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +45,7 @@ import {
   NODE_NAME_MAX,
   NODE_NAME_RE,
   declaredVrfs,
+  emitNodeFragment,
   extrasOwn,
   groupExtrasKeyError,
   labExtrasKeyError,
@@ -49,9 +59,11 @@ import {
   type BuilderModule,
   type LinkEndpoint,
 } from '@/lib/build-doc'
+import { api } from '@/lib/api'
 import { catalogDevice, deviceSupports } from '@/lib/device-catalog'
+import { toastError } from '@/lib/error-toast'
 import { GROUP_PALETTE, groupColor, type GroupStyles } from '@/lib/group-colors'
-import { customConfigQueryOptions } from '@/lib/queries'
+import { customConfigQueryOptions, meQueryOptions, nodeTemplatesQueryOptions } from '@/lib/queries'
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { cn } from '@/lib/utils'
 
@@ -736,6 +748,107 @@ function LabInspector({
   )
 }
 
+// Template names share the lab/node identifier charset (server-enforced).
+const TEMPLATE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/
+
+/** "Save as template" (delta 21): snapshot this node's attributes — minus its
+ * name — into the deployment-wide node collection. Rendered only for holders
+ * of the GLOBAL template:manage (the library-authoring gate). */
+function SaveNodeTemplate({ doc, node }: { doc: BuildDoc; node: BuildNode }) {
+  const { data: me } = useQuery(meQueryOptions)
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState(node.name)
+  const [description, setDescription] = useState('')
+  // A template must STATE its device (it stamps into labs with other
+  // defaults), so a node riding the doc's defaults.device gets it written
+  // into the fragment explicitly.
+  const device = node.device ?? doc.defaultDevice
+  const fragment = device === undefined ? null : emitNodeFragment({ ...node, device })
+  const save = useMutation({
+    mutationFn: (content: string) => api.createNodeTemplate({ name, description, content }),
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({ queryKey: nodeTemplatesQueryOptions.queryKey })
+      toast.success(`Node template ${created.name} saved — it's now in the Add menu`)
+      setOpen(false)
+    },
+    onError: (err) => toastError(err, 'Saving the template failed'),
+  })
+  if (!(me?.permissions.includes('template:manage') ?? false)) return null
+  const invalidName = !TEMPLATE_NAME_RE.test(name) || name.length > 64
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="justify-start gap-2 text-muted-foreground"
+        disabled={fragment === null}
+        title={
+          fragment === null
+            ? 'The node needs a device (and something to save) first'
+            : 'Save this node’s attributes as a reusable template'
+        }
+        onClick={() => {
+          setName(node.name)
+          setDescription('')
+          setOpen(true)
+        }}
+      >
+        <Bookmark className="size-3.5" />
+        Save as template
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save node as template</DialogTitle>
+            <DialogDescription>
+              Snapshots this node&apos;s attributes (device, modules, protocol settings, advanced
+              properties — not its name or links) into the deployment-wide library. Anyone can
+              stamp it from the builder&apos;s Add menu.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="node-template-name">Template name</Label>
+              <Input
+                id="node-template-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                aria-invalid={name.length > 0 && invalidName}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="node-template-description">Description</Label>
+              <Input
+                id="node-template-description"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="What this node is set up as"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={
+                fragment === null || invalidName || description.trim() === '' || save.isPending
+              }
+              onClick={() => {
+                if (fragment !== null) save.mutate(fragment)
+              }}
+            >
+              {save.isPending ? 'Saving…' : 'Save template'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
 function NodeInspector({
   doc,
   node,
@@ -952,6 +1065,7 @@ function NodeInspector({
         <CircleDot className="size-3.5" />
         Add stub link
       </Button>
+      <SaveNodeTemplate doc={doc} node={node} />
       <Button
         variant="outline"
         size="sm"

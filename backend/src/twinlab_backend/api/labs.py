@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from twinlab_backend.api.jobs import SessionFactory, job_out, spawn_job
+from twinlab_backend.api.templates import published_lab_summary
 from twinlab_backend.api_errors import ApiError
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import CurrentUserDep, require_global, require_lab
@@ -32,6 +33,7 @@ from twinlab_backend.deps import (
     BuiltinLibraryDep,
     ClabClientDep,
     HostPrepDep,
+    NetworkTemplatesDep,
     RunnerClientDep,
     SessionDep,
     SettingsDep,
@@ -58,12 +60,14 @@ from twinlab_backend.models import (
     LabNodeState,
     LabStatus,
     LabSummary,
+    LabTemplateSet,
     LayoutGroupStyle,
     LayoutPosition,
     LinkEndpoint,
     LinkOperState,
     NetemImpairment,
     NetemSetRequest,
+    NetworkTemplateSummary,
     NodeConfigResult,
     NodeInterface,
     NodeInterfaces,
@@ -277,6 +281,7 @@ def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str]) ->
         nodes=[_to_node_state(n) for n in nodes],
         config_time_status=_config_time_status(lab.config_time_ok),
         permissions=_lab_scoped(permissions),
+        template_published=lab.template_published,
     )
 
 
@@ -1391,6 +1396,42 @@ async def put_layout(
     if isinstance(updated, lab_store.LabStoreError):
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _layout_response(updated)
+
+
+# The publish toggle (contract delta 21). Guard order matters: require_lab
+# first, so a caller who can't even read the lab gets the existence-hiding 404
+# before the global template:manage check can say 403.
+@router.put(
+    "/{lab_name}/template",
+    dependencies=[
+        Depends(require_lab(perms.LAB_READ)),
+        Depends(require_global(perms.TEMPLATE_MANAGE)),
+    ],
+)
+async def set_lab_template(
+    lab_name: LabName,
+    request: LabTemplateSet,
+    db: SessionDep,
+    library: NetworkTemplatesDep,
+) -> NetworkTemplateSummary | None:
+    """Publish this lab's stored definition into the network collection as a
+    LIVE template, or withdraw it. lab:read suffices beside template:manage —
+    publishing changes the LIBRARY, not the lab. Returns the resulting entry,
+    None once withdrawn. Re-publishing just updates the description."""
+    if request.published:
+        lab = await lab_store.get_lab(db, lab_name)
+        if lab is None:
+            raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+        if lab.definition is None:
+            raise ApiError(409, "no_definition", f"lab '{lab_name}' has no definition to publish")
+        if lab_name in library.names:
+            raise ApiError(409, "name_taken", f"'{lab_name}' is a builtin template name")
+    updated = await lab_store.set_template_publication(
+        db, lab_name, published=request.published, description=request.description
+    )
+    if isinstance(updated, lab_store.LabStoreError):
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    return published_lab_summary(updated) if request.published else None
 
 
 async def _destroy_job(

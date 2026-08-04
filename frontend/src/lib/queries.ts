@@ -31,6 +31,28 @@ export const deviceCatalogQueryOptions = queryOptions({
   staleTime: 300_000,
 })
 
+// Template library (delta 21). Its own root — not under ['labs'] — so SSE
+// bursts don't churn it; publish/save mutations invalidate ['templates']
+// explicitly. Network entries move only on publish/withdraw (and lab PUTs
+// behind a published entry, whose content is fetched per selection anyway).
+export const networkTemplatesQueryOptions = queryOptions({
+  queryKey: ['templates', 'network'],
+  queryFn: () => api.networkTemplates(),
+  staleTime: 60_000,
+})
+
+export const nodeTemplatesQueryOptions = queryOptions({
+  queryKey: ['templates', 'node'],
+  queryFn: () => api.nodeTemplates(),
+  staleTime: 60_000,
+})
+
+export const networkTemplateQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['templates', 'network', name],
+    queryFn: () => api.networkTemplate(name),
+  })
+
 export const groupsQueryOptions = queryOptions({
   queryKey: ['groups'],
   queryFn: () => api.listGroups(),

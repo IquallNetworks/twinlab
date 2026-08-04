@@ -32,6 +32,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -44,7 +51,7 @@ import {
 import { api, waitJob } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
 import { formatDateTime } from '@/lib/format'
-import { labsQueryOptions, meQueryOptions } from '@/lib/queries'
+import { labsQueryOptions, meQueryOptions, networkTemplatesQueryOptions } from '@/lib/queries'
 import { useDocumentTitle } from '@/lib/use-document-title'
 
 const PERM_LAB_CREATE = 'lab:create'
@@ -63,9 +70,14 @@ const createSchema = z.object({
     ),
 })
 
+// The create dialog's "start from" choice: blank, or a network template name.
+const BLANK_TEMPLATE = '__blank__'
+
 /** Create a bare lab record (the lifecycle split's first step) and jump to its
  * detail page, where the definition is authored and deployed. Open state is
- * the page's: the command palette can open it via ?new=1. */
+ * the page's: the command palette can open it via ?new=1. A network template
+ * (delta 21) seeds the definition: instantiation is plain clone-and-edit —
+ * create, then PUT the template's content (which re-pins name/subnet). */
 function CreateLabDialog({
   open,
   onOpenChange,
@@ -75,12 +87,31 @@ function CreateLabDialog({
 }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const templates = useQuery(networkTemplatesQueryOptions)
+  const [template, setTemplate] = useState(BLANK_TEMPLATE)
 
   const create = useMutation({
-    mutationFn: (value: z.infer<typeof createSchema>) => api.createLab(value.name),
+    mutationFn: async (value: z.infer<typeof createSchema>) => {
+      const lab = await api.createLab(value.name)
+      if (template === BLANK_TEMPLATE) return lab
+      // Not atomic: a failed seed leaves a bare record, which the lab page
+      // surfaces honestly (the author-your-definition empty state) — report
+      // the failure but still land on the created lab.
+      try {
+        const source = await api.networkTemplate(template)
+        return await api.updateLabDefinition(lab.name, source.content)
+      } catch (err) {
+        toastError(err, `Seeding from ${template} failed — the lab was created empty`)
+        return lab
+      }
+    },
     onSuccess: async (lab) => {
       await queryClient.invalidateQueries({ queryKey: labsQueryOptions.queryKey })
-      toast.success(`Lab ${lab.name} created — author its definition, then deploy`)
+      toast.success(
+        lab.definition === null
+          ? `Lab ${lab.name} created — author its definition, then deploy`
+          : `Lab ${lab.name} created from ${template} — review, then deploy`,
+      )
       onOpenChange(false)
       await navigate({ to: '/labs/$name', params: { name: lab.name } })
     },
@@ -100,7 +131,10 @@ function CreateLabDialog({
       open={open}
       onOpenChange={(next) => {
         onOpenChange(next)
-        if (!next) form.reset()
+        if (!next) {
+          form.reset()
+          setTemplate(BLANK_TEMPLATE)
+        }
       }}
     >
       <DialogTrigger asChild>
@@ -143,6 +177,33 @@ function CreateLabDialog({
                 </div>
               )}
             </form.Field>
+
+            {(templates.data?.length ?? 0) > 0 && (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="create-lab-template">Start from</Label>
+                <Select value={template} onValueChange={setTemplate}>
+                  <SelectTrigger id="create-lab-template" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={BLANK_TEMPLATE}>Blank lab</SelectItem>
+                    {templates.data?.map((entry) => (
+                      <SelectItem key={entry.name} value={entry.name}>
+                        {entry.name}
+                        <span className="text-muted-foreground">
+                          {entry.tier === 'builtin' ? ' · built-in' : ' · published lab'}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {template !== BLANK_TEMPLATE && (
+                  <p className="text-xs text-muted-foreground">
+                    {templates.data?.find((entry) => entry.name === template)?.description}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <DialogFooter>

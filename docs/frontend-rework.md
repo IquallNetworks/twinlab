@@ -237,7 +237,14 @@ User-stated, for after the frontend work:
 
 - **Test-suites rework** — the suite mechanism itself is changing; frontend follows.
 - **Definition input methods** — full-network templates, single-node templates, full network
-  from config files, single node from config file, …
+  from config files, single node from config file, … **Part one DONE 2026-08-04 (contract
+  delta 21, APPROVED)**: the template library — `/templates/network` (builtin tier = packaged
+  `examples/` mirrors; user tier = labs published live via `PUT /labs/{name}/template`) and
+  `/templates/node` (snapshot fragments), gated by the new global-only `template:manage`.
+  Frontend: create-lab "Start from" selector, node templates in the builder's Add menu
+  (stamped through `parseNodeFragment`), "Save as template" in the node inspector, and the
+  lab header's publish-toggle dialog + `template` badge. Config-file import (part two) stays
+  parked — deferred at the design discussion until after templates and scenarios.
 - **Scenario definition** — specific/random traffic between nodes or between "clients" attached
   to edge nodes; specific/random impairment schedules on the network.
 

@@ -417,6 +417,47 @@ function parseNode(
   return node
 }
 
+export type NodeFragmentResult =
+  | { ok: true; node: BuildNode & { device: string } }
+  | { ok: false; reason: string }
+
+/** Parse a node-template fragment (a YAML mapping of node attributes, no node
+ * name — delta 21) through the same typed-vs-extras split parseBuildDoc
+ * applies to a node, so a stamped node is indistinguishable from a
+ * hand-authored one. The fragment must name a cataloged device — the same
+ * POLICY gate the parser applies (an uncataloged device is text-editor
+ * territory). `name` is the node name the stamp will use. */
+export function parseNodeFragment(
+  fragment: string,
+  name: string,
+  knownDevices: readonly string[],
+): NodeFragmentResult {
+  let raw: unknown
+  try {
+    raw = parse(fragment)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { ok: false, reason: `not valid YAML: ${message}` }
+  }
+  if (!isRecord(raw)) {
+    return { ok: false, reason: 'a node template must be a mapping of node attributes' }
+  }
+  const reasons: string[] = []
+  const node = parseNode(name, raw, reasons, knownDevices)
+  const reason = reasons[0]
+  if (reason !== undefined) return { ok: false, reason }
+  const device = node.device
+  if (device === undefined) return { ok: false, reason: 'the template names no device' }
+  return { ok: true, node: { ...node, device } }
+}
+
+/** A node's attributes as a template fragment — the node minus its name
+ * (re-chosen at stamp time). Null when the node carries nothing to save. */
+export function emitNodeFragment(node: BuildNode): string | null {
+  const out = nodeYaml(node)
+  return out === null ? null : stringify(out)
+}
+
 /** Groups parse per-group: members/config in their exact shapes are typed,
  * every other key rides that group's extras. A groups mapping whose VALUES
  * are not all mappings (e.g. a `_auto_create: true` toggle at the groups

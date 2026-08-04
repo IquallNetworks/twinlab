@@ -217,6 +217,15 @@ class Lab(Base):
     # library on every configure. Built-ins live in code, not here. Never sent to
     # `netlab create`. NULL means the lab has no user templates.
     custom_config: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # Template publication (contract delta 21): while True this lab's stored
+    # definition is served as a user-tier NETWORK template — a live view of
+    # this row, never a copy. The description is the library-card text, set on
+    # the publish toggle (required at publish). Withdrawn (both reset) on
+    # soft-delete and on name revival — a fresh record inherits no publication.
+    template_published: Mapped[bool] = mapped_column(
+        Boolean(), default=False, server_default=text("false")
+    )
+    template_description: Mapped[str | None] = mapped_column(String(255), default=None)
     # The host bridges this lab's deploy created via the hostprep sidecar (the
     # `name[0:10]_linkindex` bridges multi-access links need) — the lab's CLAIM
     # on host state, written before the clab deploy so cleanup always knows
@@ -294,6 +303,33 @@ class Job(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class NodeTemplate(Base):
+    """A user-tier node template (contract delta 21): a reusable single-node
+    attribute fragment the builder's Add menu stamps into a definition under a
+    caller-chosen node name. `content` is a YAML mapping validated structurally
+    at write (parseable, names `device`, bounded) — the receiving lab's PUT
+    dry-run stays the real validator. `device` is denormalized from the
+    fragment at write so the list view renders like a catalog entry without
+    parsing content. Built-in node templates would live in code beside the
+    network ones (none shipped yet)."""
+
+    __tablename__ = "node_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    description: Mapped[str] = mapped_column(String(255))
+    device: Mapped[str] = mapped_column(String(64))
+    content: Mapped[str] = mapped_column(Text())
+    # Audit only (SET NULL: deleting the author keeps the shared template).
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ApiKey(Base):

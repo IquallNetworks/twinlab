@@ -182,6 +182,42 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     ``groups: {}``. Groups without an entry render with a deterministic
     client-side default (name-hashed palette); the map records explicit
     choices only. (wire today: layout is positions-only, delta 19.)
+21. Template library (APPROVED 2026-08-04; revised at review — per-KIND
+    collections instead of one flat catalog): definition input methods,
+    part one — reusable starting points, all CLONE-AND-EDIT (an
+    instantiated template is copied, never linked; parameterized templates
+    are a recorded future consideration, as is builder support for
+    netlab's native ``components``; config-file import is deferred until
+    after this ships). TWO sibling collections under one prefix — nothing
+    ever consumes "a template of either kind" (the create-lab flow reads
+    network entries, the builder palette reads node entries), so they
+    share NO namespace: ``/templates/network`` (complete netlab
+    definitions — a new lab's starting point) and ``/templates/node``
+    (single-node attribute fragments the builder's Add menu stamps into
+    an open doc). TWO tiers each: ``builtin`` (shipped read-only, seeded
+    from the repo ``examples/``) and ``user`` (authored at runtime,
+    deployment-wide). Reads are any authenticated user (the library names
+    no lab); user-tier authoring rides a NEW global-only permission
+    ``template:manage``. User-tier NETWORK templates are not standalone
+    records: a lab is PUBLISHED into the collection via a toggle (``PUT
+    /labs/{name}/template``) and the entry is a LIVE VIEW of that lab's
+    stored definition — the lab is the authoring surface (validation, the
+    builder, even test deploys come free), unpublish = flip off,
+    soft-deleting the lab withdraws the entry; the network collection
+    therefore has NO delete route (builtins are fixed, the toggle is the
+    user tier's whole lifecycle). Publishing EXPOSES the definition to
+    every authenticated user — deliberate, and why the gate is
+    template:manage. Node templates are snapshots (POST/PUT/DELETE), a
+    YAML mapping that MUST name ``device`` (a node's device is intentful);
+    validation is STRUCTURAL only — a fragment may lean on lab-level
+    constructs (vrfs, groups) no standalone dry netlab run could see, so
+    the receiving lab's PUT stays the real validator. Instantiation has NO
+    verb: clients compose get_network_template → create_lab →
+    update_definition, or stamp the fragment client-side. Names are
+    unique PER COLLECTION — 409 ``name_taken`` within a kind only, a node
+    template can never block publishing a lab. (wire today: no template
+    surface — the create-lab flow starts blank and the builder's Add menu
+    offers bare catalog devices only.)
 
 Conventions:
 
@@ -459,6 +495,64 @@ class DeviceCatalog:
 
 
 # --------------------------------------------------------------------------- #
+# Template library shapes (delta 21, APPROVED)
+# --------------------------------------------------------------------------- #
+
+
+TEMPLATE_TIERS = ("builtin", "user")
+TemplateTier = Literal["builtin", "user"]
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkTemplateSummary:
+    """APPROVED (delta 21): one network-collection entry, content omitted
+    (the definition is fetched on selection). Names are unique within the
+    NETWORK collection only — the review replaced the flat cross-kind
+    namespace with per-kind collections (nothing consumes "a template of
+    either kind", so a shared namespace only manufactured collisions)."""
+
+    name: str
+    tier: TemplateTier
+    description: str  # the library-card text. builtin: shipped; published
+    #                   lab: set on the publish toggle
+    source_lab: str | None  # user tier: the published lab this entry mirrors
+    #                         (LIVE — the entry always serves the lab's
+    #                         CURRENT stored definition). None on builtins.
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkTemplate:
+    """APPROVED (delta 21): `GET /templates/network/{name}` — the entry
+    plus its content: a complete netlab definition. Any `name:`/mgmt
+    pinning inside it is irrelevant — instantiation goes through the
+    normal lifecycle, where PUT re-pins both."""
+
+    name: str
+    tier: TemplateTier
+    description: str
+    source_lab: str | None
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class NodeTemplate:
+    """APPROVED (delta 21): one node-collection entry. No summary/detail
+    split: `content` — a YAML node-ATTRIBUTE mapping carrying no node name
+    (the name is chosen at stamp time) — is small and bounded, and the
+    builder palette stamps straight from the list, so the list serves
+    full entries."""
+
+    name: str
+    tier: TemplateTier
+    description: str
+    device: str  # the fragment's `device`, REQUIRED in the fragment (a
+    #              node's device is intentful — house rule; 422 without it),
+    #              surfaced so the palette renders the entry like a
+    #              CatalogDevice (icon, image-missing warning)
+    content: str
+
+
+# --------------------------------------------------------------------------- #
 # Health shapes
 # --------------------------------------------------------------------------- #
 
@@ -579,6 +673,11 @@ class LabDetail:  # No Summary/Detail split for v1.0 (see LabSummary note).
     # finding 2026-08-03, live-verified).
     deployed_definition: str | None
     definition_drifted: bool | None  # delta 19 — see LabSummary
+    # PROPOSAL (delta 21, APPROVED): True while this lab is published as a
+    # network template (the set_lab_template toggle) — the lab page renders
+    # the toggle's state from here. Detail-only: the labs LIST doesn't carry
+    # it (the library view is GET /templates/network).
+    template_published: bool
     owner: Principal | None  # APPROVED — wire today: bare username string
     created_at: datetime
     updated_at: datetime
@@ -1410,6 +1509,100 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
+    # Template library (delta 21, APPROVED)
+    # ------------------------------------------------------------------ #
+
+    # Two sibling collections under /templates — per-kind, per the review
+    # (no consumer wants the union; namespaces are independent). The
+    # lab-publication toggle (set_lab_template) is a /labs route but is
+    # grouped here so the whole delta reads in one place.
+
+    async def list_network_templates(self) -> list[NetworkTemplateSummary]:
+        """PROPOSED (delta 21, APPROVED, not served yet) GET
+        /templates/network — both tiers, content omitted. Any
+        authenticated user (the library names no lab; a published lab's
+        definition is deliberately deployment-public — see
+        set_lab_template)."""
+        raise NotImplementedError
+
+    async def get_network_template(self, name: str) -> NetworkTemplate:
+        """PROPOSED (delta 21, APPROVED, not served yet) GET
+        /templates/network/{name} — the entry with its content. For a
+        published-lab entry the content is that lab's CURRENT stored
+        definition (a live view, never a stale copy). 404
+        ``template_not_found``."""
+        raise NotImplementedError
+
+    async def list_node_templates(self) -> list[NodeTemplate]:
+        """PROPOSED (delta 21, APPROVED, not served yet) GET
+        /templates/node — both tiers, FULL entries (fragments are small
+        and bounded; the builder palette stamps straight from the list,
+        no per-click fetch). Any authenticated user."""
+        raise NotImplementedError
+
+    async def get_node_template(self, name: str) -> NodeTemplate:
+        """PROPOSED (delta 21, APPROVED, not served yet) GET
+        /templates/node/{name}. 404 ``template_not_found``."""
+        raise NotImplementedError
+
+    async def create_node_template(
+        self, name: str, *, description: str, content: str
+    ) -> NodeTemplate:
+        """PROPOSED (delta 21, APPROVED, not served yet) POST
+        /templates/node — global template:manage; 201 (the builder's
+        inspector offers "save node as template" over this). The NETWORK
+        collection has no POST: network templates enter the library by
+        publishing a lab, because authoring one IS authoring a lab.
+        `content` is a YAML node-attribute mapping that MUST name
+        `device`. Validation is STRUCTURAL only (parseable mapping, device
+        present, bounded size — the definition bounds): a fragment may
+        lean on lab-level constructs (vrfs, groups) that no standalone dry
+        netlab run could see, so the receiving lab's PUT stays the real
+        validator. 409 ``name_taken`` (within the node collection); 422
+        ``invalid_template``."""
+        raise NotImplementedError
+
+    async def update_node_template(
+        self, name: str, *, description: str, content: str
+    ) -> NodeTemplate:
+        """PROPOSED (delta 21, APPROVED, not served yet) PUT
+        /templates/node/{name} — global template:manage. Full REPLACE
+        (description AND content, house semantics) of a USER-tier entry.
+        409 ``template_readonly`` on a builtin."""
+        raise NotImplementedError
+
+    async def delete_node_template(self, name: str) -> None:
+        """PROPOSED (delta 21, APPROVED, not served yet) DELETE
+        /templates/node/{name} — global template:manage; 204. USER tier
+        only: 409 ``template_readonly`` on a builtin. (The NETWORK
+        collection has no DELETE: builtins are fixed, and the user tier's
+        whole lifecycle is the set_lab_template toggle.)"""
+        raise NotImplementedError
+
+    async def set_lab_template(
+        self, name: str, *, published: bool, description: str | None = None
+    ) -> NetworkTemplateSummary | None:
+        """PROPOSED (delta 21, APPROVED, not served yet) PUT
+        /labs/{name}/template — the lab page's "use as a template" toggle:
+        publishes this lab's stored definition into the NETWORK collection
+        as a LIVE template, or withdraws it. Global template:manage PLUS
+        lab:read (404 existence-hiding as usual; read suffices because
+        publishing changes the LIBRARY, not the lab — template:manage is
+        what makes it a deliberate act). `description` is the library-card
+        text, stored on the publication: REQUIRED when publishing (422),
+        ignored when withdrawing; re-publishing an already-published lab
+        just updates it. Returns the resulting entry, None once withdrawn.
+
+        Pinned consequences: while published the definition is readable by
+        EVERY authenticated user; 409 ``no_definition`` on an unauthored
+        lab; the entry's name is the lab's durable name (labs cannot be
+        renamed, so it is stable); soft-deleting the lab withdraws the
+        entry; instantiation COPIES — a lab created from the template
+        never tracks it. 409 ``name_taken`` only against the NETWORK
+        collection (a builtin's name; a node template can never collide)."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
     # Labs — lifecycle
     # ------------------------------------------------------------------ #
 
@@ -1802,11 +1995,16 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 #   lab:read, lab:edit, lab:configure, lab:validate, lab:terminal,
 #   lab:destroy, lab:grant
 # Permissions — global-only:
-#   lab:create, user:manage, group:manage
+#   lab:create, user:manage, group:manage,
+#   template:manage  (delta 21, APPROVED — authors the library's user tier:
+#                     the lab publish toggle + node-template CRUD; READS
+#                     need no permission)
 #
 # Role catalog (scope — permissions):
 #   admin           global — every permission
 #   global_operator global — lab:create + all seven lab-scoped
+#                            + template:manage (delta 21, APPROVED: operators
+#                            author labs, so curating starting points fits)
 #   global_viewer   global — lab:read
 #   creator         global — lab:create
 #   user            global — none (the baseline role every new user gets)
@@ -1816,3 +2014,13 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 #   lab_viewer      lab    — lab:read
 #
 # Shipped builtin custom-config templates: mpls_te, ip_sla.
+#
+# Shipped builtin library templates (delta 21, APPROVED) — the repo examples,
+# all in the NETWORK collection: example-mpls-l3vpn (VyOS),
+# example-mpls-l3vpn-iol, example-campus-lan. The `example-` prefix is
+# deliberate (revised at first use, 2026-08-04): a builtin name reserves
+# itself against lab publication, and the BARE example names are exactly what
+# real labs deployed from these examples get called — unprefixed builtins
+# made those labs unpublishable. The NODE collection's builtin tier starts
+# EMPTY: bare devices are the catalog's job; a shipped preconfigured motif
+# (e.g. a PE-router preset) must earn its way in later.

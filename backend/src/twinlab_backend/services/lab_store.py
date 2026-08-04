@@ -99,6 +99,10 @@ async def create_lab(
         # the fresh lab's own deploys re-ensure idempotently and its destroy
         # deletes the same names, so the leak self-heals on next use.
         lab.host_bridges = None
+        # A revived name inherits no template publication (delta 21) — the
+        # previous incarnation's library entry died with its soft-delete.
+        lab.template_published = False
+        lab.template_description = None
         lab.deleted_at = None
         # A revived name starts with NO job history — the row keeps its id, so
         # without this the previous incarnation's jobs (possibly a different
@@ -160,6 +164,10 @@ async def soft_delete(session: AsyncSession, name: str) -> Lab | LabStoreError:
         return LabStoreError("not_found", name)
     lab.deleted_at = datetime.now(UTC)
     lab.mgmt_subnet = None
+    # Withdraw the template publication (delta 21): the library must not serve
+    # a removed lab's definition.
+    lab.template_published = False
+    lab.template_description = None
     await session.commit()
     return lab
 
@@ -210,6 +218,37 @@ async def update_custom_config(
     lab.custom_config = custom_config
     await session.commit()
     return lab
+
+
+async def set_template_publication(
+    session: AsyncSession, name: str, *, published: bool, description: str | None
+) -> Lab | LabStoreError:
+    """Set the lab's template-publication toggle (delta 21). The caller has
+    already enforced the publish preconditions (a stored definition exists, the
+    description is present when publishing, no builtin name collision); here we
+    only persist. Withdrawing always clears the description."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.template_published = published
+    lab.template_description = description if published else None
+    await session.commit()
+    return lab
+
+
+async def list_published_labs(session: AsyncSession) -> list[Lab]:
+    """Labs currently published as network templates (delta 21): active rows
+    only — soft-delete withdraws the publication, and this filter keeps the
+    invariant even against out-of-band rows."""
+    return list(
+        (
+            await session.scalars(
+                select(Lab)
+                .where(Lab.template_published, Lab.deleted_at.is_(None))
+                .order_by(Lab.name)
+            )
+        ).all()
+    )
 
 
 async def set_layout(

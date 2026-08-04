@@ -21,9 +21,11 @@ import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
-import { nextLanId, nextNodeName, type BuildDoc } from '@/lib/build-doc'
+import { nextLanId, nextNodeName, parseNodeFragment, type BuildDoc } from '@/lib/build-doc'
 import type { CatalogDevice } from '@/lib/device-catalog'
+import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { groupColor, type GroupStyles } from '@/lib/group-colors'
+import type { NodeTemplateWire } from '@/lib/schemas'
 
 import { DeviceNode } from '../topology/device-node'
 import {
@@ -168,6 +170,7 @@ function CanvasInner({
 }: BuilderCanvasProps) {
   const { resolvedTheme } = useTheme()
   const { fitView, screenToFlowPosition } = useReactFlow()
+  const { devices: catalogDevices } = useDeviceCatalog()
   const [rankdir, setRankdir] = useState<RankDir>('LR')
   const [showMiniMap, setShowMiniMap] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -265,6 +268,26 @@ function CanvasInner({
     const name = nextNodeName(doc, device.device)
     onPositions({ ...positionsRef.current, [name]: dropPosition() }, true)
     dispatch({ type: 'add-node', name, device: device.device })
+  }
+
+  // Stamp a node template (delta 21): parse the fragment through the same
+  // typed-vs-extras split the doc parser applies, add the node, then patch
+  // the parsed attributes onto it — indistinguishable from hand authoring.
+  const addTemplate = (template: NodeTemplateWire) => {
+    const name = nextNodeName(doc, template.device)
+    const parsed = parseNodeFragment(
+      template.content,
+      name,
+      catalogDevices.map((entry) => entry.device),
+    )
+    if (!parsed.ok) {
+      toast.error(`Template "${template.name}": ${parsed.reason}`)
+      return
+    }
+    const { name: _name, device, ...patch } = parsed.node
+    onPositions({ ...positionsRef.current, [name]: dropPosition() }, true)
+    dispatch({ type: 'add-node', name, device })
+    dispatch({ type: 'patch-node', name, patch })
   }
 
   const addLan = () => {
@@ -411,7 +434,7 @@ function CanvasInner({
           />
         )}
 
-        <BuilderPalette onAddDevice={addDevice} onAddLan={addLan} />
+        <BuilderPalette onAddDevice={addDevice} onAddTemplate={addTemplate} onAddLan={addLan} />
 
         {/* Teaching overlay: gone the moment the first node lands. */}
         {doc.nodes.length === 0 && (

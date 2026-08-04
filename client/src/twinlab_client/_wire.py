@@ -28,6 +28,7 @@ from twinlab_client.models import (
     READINESS_STATUSES,
     ROLE_SCOPES,
     SUITE_STAGES,
+    TEMPLATE_TIERS,
     TEST_STATUSES,
     ApiKey,
     ApiKeyCreated,
@@ -61,10 +62,13 @@ from twinlab_client.models import (
     LinkEndpoint,
     Liveness,
     NetemImpairment,
+    NetworkTemplate,
+    NetworkTemplateSummary,
     NodeConfigResult,
     NodeInterface,
     NodeInterfaces,
     NodeLogsResponse,
+    NodeTemplate,
     Principal,
     Principals,
     Readiness,
@@ -380,6 +384,41 @@ def parse_device_catalog(value: object) -> DeviceCatalog:
     )
 
 
+def parse_network_template_summary(value: object) -> NetworkTemplateSummary:
+    where = "NetworkTemplateSummary"
+    obj = as_object(value, where)
+    return NetworkTemplateSummary(
+        name=_get_str(obj, "name", where),
+        tier=_get_literal(obj, "tier", where, TEMPLATE_TIERS),
+        description=_get_str(obj, "description", where),
+        source_lab=_get_opt_str(obj, "source_lab", where),
+    )
+
+
+def parse_network_template(value: object) -> NetworkTemplate:
+    where = "NetworkTemplate"
+    obj = as_object(value, where)
+    return NetworkTemplate(
+        name=_get_str(obj, "name", where),
+        tier=_get_literal(obj, "tier", where, TEMPLATE_TIERS),
+        description=_get_str(obj, "description", where),
+        source_lab=_get_opt_str(obj, "source_lab", where),
+        content=_get_str(obj, "content", where),
+    )
+
+
+def parse_node_template(value: object) -> NodeTemplate:
+    where = "NodeTemplate"
+    obj = as_object(value, where)
+    return NodeTemplate(
+        name=_get_str(obj, "name", where),
+        tier=_get_literal(obj, "tier", where, TEMPLATE_TIERS),
+        description=_get_str(obj, "description", where),
+        device=_get_str(obj, "device", where),
+        content=_get_str(obj, "content", where),
+    )
+
+
 def parse_principal(value: object) -> Principal:
     where = "Principal"
     obj = as_object(value, where)
@@ -469,6 +508,7 @@ def parse_lab_detail(value: object) -> LabDetail:
         nodes=[parse_lab_node_state(v) for v in as_list(_req(obj, "nodes", where), where)],
         config_time_status=_get_literal(obj, "config_time_status", where, CONFIG_TIME_STATUSES),
         permissions=_get_str_set(obj, "permissions", where),
+        template_published=_get_bool(obj, "template_published", where),
     )
 
 

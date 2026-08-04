@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
 import { useState } from 'react'
@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 
 import { DeployDialog } from '@/components/lab/deploy-dialog'
 import { LabPowerMenuItems } from '@/components/lab/lab-power-menu'
+import { LabTemplateDialog } from '@/components/lab/lab-template-dialog'
 import { LabStatusBadge } from '@/components/lab/status-badge'
 import {
   AlertDialog,
@@ -33,8 +34,12 @@ import {
   PERM_LAB_EDIT,
 } from '@/lib/lab-permissions'
 import { toastError } from '@/lib/error-toast'
-import { labQueryOptions, labsQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
+import { labQueryOptions, labsQueryOptions, meQueryOptions, testSuitesQueryOptions } from '@/lib/queries'
 import { configureResponseSchema, type LabDetail } from '@/lib/schemas'
+
+// Global-only (rides /auth/me, never the per-lab mask): the library-authoring
+// gate for the "use as a template" toggle (delta 21).
+const PERM_TEMPLATE_MANAGE = 'template:manage'
 
 /** The lab page's identity row: the breadcrumb-prefixed name, lifecycle badges,
  * and the permission-gated action set (author / deploy / configure / destroy /
@@ -48,10 +53,14 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
   const name = lab.name
   const isDeployed = lab.status === 'deployed'
   const can = (perm: string) => lab.permissions.includes(perm)
+  const { data: me } = useQuery(meQueryOptions)
+  const canManageTemplates = me?.permissions.includes(PERM_TEMPLATE_MANAGE) ?? false
   // The two teardown verbs live in a menu, so their confirmations are opened by
   // state rather than by a nested trigger — a DropdownMenuItem unmounts its own
-  // subtree on select, taking an AlertDialogTrigger's dialog with it.
+  // subtree on select, taking an AlertDialogTrigger's dialog with it. The
+  // template dialog follows the same state-driven pattern.
   const [confirming, setConfirming] = useState<'destroy' | 'delete' | null>(null)
+  const [templateOpen, setTemplateOpen] = useState(false)
 
   const configure = useMutation({
     mutationFn: async () => waitJob(name, await api.configureLab(name)),
@@ -123,6 +132,14 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
             drifted
           </Badge>
         )}
+        {lab.template_published && (
+          <Badge
+            variant="outline"
+            title="Published as a network template — its stored definition is a library entry"
+          >
+            template
+          </Badge>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -138,7 +155,7 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
             {configure.isPending ? 'Configuring…' : 'Configure'}
           </Button>
         )}
-        {(can(PERM_LAB_CONFIGURE) || can(PERM_LAB_DESTROY)) && (
+        {(can(PERM_LAB_CONFIGURE) || can(PERM_LAB_DESTROY) || canManageTemplates) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon" disabled={busy} aria-label="Lab actions">
@@ -149,7 +166,17 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
               {/* Power over the EXISTING containers — no rebuild, unlike the
                   Deploy button beside this menu. */}
               {can(PERM_LAB_CONFIGURE) && <LabPowerMenuItems lab={lab} />}
-              {can(PERM_LAB_CONFIGURE) && can(PERM_LAB_DESTROY) && <DropdownMenuSeparator />}
+              {canManageTemplates && (
+                <>
+                  {can(PERM_LAB_CONFIGURE) && <DropdownMenuSeparator />}
+                  <DropdownMenuItem onSelect={() => setTemplateOpen(true)}>
+                    {lab.template_published ? 'Template settings…' : 'Use as a template…'}
+                  </DropdownMenuItem>
+                </>
+              )}
+              {(can(PERM_LAB_CONFIGURE) || canManageTemplates) && can(PERM_LAB_DESTROY) && (
+                <DropdownMenuSeparator />
+              )}
               {can(PERM_LAB_DESTROY) && (
                 <>
                   {/* Destroy tears down running containers, so it needs some;
@@ -171,6 +198,8 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
           </DropdownMenu>
         )}
       </div>
+
+      <LabTemplateDialog lab={lab} open={templateOpen} onOpenChange={setTemplateOpen} />
 
       <AlertDialog
         open={confirming !== null}

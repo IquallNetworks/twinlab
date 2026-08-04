@@ -73,6 +73,7 @@ _LAB_DETAIL = {
     ],
     "config_time_status": "passed",
     "permissions": ["lab:read", "lab:edit"],
+    "template_published": False,
 }
 
 
@@ -943,3 +944,135 @@ async def test_list_all_jobs_reads_the_fleet_route(make_client: ClientFactory) -
     assert seen[0].url.path == "/api/v1/jobs"
     assert seen[0].url.params["limit"] == "50"
     assert [job.lab_name for job in jobs] == ["lab1"]
+
+
+# --------------------------------------------------------------------------- #
+# Template library (delta 21)
+# --------------------------------------------------------------------------- #
+
+_NETWORK_TEMPLATE_WIRE = {
+    "name": "mpls-l3vpn",
+    "tier": "builtin",
+    "description": "MPLS L3VPN core on VyOS.",
+    "source_lab": None,
+}
+_NODE_TEMPLATE_WIRE = {
+    "name": "pe-router",
+    "tier": "user",
+    "description": "A PE with the full stack.",
+    "device": "vyos",
+    "content": "device: vyos\nmodule: [ospf, bgp, mpls, vrf]\n",
+}
+
+
+async def test_list_network_templates_both_tiers(make_client: ClientFactory) -> None:
+    published = {
+        "name": "lab1",
+        "tier": "user",
+        "description": "our reference core",
+        "source_lab": "lab1",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/templates/network"
+        return httpx.Response(200, json=[_NETWORK_TEMPLATE_WIRE, published])
+
+    async with make_client(handler) as client:
+        templates = await client.list_network_templates()
+    assert [t.tier for t in templates] == ["builtin", "user"]
+    assert templates[1].source_lab == "lab1"
+
+
+async def test_get_network_template_serves_content(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/templates/network/mpls-l3vpn"
+        return httpx.Response(200, json=_NETWORK_TEMPLATE_WIRE | {"content": "provider: clab\n"})
+
+    async with make_client(handler) as client:
+        template = await client.get_network_template("mpls-l3vpn")
+    assert template.content == "provider: clab\n"
+    assert template.tier == "builtin"
+
+
+async def test_node_template_crud_request_shapes(make_client: ClientFactory) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        status = 201 if request.method == "POST" else 200
+        return httpx.Response(status, json=_NODE_TEMPLATE_WIRE)
+
+    async with make_client(handler) as client:
+        created = await client.create_node_template(
+            "pe-router",
+            description="A PE with the full stack.",
+            content="device: vyos\nmodule: [ospf, bgp, mpls, vrf]\n",
+        )
+        _ = await client.update_node_template(
+            "pe-router", description="updated", content="device: vyos\n"
+        )
+        await client.delete_node_template("pe-router")
+
+    assert created.device == "vyos"
+    assert seen[0].method == "POST" and seen[0].url.path == "/api/v1/templates/node"
+    assert _json_body(seen[0]) == {
+        "name": "pe-router",
+        "description": "A PE with the full stack.",
+        "content": "device: vyos\nmodule: [ospf, bgp, mpls, vrf]\n",
+    }
+    assert seen[1].method == "PUT" and seen[1].url.path == "/api/v1/templates/node/pe-router"
+    assert _json_body(seen[1]) == {"description": "updated", "content": "device: vyos\n"}
+    assert seen[2].method == "DELETE" and seen[2].url.path == "/api/v1/templates/node/pe-router"
+
+
+async def test_set_lab_template_publish_and_withdraw(make_client: ClientFactory) -> None:
+    seen: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _json_body(request)
+        seen.append(body)
+        assert request.url.path == "/api/v1/labs/lab1/template"
+        if body["published"]:
+            return httpx.Response(
+                200,
+                json={
+                    "name": "lab1",
+                    "tier": "user",
+                    "description": body["description"],
+                    "source_lab": "lab1",
+                },
+            )
+        # A withdraw answers a JSON null body (httpx's json= treats None as
+        # "no body", so spell the wire form out).
+        return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
+
+    async with make_client(handler) as client:
+        entry = await client.set_lab_template("lab1", published=True, description="the card")
+        withdrawn = await client.set_lab_template("lab1", published=False)
+
+    assert entry is not None and entry.tier == "user" and entry.description == "the card"
+    assert withdrawn is None
+    assert seen == [
+        {"published": True, "description": "the card"},
+        {"published": False, "description": None},
+    ]
+
+
+async def test_node_template_bad_tier_is_protocol_error(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[_NODE_TEMPLATE_WIRE | {"tier": "communal"}])
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabProtocolError):
+            _ = await client.list_node_templates()
+
+
+async def test_lab_detail_serves_template_published(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_LAB_DETAIL | {"template_published": True})
+
+    async with make_client(handler) as client:
+        detail = await client.get_lab("lab1")
+    assert detail.template_published is True

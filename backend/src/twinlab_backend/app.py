@@ -27,6 +27,7 @@ from twinlab_backend.api.jobs import router as jobs_router
 from twinlab_backend.api.labs import router as labs_router
 from twinlab_backend.api.roles import router as roles_router
 from twinlab_backend.api.ssh_access import router as ssh_access_router
+from twinlab_backend.api.templates import router as templates_router
 from twinlab_backend.api.terminal import router as terminal_router
 from twinlab_backend.api.users import router as users_router
 from twinlab_backend.api_errors import register_error_handlers
@@ -39,6 +40,7 @@ from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.custom_config import load_builtins
 from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.job_events import JobEventBroker
+from twinlab_backend.services.network_templates import load_network_templates
 from twinlab_backend.services.runner_client import RunnerClient
 
 _HTTP_TIMEOUT_SECONDS = 30.0
@@ -59,6 +61,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     if isinstance(builtins, Err):
         raise RuntimeError(builtins.error)
     builtin_library = builtins.value
+
+    # Same packaging bar for the built-in network templates (delta 21).
+    loaded_templates = load_network_templates()
+    if isinstance(loaded_templates, Err):
+        raise RuntimeError(loaded_templates.error)
+    network_templates = loaded_templates.value
 
     engine = create_engine(settings.database_url)
     session_factory = make_session_factory(engine)
@@ -90,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         app.state.settings = settings
         app.state.builtin_library = builtin_library
+        app.state.network_templates = network_templates
         app.state.session_factory = session_factory
         app.state.job_tasks = job_tasks
         app.state.job_events = job_events
@@ -145,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(groups_router, prefix=_API_PREFIX)
     app.include_router(roles_router, prefix=_API_PREFIX)
     app.include_router(catalog_router, prefix=_API_PREFIX)
+    app.include_router(templates_router, prefix=_API_PREFIX)
     app.include_router(directory_router, prefix=_API_PREFIX)
     app.include_router(events_router, prefix=_API_PREFIX)
     app.include_router(terminal_router, prefix=_API_PREFIX)

@@ -390,6 +390,10 @@ class LabDetail(BaseModel):
     nodes: list[LabNodeState]
     config_time_status: ConfigTimeStatus
     permissions: list[str]
+    # Delta 21: True while this lab is published as a network template (the
+    # PUT /labs/{name}/template toggle). Detail-only — the library view is
+    # GET /templates/network, not the labs list.
+    template_published: bool
 
 
 class LayoutPosition(BaseModel):
@@ -441,6 +445,76 @@ class PutLayoutRequest(BaseModel):
     # client-side default). Defaults empty for delta-19 callers — the PUT
     # still replaces the WHOLE resource, so such a caller clears any styles.
     groups: dict[_LayoutKey, LayoutGroupStyle] = Field(default_factory=dict, max_length=512)
+
+
+# Template library (contract delta 21). Two sibling collections with
+# independent namespaces: /templates/network (complete definitions) and
+# /templates/node (single-node fragments). Tier "builtin" is shipped read-only;
+# "user" is authored at runtime (network: a published lab, served live; node:
+# stored rows).
+type TemplateTier = Literal["builtin", "user"]
+
+
+class NetworkTemplateSummary(BaseModel):
+    """One network-collection entry, content omitted. `source_lab` names the
+    published lab a user-tier entry mirrors (live — the entry always serves
+    that lab's CURRENT stored definition); None on builtins."""
+
+    name: str
+    tier: TemplateTier
+    description: str
+    source_lab: str | None
+
+
+class NetworkTemplateOut(NetworkTemplateSummary):
+    """The entry with its content: a complete netlab definition. Whatever
+    name/mgmt pinning the text carries is irrelevant — instantiation goes
+    through the normal lifecycle, where PUT re-pins both."""
+
+    content: str
+
+
+class NodeTemplateOut(BaseModel):
+    """One node-collection entry — always with content (fragments are small
+    and bounded; the builder palette stamps straight from the list)."""
+
+    name: str
+    tier: TemplateTier
+    description: str
+    device: str  # denormalized from the fragment for catalog-style rendering
+    content: str
+
+
+class NodeTemplateCreate(BaseModel):
+    """POST /templates/node. `content` is structurally validated by the route
+    (parseable YAML mapping naming `device`) — 422 invalid_template, not a
+    schema error, so the message can say what is wrong with the fragment."""
+
+    name: _Name
+    description: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1)
+
+
+class NodeTemplateUpdate(BaseModel):
+    """PUT /templates/node/{name}: full replace of description + content (the
+    name is the identity and does not change)."""
+
+    description: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1)
+
+
+class LabTemplateSet(BaseModel):
+    """PUT /labs/{name}/template — the publish toggle. The description is the
+    library-card text: required when publishing, ignored when withdrawing."""
+
+    published: bool
+    description: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def _description_when_publishing(self) -> LabTemplateSet:
+        if self.published and self.description is None:
+            raise ValueError("description is required when publishing")
+        return self
 
 
 class LabActionResponse(BaseModel):

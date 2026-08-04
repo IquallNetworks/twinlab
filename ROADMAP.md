@@ -645,8 +645,28 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        the dict-of-lists `links:` shape, self-links. Outcome detail in
        `docs/frontend-rework.md`.
     4. **Definition input methods** — full-network templates, single-node
-       templates, definitions built from real config files. Starts with a
-       design discussion, not a sketch.
+       templates, definitions built from real config files. Started with the
+       design discussion (2026-08-04) and split there: **part one — the
+       template library — DONE same day (contract delta 21)**, approved with
+       one review revision (per-KIND collections `/templates/network` +
+       `/templates/node` instead of a flat catalog — no consumer wants the
+       union, a shared namespace only manufactured collisions). Decisions:
+       clone-and-edit (parameterized templates recorded as a future
+       consideration; netlab's native `components` — live-probed: expands
+       `include` nodes to `<instance>_<inner>` names via generated
+       `inc_<instance>` broadcast groups — reconsidered later as builder
+       coverage); user-tier network templates are PUBLISHED LABS (live view,
+       `PUT /labs/{name}/template`, new global-only `template:manage`,
+       publishing deliberately exposes the definition deployment-wide); node
+       templates are snapshot fragments (structural validation only); builtin
+       tier seeded from `examples/` with a drift-guard; NO instantiate verb.
+       Shipped across backend (migration 0019) + client + blackbox (9 tests,
+       123 total green live) + frontend (create-from-template, palette
+       stamping, save-node-as-template, header publish toggle). **Part two —
+       definitions from real config files — deliberately DEFERRED** ("gets a
+       lot more complex"); when picked up, the discussion's leads: skeleton +
+       custom-config residue, ciscoconfparse is GPLv3 (backend blocker —
+       sidecar aggregation or a hand-rolled subset are the outs).
     5. **Scenario definition** — traffic between nodes/attached clients,
        impairment schedules. The least-specified item; also starts with a
        design discussion.
@@ -673,6 +693,57 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     qcow2 + license (see `docs/nokia-sros.md`). Scope, the platform matrix, and
     what "supported" formally requires (deploy? config push? facts? suites?)
     are designed when picked up.
+
+### `netlab up` parity — remaining gaps · **planned** (unsequenced; recorded 2026-08-04)
+
+18. **Resolve the honest remainder of the `netlab up` parity audit (2026-07-31).**
+    The audit found `netlab up`'s clab pre/post hooks have exactly two members —
+    host bridges and kernel modules — both since owned by the hostprep sidecar.
+    Three gaps remain, each a silent-ignore of valid definition content or a late
+    opaque error; "never silent" is the agreed principle, and **each needs a
+    maintainer decision before implementation**:
+    - **`tc:` link/interface attributes are silently dropped.** First-class netlab
+      schema (the same seven knobs as our netem API), applied by `netlab up` after
+      start via `execute_tc_commands`. A definition carrying `tc:` validates and
+      deploys with no impairment — violating definition-is-source-of-truth.
+      Options: reject/warn at PUT, or honor it post-deploy through the existing
+      clab-api netem path (attractive: impairment reproducible-by-definition;
+      wrinkle: baseline-vs-runtime-override semantics against the netem API).
+    - **`tools:` is silently dropped** (graphite, suzieq, nuts, nso, edgeshark —
+      side containers `up`/`down` would start). Standing recommendation: declare
+      out of scope *explicitly* (reject or strip-with-warning), not build it.
+    - **No pre-flight image check** — deploy fails late with an opaque 502 from
+      clab-api when an image is missing, where `netlab up`'s `validate_images`
+      gives friendly pull/build hints first. *Landscape changed since the audit:*
+      contract delta 18 gave the runner `GET /images` and the backend the matching
+      policy (the catalog's best-effort presence), so the visibility problem is
+      solved — the remaining decision is deploy-time semantics: hard-block vs
+      warn, and what a degraded check (runner unreachable) does. Natural affinity
+      with the NOS platform sweep (item 17), which multiplies the image set.
+
+### Builder supported-configuration review · **planned** (unsequenced; recorded 2026-08-04)
+
+19. **Review extending the builder's supported configuration surface.** The Build
+    tab's Visual mode covers a deliberate typed core (nodes, p2p/LAN/stub links
+    incl. dict + interfaces forms, groups, ospf/bgp/mpls/vrf, extras passthrough
+    at every level); everything beyond it is text-mode territory. This item is
+    the deliberate review of what to promote next, in one pass rather than
+    ad-hoc: the still-gated link forms (link groups and attribute-only entries,
+    the dict-of-lists `links:` shape, self-links, interfaces mixed with node
+    keys, hyphenated names), netlab `components`/`include` (live-probed at the
+    delta-21 discussion — expansion semantics are understood, the builder just
+    can't see through them yet), and the typed module set beyond
+    ospf/bgp/mpls/vrf (catalog-driven; the device×module matrix already comes
+    from the server). The unknown-device POLICY gate is explicitly NOT in scope
+    here — that boundary belongs to the NOS platform sweep (item 17), and this
+    review sits naturally after it, when the supported set is settled.
+
+### i18n · **deferred**
+
+Internationalization is deferred project-wide, not just for the frontend rework
+(where it was recorded as a non-goal): the UI is English-only, and no i18n
+scaffolding (message catalogs, locale plumbing, translated content) should be
+introduced until this is explicitly picked up.
 
 ### Deferred items from the API review (2026-07-23) · **deferred**
 

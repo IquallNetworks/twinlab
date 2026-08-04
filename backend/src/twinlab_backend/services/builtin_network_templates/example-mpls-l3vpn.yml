@@ -1,0 +1,79 @@
+# MPLS L3VPN service-provider core on VyOS.
+#
+# Recreated from an earlier Cisco IOS lab (../lab/main/lab/topology.py): four
+# Provider Edge and three Provider (core) routers, an OSPF area-0 core, MPLS LDP
+# transport, and a single customer L3VPN ("vpn_a") carried over MP-BGP VPNv4
+# across all four PEs. Each PE holds one customer loopback inside the VRF — the
+# same "one customer site per PE" the original modeled with per-VRF loopbacks,
+# so a PE's VRF route is reachable from every other PE and only from within the
+# VPN. netlab auto-assigns the RD/RT (65000:1) and the iBGP VPNv4 full mesh
+# among the PEs; the P routers stay pure label-switching routers (OSPF + LDP).
+#
+# Node names map to the original: pe1..pe4 = PE-01..PE-04, p1..p3 = P-01..P-03
+# (netlab node names can't carry the hyphen/zero-pad form).
+#
+# Not translated — Cisco/IOS- or analysis-specific, with no netlab+VyOS
+# equivalent (VyOS supports MPLS LDP + L3VPN only, per `netlab show
+# module-support`):
+#   - MPLS-TE explicit-path tunnels (RSVP-TE) — VyOS/FRR has no TE.
+#   - IP SLA active probes — IOS-only; use per-node netem + test-suites instead.
+#   - The traffic-demand matrix — analysis metadata, not a deployable construct.
+#
+# Test suites live on the lab record, not in this definition (they are never sent
+# to `netlab create`). A config-time convergence gate for this lab ships alongside
+# in mpls-l3vpn.test-suites.json — seed it via the deploy request's `test_suites`,
+# or PUT it to an existing lab, to gate config-done on the L3VPN converging.
+
+provider: clab
+defaults.device: vyos
+
+module: [ ospf, mpls, bgp, vrf ]
+
+bgp.as: 65000
+mpls.ldp: true
+
+# One customer VPN. Empty body: netlab derives the RD/RT from the VRF id.
+vrfs:
+  vpn_a:
+
+nodes:
+  # Provider Edge — full stack; each holds the customer VRF loopback (the site).
+  pe1:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  pe2:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  pe3:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  pe4:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  # Provider core — pure label-switching routers: OSPF + LDP only.
+  p1: { module: [ ospf, mpls ] }
+  p2: { module: [ ospf, mpls ] }
+  p3: { module: [ ospf, mpls ] }
+
+links:
+  # Access links (PE <-> P)
+  - pe1-p1
+  - pe1-p2
+  - p1-pe2
+  - p3-pe2
+  - p2-pe3
+  - p3-pe3
+  - p2-pe4
+  - p3-pe4
+  # Core links (P <-> P)
+  - p1-p3
+  - p2-p3
+  - p1-p2

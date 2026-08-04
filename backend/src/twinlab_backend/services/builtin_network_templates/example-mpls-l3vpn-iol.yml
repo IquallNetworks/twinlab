@@ -1,0 +1,102 @@
+# MPLS L3VPN service-provider core on Cisco IOL (cisco_iol).
+#
+# ⚠️ OPT-IN / PROPRIETARY IMAGE — NOT part of Twinlab's open-source deliverable.
+# Cisco IOL is proprietary Cisco software; its image is NOT redistributable (it
+# is built from a Cisco CML refplat binary you are licensed for, via vrnetlab —
+# see https://containerlab.dev/manual/kinds/cisco_iol/). Twinlab's engine
+# *supports* cisco_iol, but does not ship or distribute the image. To run this
+# example you must supply your own `vrnetlab/cisco_iol` image on the host. The
+# open-source reference example is the VyOS one in mpls-l3vpn.yml; this is its
+# cisco_iol sibling for users who have the image.
+#
+# Same topology as mpls-l3vpn.yml — four PE + three P routers, an OSPF area-0
+# core, MPLS LDP transport, and one customer L3VPN ("vpn_a") over MP-BGP VPNv4
+# across all four PEs, one customer loopback (site) per PE. netlab auto-assigns
+# the RD/RT and the iBGP VPNv4 full mesh; the P routers stay pure LSRs.
+#
+# Differences from the VyOS sibling (device-driven, netlab handles them):
+#   - Config push uses Ansible network_cli (SSH to each node's mgmt IP), not the
+#     VyOS `docker` connection — so the netlab-runner needs the Cisco Ansible
+#     stack and SSH reachability to the lab's mgmt subnet.
+#   - Interfaces render as Cisco EthernetX/Y (netlab assigns them; the links
+#     below are device-agnostic, so the definition is unchanged).
+#
+# Two IOS-only layers dropped from the VyOS port are added here via Twinlab's
+# built-in custom-config templates (netlab models neither, on any NOS):
+#   - mpls_te — an RSVP-TE tunnel mesh between the PEs, with OSPF-TE and RSVP
+#     bandwidth on the core (enabled on every node; PEs head-end the tunnels);
+#   - ip_sla — per-site IP SLA ICMP-echo probes from each PE into the L3VPN.
+# They are wired through the `groups` below (config: [...]) and gated at config
+# time (see the companion test-suites). The templates ship with Twinlab, so no
+# files are needed alongside this definition.
+#
+# Test suites live on the lab record, not in this definition. A config-time
+# convergence gate ships alongside in mpls-l3vpn.iol.test-suites.json (IOS show
+# commands) — seed it via the deploy request's `test_suites`, or PUT it to an
+# existing lab, to gate config-done on the L3VPN converging. Validation runs via
+# the netlab-runner's `netlab exec`, which reaches the IOS CLI over SSH (the same
+# per-NOS transport that serves VyOS over docker exec).
+
+provider: clab
+defaults.device: iol
+
+module: [ ospf, mpls, bgp, vrf ]
+
+bgp.as: 65000
+mpls.ldp: true
+
+# One customer VPN. Empty body: netlab derives the RD/RT from the VRF id.
+vrfs:
+  vpn_a:
+
+# Custom-config templates (Twinlab built-ins) attached by role. Every node enables
+# MPLS-TE on the core; the PEs additionally run the IP SLA probes into the L3VPN.
+groups:
+  pe:
+    members: [ pe1, pe2, pe3, pe4 ]
+    config: [ mpls_te, ip_sla ]
+  core:
+    members: [ p1, p2, p3 ]
+    config: [ mpls_te ]
+
+nodes:
+  # Provider Edge — full stack; each holds the customer VRF loopback (the site).
+  pe1:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  pe2:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  pe3:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  pe4:
+    module: [ ospf, mpls, bgp, vrf ]
+    mpls.vpn: true
+    vrfs:
+      vpn_a: { loopback: true }
+  # Provider core — pure label-switching routers: OSPF + LDP only.
+  p1: { module: [ ospf, mpls ] }
+  p2: { module: [ ospf, mpls ] }
+  p3: { module: [ ospf, mpls ] }
+
+links:
+  # Access links (PE <-> P)
+  - pe1-p1
+  - pe1-p2
+  - p1-pe2
+  - p3-pe2
+  - p2-pe3
+  - p3-pe3
+  - p2-pe4
+  - p3-pe4
+  # Core links (P <-> P)
+  - p1-p3
+  - p2-p3
+  - p1-p2

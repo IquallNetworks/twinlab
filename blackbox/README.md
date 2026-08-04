@@ -79,7 +79,10 @@ RENDERED command is asserted against the link table; delta 18 the device catalog
 catalog slice; delta 19 the deployed-definition snapshot + shared topology layout — the
 authoring slice covers the layout roundtrip/replace/permission gate, and the deploy lifecycle
 asserts the drift flag across deploy → edit → redeploy → destroy; delta 20 group styles on
-the layout — roundtrip, whole-resource replace, hex-pinned color 422), and the suite is
-**entirely green** (114/114 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+the layout — roundtrip, whole-resource replace, hex-pinned color 422; delta 21 the template
+library — the templates slice covers both collections, the publish-toggle lifecycle incl. the
+live view and soft-delete withdrawal, fragment structural 422s, and the template:manage split),
+and the suite is
+**entirely green** (123/123 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

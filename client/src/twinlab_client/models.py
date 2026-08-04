@@ -286,6 +286,58 @@ class DeviceCatalog:
 
 
 # --------------------------------------------------------------------------- #
+# Template library shapes (delta 21)
+# --------------------------------------------------------------------------- #
+
+
+# Two sibling collections with independent namespaces: /templates/network
+# (complete definitions) and /templates/node (single-node fragments).
+TemplateTier = Literal["builtin", "user"]
+TEMPLATE_TIERS: Final[tuple[TemplateTier, ...]] = ("builtin", "user")
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkTemplateSummary:
+    """One network-collection entry, content omitted (delta 21). Names are
+    unique within the network collection only."""
+
+    name: str
+    tier: TemplateTier
+    description: str  # the library-card text
+    source_lab: str | None  # user tier: the published lab this entry mirrors
+    #                         (LIVE — always the lab's CURRENT stored
+    #                         definition). None on builtins.
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkTemplate:
+    """`GET /templates/network/{name}` — the entry plus its content: a
+    complete netlab definition. Any name/mgmt pinning inside it is
+    irrelevant — instantiation goes through the normal lifecycle, where PUT
+    re-pins both."""
+
+    name: str
+    tier: TemplateTier
+    description: str
+    source_lab: str | None
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class NodeTemplate:
+    """One node-collection entry (delta 21) — always with content (fragments
+    are small and bounded; the builder palette stamps straight from the
+    list). `content` is a YAML node-attribute mapping carrying no node name
+    (chosen at stamp time)."""
+
+    name: str
+    tier: TemplateTier
+    description: str
+    device: str  # the fragment's `device` (required in the fragment)
+    content: str
+
+
+# --------------------------------------------------------------------------- #
 # Health shapes
 # --------------------------------------------------------------------------- #
 
@@ -367,6 +419,10 @@ class LabDetail:
     nodes: list[LabNodeState]
     config_time_status: ConfigTimeStatus
     permissions: set[str]
+    # Delta 21: True while this lab is published as a network template (the
+    # set_lab_template toggle). Detail-only — the library view is
+    # list_network_templates.
+    template_published: bool
 
 
 @dataclass(frozen=True, slots=True)

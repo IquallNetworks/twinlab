@@ -48,9 +48,12 @@ from twinlab_client.models import (
     LayoutPosition,
     Liveness,
     NetemImpairment,
+    NetworkTemplate,
+    NetworkTemplateSummary,
     NodeInterfaces,
     NodeLogsResponse,
     NodePowerAction,
+    NodeTemplate,
     Principals,
     Readiness,
     Role,
@@ -393,6 +396,98 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         not be checked). Image presence is advisory — deploy does not
         pre-flight it."""
         return _wire.parse_device_catalog(await self._send_json("GET", "/catalog"))
+
+    # ------------------------------------------------------------------ #
+    # Template library (delta 21)
+    # ------------------------------------------------------------------ #
+
+    # Two sibling collections with independent namespaces. Reads are any
+    # authenticated user; mutations ride the global-only template:manage.
+    # Instantiation has NO verb: compose get_network_template -> create_lab ->
+    # update_definition, or stamp a node fragment client-side.
+
+    async def list_network_templates(self) -> list[NetworkTemplateSummary]:
+        """GET /templates/network — both tiers, content omitted. A published
+        lab's definition is deliberately deployment-public (see
+        set_lab_template)."""
+        payload = await self._send_json("GET", "/templates/network")
+        return [
+            _wire.parse_network_template_summary(v)
+            for v in _wire.as_list(payload, "NetworkTemplateSummary[]")
+        ]
+
+    async def get_network_template(self, name: str) -> NetworkTemplate:
+        """GET /templates/network/{name} — the entry with its content. For a
+        published-lab entry the content is that lab's CURRENT stored
+        definition (a live view, never a stale copy). 404
+        template_not_found."""
+        payload = await self._send_json("GET", f"/templates/network/{name}")
+        return _wire.parse_network_template(payload)
+
+    async def list_node_templates(self) -> list[NodeTemplate]:
+        """GET /templates/node — both tiers, FULL entries (fragments are
+        small and bounded; the builder palette stamps straight from the
+        list)."""
+        payload = await self._send_json("GET", "/templates/node")
+        return [_wire.parse_node_template(v) for v in _wire.as_list(payload, "NodeTemplate[]")]
+
+    async def get_node_template(self, name: str) -> NodeTemplate:
+        """GET /templates/node/{name}. 404 template_not_found."""
+        payload = await self._send_json("GET", f"/templates/node/{name}")
+        return _wire.parse_node_template(payload)
+
+    async def create_node_template(
+        self, name: str, *, description: str, content: str
+    ) -> NodeTemplate:
+        """POST /templates/node — global template:manage; 201. `content` is a
+        YAML node-attribute mapping that MUST name `device`; validation is
+        STRUCTURAL only (the receiving lab's PUT stays the real validator).
+        409 name_taken; 422 invalid_template."""
+        payload = await self._send_json(
+            "POST",
+            "/templates/node",
+            json_body={"name": name, "description": description, "content": content},
+        )
+        return _wire.parse_node_template(payload)
+
+    async def update_node_template(
+        self, name: str, *, description: str, content: str
+    ) -> NodeTemplate:
+        """PUT /templates/node/{name} — global template:manage. Full REPLACE
+        of a USER-tier entry. 409 template_readonly on a builtin."""
+        payload = await self._send_json(
+            "PUT",
+            f"/templates/node/{name}",
+            json_body={"description": description, "content": content},
+        )
+        return _wire.parse_node_template(payload)
+
+    async def delete_node_template(self, name: str) -> None:
+        """DELETE /templates/node/{name} — global template:manage; 204. USER
+        tier only (409 template_readonly on a builtin). The network
+        collection has no delete: the set_lab_template toggle is its user
+        tier's whole lifecycle."""
+        _ = await self._send("DELETE", f"/templates/node/{name}")
+
+    async def set_lab_template(
+        self, name: str, *, published: bool, description: str | None = None
+    ) -> NetworkTemplateSummary | None:
+        """PUT /labs/{name}/template — the "use as a template" toggle:
+        publishes this lab's stored definition into the network collection as
+        a LIVE template, or withdraws it. Global template:manage PLUS
+        lab:read (404 existence-hiding). `description` is the library-card
+        text: REQUIRED when publishing (422), ignored when withdrawing;
+        re-publishing just updates it. Returns the entry, None once
+        withdrawn. While published the definition is readable by EVERY
+        authenticated user; soft-deleting the lab withdraws the entry;
+        instantiation COPIES. 409 no_definition on an unauthored lab; 409
+        name_taken against a builtin's name."""
+        payload = await self._send_json(
+            "PUT",
+            f"/labs/{name}/template",
+            json_body={"published": published, "description": description},
+        )
+        return None if payload is None else _wire.parse_network_template_summary(payload)
 
     # ------------------------------------------------------------------ #
     # Labs — lifecycle: create (record) -> author (PUTs) -> deploy

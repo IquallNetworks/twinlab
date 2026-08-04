@@ -7,7 +7,14 @@ test_labs_deploy.py behind the `deploy` marker.
 from collections.abc import Callable
 
 import pytest
-from twinlab_client import DestroyResponse, TwinlabApiError, TwinlabClient
+from twinlab_client import (
+    DestroyResponse,
+    Duration,
+    NetemAction,
+    PowerAction,
+    TwinlabApiError,
+    TwinlabClient,
+)
 
 from _config import (
     LAB_SCOPED_PERMISSIONS,
@@ -210,3 +217,48 @@ async def test_creator_becomes_owner(
     # The creator role grants nothing lab-scoped; everything they hold here is
     # the owner-implicit set (and delta 10 masks out their global lab:create).
     assert lab.permissions == LAB_SCOPED_PERMISSIONS
+
+
+async def test_batch_actions_rejects_bad_items_before_executing(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Delta 24: a structurally invalid batch is a 422 with NOTHING executed —
+    HTTP errors mean could-not-run. These need no deploy: validation precedes
+    every live call."""
+    lab = await make_lab(None)
+
+    async def rejected(actions: list[NetemAction | PowerAction]) -> TwinlabApiError:
+        with pytest.raises(TwinlabApiError) as excinfo:
+            _ = await admin.apply_actions(lab.name, actions)
+        return excinfo.value
+
+    # jitter without delay — the inherited single-route rule still bites.
+    bad_jitter = await rejected(
+        [NetemAction(node="n1", interface="eth1", jitter=Duration(5.0, "ms"))]
+    )
+    assert bad_jitter.status_code == 422
+    # Out-of-range percentage, empty batch, and the 64-item bound.
+    assert (
+        await rejected([NetemAction(node="n1", interface="eth1", loss=101.0)])
+    ).status_code == 422
+    assert (await rejected([])).status_code == 422
+    too_many: list[NetemAction | PowerAction] = [
+        PowerAction(node="n1", action="stop") for _ in range(65)
+    ]
+    assert (await rejected(too_many)).status_code == 422
+
+
+async def test_batch_actions_permission_and_existence_hiding(
+    make_user_client: UserClientFactory, make_lab: LabFactory, unique: Callable[[str], str]
+) -> None:
+    lab = await make_lab(None)
+    _, viewer = await make_user_client({"global_viewer"})
+    actions: list[NetemAction | PowerAction] = [PowerAction(node="n1", action="stop")]
+
+    # Readable but lacking lab:configure -> 403; unreadable/absent -> 404.
+    with pytest.raises(TwinlabApiError) as forbidden:
+        _ = await viewer.apply_actions(lab.name, actions)
+    assert forbidden.value.status_code == 403
+    with pytest.raises(TwinlabApiError) as hidden:
+        _ = await viewer.apply_actions(unique("ghost"), actions)
+    assert hidden.value.status_code == 404

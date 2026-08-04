@@ -97,27 +97,38 @@ function validateFields(f: Fields): FieldErrors {
 /** Apply an impairment to one or more interfaces, then refresh both views of
  * it (the per-node netem query and the link table).
  *
- * Targets are applied SEQUENTIALLY: clab-api serializes netem per lab and
- * answers a concurrent call with 409 "busy with netem operation", so a
- * two-endpoint link fan-out must not be a Promise.all. */
+ * ONE request for every target (delta 24): the backend applies them
+ * sequentially — clab-api serializes netem per lab and answers a concurrent
+ * call with 409 "busy with netem operation" — so the fan-out that used to live
+ * here is now the server's job. A 2xx means the batch RAN: per-item failures
+ * come back as data, so partial success is reported honestly instead of
+ * abandoning the remaining targets mid-loop. */
 export function useApplyNetem(name: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (targets: { node: string; input: NetemSetInput }[]) => {
-      const messages: string[] = []
-      for (const target of targets) {
-        const result = await api.setNodeNetem(name, target.node, target.input)
-        messages.push(result.message)
-      }
-      return messages
-    },
-    onSuccess: async (messages, targets) => {
+    mutationFn: (targets: { node: string; input: NetemSetInput }[]) =>
+      api.applyActions(
+        name,
+        targets.map((target) => ({ kind: 'netem' as const, node: target.node, ...target.input })),
+      ),
+    onSuccess: async (report, targets) => {
       for (const node of new Set(targets.map((t) => t.node))) {
         await queryClient.invalidateQueries({ queryKey: nodeNetemQueryOptions(name, node).queryKey })
       }
       await queryClient.invalidateQueries({ queryKey: labLinksQueryOptions(name).queryKey })
+      const failed = report.results.filter((result) => !result.ok)
+      if (failed.length > 0) {
+        toast.error(
+          failed.length === report.results.length
+            ? failed[0].message
+            : `${report.results.length - failed.length} of ${report.results.length} interfaces impaired — ${failed[0].message}`,
+        )
+        return
+      }
       toast.success(
-        messages.length === 1 ? messages[0] : `Impairment applied to ${messages.length} interfaces`,
+        report.results.length === 1
+          ? report.results[0].message
+          : `Impairment applied to ${report.results.length} interfaces`,
       )
     },
     onError: (err) => toastError(err, 'Failed to set impairment'),

@@ -46,6 +46,8 @@ import {
   type LifecycleAction,
   type NetemSetInput,
   type NodeAction,
+  type RuntimeActionInput,
+  runtimeActionsReportSchema,
 } from '@/lib/schemas'
 
 // The frontend is served same-origin with the backend (the dev server proxies
@@ -385,6 +387,14 @@ export const api = {
       labActionResponseSchema,
       { method: 'POST', body: JSON.stringify(input) },
     ),
+  // Many impairments + node power events in ONE request (delta 24), applied
+  // sequentially in list order. A 2xx means the batch RAN: per-item failures
+  // live in the report, so callers must read `results`, not just await this.
+  applyActions: (name: string, actions: RuntimeActionInput[]) =>
+    request(`/labs/${encodeURIComponent(name)}/actions`, runtimeActionsReportSchema, {
+      method: 'POST',
+      body: JSON.stringify({ actions }),
+    }),
 
   // Test suites. Read/author (lab:read / lab:edit); run one on demand
   // (lab:validate). `testSuites` is the raw suite map, validated server-side.

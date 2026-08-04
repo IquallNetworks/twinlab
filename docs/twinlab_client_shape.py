@@ -287,6 +287,61 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     dumps are PARKED as a later input form (they would normalize into the
     same wiring entries; ntc-templates already parses the IOS output).
     (wire today: delta 22 — optional-nothing, adjacency inferred.)
+24. Batch runtime actions (APPROVED 2026-08-04 — the v1.0 remnant of the
+    SHELVED scenario item, maintainer's call same day; scenario groundwork in
+    ROADMAP 16.5): ``POST /labs/{name}/actions`` applies MANY netem
+    impairments and node power events in ONE request, so a caller (the
+    frontend, or an external orchestrator) can stage a whole degraded
+    condition — impair N links, stop a node — without round-trip
+    choreography. The body is an ORDERED list of items in TWO kinds, each
+    mirroring its single-verb route EXACTLY (same fields, same semantics,
+    same failure modes — a batch item teaches a caller nothing new):
+    ``netem`` = set_netem's REPLACE on node+interface (the item states the
+    interface's COMPLETE desired impairment; no dimensions = clear it) and
+    ``power`` = node_power's verb on one node. Items execute SEQUENTIALLY
+    IN REQUEST ORDER (ordering is the caller's to compose — impair before
+    stop; clab-api serializes netem per lab anyway) and execution
+    CONTINUES past a failed item: a 2xx means the batch RAN, and the
+    response is an INDEX-ALIGNED per-item report (ok + clab-api's verbatim
+    message, or the error slug + message the standalone verb would have
+    raised) — the config-push philosophy: HTTP errors mean could-not-run
+    (a malformed item, unknown kind, jitter without delay, an over-bound
+    list → 422 up front, NOTHING executed; per-item errors are LIVE
+    failures only). EXPLICITLY NOT a transaction: no rollback of earlier
+    items, no isolation (a concurrent caller's single verb may interleave
+    between items) — the orchestrator that needs more is exactly what got
+    shelved. Bounded: ≤64 items. Sync, deliberately NOT a job: the member
+    verbs are sync, and a job would trip the per-lab job mutex — runtime
+    control must stay available while a long op runs, exactly as the
+    single verbs are today. Permission ``lab:configure`` — what BOTH
+    member verbs already ride; 404 existence-hiding unchanged. Route
+    note (CORRECTED at implementation): ``actions`` is just another
+    STATIC segment beside the other static lab POSTs (deploy, configure,
+    save, start/stop/restart) — the capture hazard the sketch warned of
+    does not exist at lab level, where the power routes use explicit
+    segments rather than an ``{action}`` path param; only the NODE routes
+    have that param (hence the netem-before-{action} ordering there).
+    Node-level only — no whole-lab
+    power items (the caller enumerates; the lab verbs' fan-out semantics
+    stay theirs). TYPE-UNIFIED with the single verbs, not route-merged
+    (review resolution 2026-08-04): a batch ``netem`` item IS the single
+    netem route's body plus its address (``node``) plus the ``kind`` tag,
+    and a ``power`` item IS the single route's path pair materialized as
+    fields — ONE vocabulary, no second spelling of an impairment
+    anywhere, and ONE executor in the implementation (a standalone verb
+    runs a batch of one internally). The client unifies harder:
+    ``set_netem`` now TAKES a NetemAction — the same object applies
+    standalone or batched (pre-PyPI, so the signature change is free;
+    the single route's wire is UNCHANGED — the client puts ``node`` in
+    the path and the rest in the body). ``node_power`` keeps its two
+    scalars: they ARE the shared vocabulary already, and a wrapper for
+    the single call is ceremony (``PowerAction`` exists to put the pair
+    in a list). The single ROUTES stay, deliberately: their failure
+    semantics differ by design — a standalone verb fails via the HTTP
+    error envelope (fail-loudly), a batch item's failure is DATA in the
+    report — and a route merge would either kill fail-loudly for simple
+    callers or leave ``ok`` a dead always-true field. (wire today: no
+    batch — one round trip per interface/node.)
 
 Conventions:
 
@@ -1462,6 +1517,63 @@ NodePowerAction = Literal["start", "stop", "restart", "pause", "unpause"]
 # non-atomic — partial failure = 502 listing failed nodes; 409 if none running.
 
 
+# PROPOSED (delta 24, APPROVED): batch runtime actions. The client discriminates items
+# by dataclass; the wire carries a ``kind`` tag ("netem" | "power").
+@dataclass(frozen=True, slots=True)
+class NetemAction:
+    """PROPOSED (delta 24, APPROVED): THE impairment spelling — the single netem
+    route's body plus its address. ``set_netem`` takes one standalone,
+    ``apply_actions`` takes a list; the same object serves both (the wire
+    identity: the batch item is these fields + ``kind``; the single route
+    puts ``node`` in the path and the rest in the body — unchanged). States
+    the interface's COMPLETE desired impairment (REPLACE); all dimensions
+    None = clear the interface. Validation (jitter requires delay,
+    loss/corruption 0-100 %, rate kbit/s) is identical standalone or
+    batched — in a batch it runs up front for EVERY item before anything
+    executes."""
+
+    node: str  # SHORT node name, as everywhere
+    interface: str  # container-side name — what /interfaces and links() report
+    delay: Duration | None = None
+    jitter: Duration | None = None
+    loss: float | None = None
+    rate: int | None = None
+    corruption: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PowerAction:
+    """PROPOSED (delta 24, APPROVED): one batch item — node_power's PATH PAIR
+    materialized as fields (same NodePowerAction vocabulary). Exists to put
+    the pair in a list; the standalone ``node_power`` keeps its two scalars
+    — a wrapper there would be ceremony."""
+
+    node: str
+    action: NodePowerAction
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeActionResult:
+    """PROPOSED (delta 24, APPROVED): one batch item's outcome, INDEX-ALIGNED with the
+    submitted list. ok=True → ``message`` is clab-api's verbatim response
+    (the LabActionResponse precedent) and ``code`` is None; ok=False →
+    ``code`` + ``message`` are what the standalone verb's error envelope
+    would have carried (``node_not_found``, ``netem_failed``, ...) — the
+    slugs are identical to the single routes'."""
+
+    ok: bool
+    code: str | None
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeActionsReport:
+    """PROPOSED (delta 24, APPROVED): the batch outcome. A 2xx means the batch RAN;
+    each item's success or failure lives here, never in the HTTP status."""
+
+    results: list[RuntimeActionResult]  # index-aligned with the request
+
+
 # --------------------------------------------------------------------------- #
 # Terminal
 # --------------------------------------------------------------------------- #
@@ -2174,26 +2286,37 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         zeroed."""
         raise NotImplementedError
 
-    async def set_netem(
-        self,
-        name: str,
-        node: str,
-        interface: str,
-        *,
-        delay: Duration | None = None,
-        jitter: Duration | None = None,
-        loss: float | None = None,
-        rate: int | None = None,
-        corruption: float | None = None,
-    ) -> LabActionResponse:
+    async def set_netem(self, name: str, action: NetemAction) -> LabActionResponse:
         """POST /labs/{name}/nodes/{node}/netem — lab:configure. REPLACE
         semantics (APPROVED): the call states the interface's COMPLETE desired
         impairment — an omitted/None dimension is cleared, and a call with no
         impairments clears everything (subsuming the removed /netem/reset
         endpoint). jitter requires delay; loss/corruption 0-100 %, rate kbit/s.
 
+        PROPOSED (delta 24, APPROVED) signature unification: takes THE impairment
+        spelling (NetemAction) instead of five kwargs — the same object
+        applies standalone here or batched in apply_actions. The wire is
+        UNCHANGED: ``action.node`` becomes the path segment, the rest the
+        body. Standalone failure stays an HTTP error (the envelope), NOT a
+        report — the fail-loudly semantics a batch item deliberately trades
+        away.
+
         Wire today: "50ms"-style duration strings, omitted = unchanged, an
         at-least-one-impairment rule, and a separate POST .../netem/reset."""
+        raise NotImplementedError
+
+    async def apply_actions(
+        self, name: str, actions: list[NetemAction | PowerAction]
+    ) -> RuntimeActionsReport:
+        """PROPOSED (delta 24, APPROVED) POST /labs/{name}/actions — lab:configure.
+        Many netem sets/clears + node power events in ONE request, executed
+        SEQUENTIALLY in list order, continuing past failures; the report is
+        index-aligned per-item outcomes. NOT a transaction: no rollback, no
+        isolation against concurrent single-verb calls. ≤64 items. 422 up
+        front (nothing executed) on any structurally invalid item; live
+        failures (unknown node, netem on a stopped container) land on the
+        item's result, never the HTTP status. Sync — a fast staging verb,
+        usable while a job runs, exactly like the single verbs it mirrors."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #

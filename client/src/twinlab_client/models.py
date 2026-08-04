@@ -681,6 +681,54 @@ class NetemImpairment:
 
 
 @dataclass(frozen=True, slots=True)
+class NetemAction:
+    """THE impairment spelling (delta 24): `set_netem` applies one,
+    `apply_actions` applies a list — the same object either way. States the
+    interface's COMPLETE desired impairment (REPLACE semantics); every
+    dimension None = clear the interface. jitter requires delay;
+    loss/corruption are percentages, rate kbit/s."""
+
+    node: str  # SHORT node name
+    interface: str  # container-side name — what interfaces()/links() report
+    delay: Duration | None = None
+    jitter: Duration | None = None
+    loss: float | None = None
+    rate: int | None = None
+    corruption: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PowerAction:
+    """One power item of a batch (delta 24): node_power's path pair as fields.
+    The standalone verb keeps its two scalars — this exists to put the pair in
+    a list."""
+
+    node: str
+    action: NodePowerAction
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeActionResult:
+    """One batch item's outcome, INDEX-ALIGNED with the submitted list
+    (delta 24). ok=True -> `message` is clab-api's verbatim response and
+    `code` is None; ok=False -> `code`/`message` are what the standalone
+    verb's error envelope would have carried. A failed item is DATA: the call
+    does not raise."""
+
+    ok: bool
+    code: str | None
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeActionsReport:
+    """The batch outcome (delta 24). A 2xx means the batch RAN — success or
+    failure per item lives in `results`, never in the HTTP status."""
+
+    results: list[RuntimeActionResult]
+
+
+@dataclass(frozen=True, slots=True)
 class LinkEndpoint:
     """One attachment point of a logical link (delta 14)."""
 

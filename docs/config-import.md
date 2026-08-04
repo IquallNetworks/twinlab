@@ -97,8 +97,8 @@ character-for-character verbatim.
   everything ride the carry verbatim. netlab then generates only interface/IP config (which
   matches the source, since pinned) and the carry does the rest. The loss surface collapses
   to two auditable transformations: the interface map and the quarantine list. Module
-  modeling is a later, optional editability refinement (with ROADMAP item 19), never a
-  correctness risk taken now.
+  modeling is a later, optional editability refinement (with ROADMAP item 17.3, the
+  builder coverage review), never a correctness risk taken now.
 - **Interface renaming via the expanded topology, two-phase.** Emit the skeleton → run the
   same dry `netlab create` the PUT runs → the expanded topology (the artifact the link
   table/facts already come from) pairs each source interface (identified by its
@@ -143,7 +143,7 @@ peer is outside the import set become stubs (the twin's boundary, config still a
 Honest limits, all named warnings, never silent: unnumbered links and mask mismatches don't
 join (stub + warning), and **LAGs** are the worst case — the port-channel's subnet joins but
 its unaddressed member interfaces don't exist in the lab, so carried member references warn
-loudly (modeling `lag` is a module promotion for ROADMAP item 19, not a v1 correctness risk).
+loudly (modeling `lag` is a module promotion for ROADMAP item 17.3, not a v1 correctness risk).
 The wizard's review step is the human backstop: the factory output is an ordinary builder
 doc, rendered on the canvas before any lab exists — inference proposes, the user disposes.
 **Recorded future extension** (not v1): optionally accept CDP/LLDP neighbor dumps or an

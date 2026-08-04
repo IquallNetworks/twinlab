@@ -582,6 +582,64 @@ class NetemSetRequest(BaseModel):
         return self
 
 
+# Per-node power controls (contract delta 24 moved this here from api/labs.py:
+# the batch items and the single route share ONE vocabulary). clab-api adds
+# pause/unpause on top of the lab-level set.
+type NodeAction = Literal["start", "stop", "restart", "pause", "unpause"]
+
+
+class NetemActionItem(NetemSetRequest):
+    """One netem item of a batch (contract delta 24). The wire identity the
+    contract pins: the single route's body (inherited verbatim — same fields,
+    same bounds, same jitter-requires-delay rule) plus its address (`node`,
+    which the single route takes from the path) plus the `kind` tag."""
+
+    kind: Literal["netem"]
+    node: _Name
+
+
+class PowerActionItem(BaseModel):
+    """One power item of a batch (contract delta 24): the single node-power
+    route's PATH PAIR materialized as fields."""
+
+    kind: Literal["power"]
+    node: _Name
+    action: NodeAction
+
+
+# Discriminated on `kind` so a malformed item names the field that is wrong
+# rather than reporting five union-member failures.
+type RuntimeActionItem = Annotated[NetemActionItem | PowerActionItem, Field(discriminator="kind")]
+
+
+class RuntimeActionsRequest(BaseModel):
+    """A batch of runtime actions (contract delta 24). Items execute
+    SEQUENTIALLY in request order and execution continues past a failed item;
+    ordering is the caller's to compose. Bounded at 64 — the batch is
+    synchronous, and each item can cost a live clab-api round trip. An empty
+    batch is a caller bug, not a no-op."""
+
+    actions: list[RuntimeActionItem] = Field(min_length=1, max_length=64)
+
+
+class RuntimeActionResult(BaseModel):
+    """One item's outcome, index-aligned with the request (contract delta 24).
+    ok=True -> `message` is clab-api's verbatim response and `code` is None;
+    ok=False -> `code`/`message` are what the standalone verb's error envelope
+    would have carried. A failed item is DATA: the batch still returns 2xx."""
+
+    ok: bool
+    code: str | None = None
+    message: str
+
+
+class RuntimeActionsReport(BaseModel):
+    """The batch outcome (contract delta 24). A 2xx means the batch RAN — each
+    item's success or failure lives in `results`, never in the HTTP status."""
+
+    results: list[RuntimeActionResult]
+
+
 class NetemImpairment(BaseModel):
     """Current netem impairment on one node interface, read from clab-api.
     None / 0 means that dimension is unshaped."""

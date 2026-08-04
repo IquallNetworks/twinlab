@@ -32,7 +32,6 @@ from twinlab_client.models import (
     CustomConfigResponse,
     DeviceCatalog,
     DiffSource,
-    Duration,
     Grant,
     GroupSummary,
     ImportSource,
@@ -50,6 +49,7 @@ from twinlab_client.models import (
     LayoutGroupStyle,
     LayoutPosition,
     Liveness,
+    NetemAction,
     NetemImpairment,
     NetworkImport,
     NetworkTemplate,
@@ -59,9 +59,11 @@ from twinlab_client.models import (
     NodeLogsResponse,
     NodePowerAction,
     NodeTemplate,
+    PowerAction,
     Principals,
     Readiness,
     Role,
+    RuntimeActionsReport,
     SaveConfigResponse,
     SshAccess,
     SshKey,
@@ -867,36 +869,52 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
             _wire.parse_netem_impairment(v) for v in _wire.as_list(payload, "NetemImpairment[]")
         ]
 
-    async def set_netem(
-        self,
-        name: str,
-        node: str,
-        interface: str,
-        *,
-        delay: Duration | None = None,
-        jitter: Duration | None = None,
-        loss: float | None = None,
-        rate: int | None = None,
-        corruption: float | None = None,
-    ) -> LabActionResponse:
+    async def set_netem(self, name: str, action: NetemAction) -> LabActionResponse:
         """POST /labs/{name}/nodes/{node}/netem — lab:configure. REPLACE
         semantics: the call states the interface's COMPLETE desired impairment
         — an omitted/None dimension is cleared, and a call with no impairments
         clears everything. jitter requires delay; loss/corruption 0-100 %,
-        rate kbit/s."""
+        rate kbit/s.
+
+        Takes THE impairment spelling (delta 24): the same NetemAction applies
+        standalone here or batched in `apply_actions`. `action.node` becomes
+        the path segment, the rest the body. Failure here is an HTTP error
+        (TwinlabApiError) — the fail-loudly semantics a batch item trades for
+        per-item reporting."""
         payload = await self._send_json(
             "POST",
-            f"/labs/{name}/nodes/{node}/netem",
-            json_body={
-                "interface": interface,
-                "delay": _wire.duration_to_wire(delay),
-                "jitter": _wire.duration_to_wire(jitter),
-                "loss": loss,
-                "rate": rate,
-                "corruption": corruption,
-            },
+            f"/labs/{name}/nodes/{action.node}/netem",
+            json_body=_wire.netem_body_to_wire(action),
         )
         return _wire.parse_lab_action_response(payload)
+
+    async def apply_actions(
+        self, name: str, actions: list[NetemAction | PowerAction]
+    ) -> RuntimeActionsReport:
+        """POST /labs/{name}/actions — lab:configure (delta 24). Many netem
+        sets/clears and node power events in ONE request, executed
+        SEQUENTIALLY in list order, continuing past failures; the report is
+        index-aligned per-item outcomes.
+
+        NOT a transaction: no rollback, no isolation against concurrent single
+        verbs. At most 64 items. A structurally invalid item (jitter without
+        delay, an out-of-range percentage, an empty or over-long list) is a 422
+        with NOTHING executed; live failures (unknown node, netem on a stopped
+        container) land on the item's result, never on the HTTP status. Sync —
+        usable while a job runs, exactly like the single verbs it mirrors."""
+        payload = await self._send_json(
+            "POST",
+            f"/labs/{name}/actions",
+            json_body={
+                "actions": [
+                    _wire.netem_action_to_wire(action)
+                    if isinstance(action, NetemAction)
+                    else _wire.power_action_to_wire(action)
+                    for action in actions
+                ]
+            },
+        )
+        return _wire.parse_runtime_actions_report(payload)
 
     # ------------------------------------------------------------------ #
     # Labs — grants & ownership (lab:grant on the lab)

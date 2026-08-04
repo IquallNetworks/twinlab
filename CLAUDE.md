@@ -36,7 +36,7 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (twenty-three deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (twenty-four deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
 2026-08-03, delta 18 the device/image catalog, delta 19 the deployed-definition snapshot +
@@ -46,9 +46,11 @@ one, approved same day with the reviewer-directed per-kind split — and delta 2
 import — input methods part two, approved 2026-08-04, design record in
 `docs/config-import.md` — and delta 23 explicit wiring, which REVISED that
 import surface the same day: the wiring list became a required input and
-inferred adjacency was removed). Two non-compose
+inferred adjacency was removed — and delta 24 batch runtime actions, approved
+2026-08-04: the v1.0 remnant of the SHELVED scenario item, many netem
+impairments + node power events in one request). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 133 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 136 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -104,13 +106,15 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   Import button on the labs page and the builder Add menu's "From config file…", which stamps
   the fragment through the shared `stampFragment` path and saves carry + quarantine into the
   lab's custom config UNATTACHED, since a single config infers no links and keeps SOURCE
-  interface names); still
-  parked, order agreed 2026-08-03/04 (ROADMAP item 16; **builder link forms DONE
-  2026-08-04** — see Phase 4 below): the import aux-input analysis (CDP/LLDP neighbor dumps /
-  explicit wiring lists — sequenced immediately after import v1, see `docs/config-import.md`)
-  → scenarios (the least-specified item; starts with a design discussion);
-  after that batch comes the **NOS platform
-  sweep** (ROADMAP item 17), then a
+  interface names); the parked batch
+  (ROADMAP item 16, order agreed 2026-08-03/04 — builder link forms, both input methods
+  and the aux-input analysis all landed 2026-08-04) closes with **batch runtime
+  actions** (contract delta 24, in review — the v1.0 remnant of **scenarios**, which
+  were SHELVED until after v1.0 at their design-discussion opening, groundwork
+  recorded in ROADMAP 16.5); after it comes the **NOS platform
+  sweep** (ROADMAP item 17, which since 2026-08-04 also carries the two reviews it
+  informs — the `netlab up` parity gaps and the builder coverage review, run in
+  parallel with it), then a
   comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
   the browser-layer complement to the blackbox suite), and only then the v1.0
   release train (publish `twinlab-client` to PyPI + tag) goes LAST). Phase 1 (graphical
@@ -397,7 +401,18 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   REPLACE semantics: the body is the complete desired impairment, omitted = cleared, empty body =
   clear all; show lists only ACTIVELY impaired interfaces — the node's container is resolved from
   live state, and these routes precede the `{action}` node route so `netem` isn't captured by the
-  action path param). Node state carries a docker-vocabulary `state` (unknown upstream values 502
+  action path param), and **batch runtime actions** (delta 24: `POST /labs/{name}/actions`,
+  `lab:configure` — many netem sets/clears + node power events in ONE request, so a caller stages a
+  whole degraded condition without round-trip choreography. Items are TYPE-UNIFIED with the single
+  verbs, not route-merged: `NetemActionItem` INHERITS `NetemSetRequest` (+`node`+`kind`), the
+  `NodeAction` vocabulary lives in `models.py`, and `_netem_once`/`_power_once` are ONE executor
+  the single routes and the batch share — a standalone verb is a batch of one. Sequential in
+  request order, CONTINUES past failures: a 2xx means the batch RAN and the index-aligned report
+  carries each item's outcome, while structural problems 422 up front with nothing executed.
+  Explicitly not a transaction — no rollback, no isolation; ≤64 items; sync, so runtime control
+  stays available while a job holds the per-lab mutex. ONE inspect resolves every netem item's
+  container — power items take short names, so they survive an inspect failure and a power-only
+  batch never inspects). Node state carries a docker-vocabulary `state` (unknown upstream values 502
   loudly) and
   the management IP (`mgmt_ip`, from clab's `ipv4_address`) for a copy-paste `ssh` command. A
   **Server-Sent Events** stream at `GET /events` (`lab:read`) carries TWO **named** events

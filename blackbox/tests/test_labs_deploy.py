@@ -24,6 +24,8 @@ from twinlab_client import (
     JobEvent,
     LabDetail,
     LabEvent,
+    NetemAction,
+    PowerAction,
     SuiteReport,
     TestCase,
     TestExpectation,
@@ -262,7 +264,10 @@ async def test_netem_set_show_clear(admin: TwinlabClient, make_lab: LabFactory) 
     (link,) = (await admin.links(detail.name)).links
     interface = next(e.interface for e in link.endpoints if e.node == "n1")
 
-    _ = await admin.set_netem(detail.name, "n1", interface, delay=Duration(50.0, "ms"), loss=1.0)
+    _ = await admin.set_netem(
+        detail.name,
+        NetemAction(node="n1", interface=interface, delay=Duration(50.0, "ms"), loss=1.0),
+    )
     shaped = {imp.interface: imp for imp in await admin.show_netem(detail.name, "n1")}
     impairment = shaped[interface]
     assert impairment.delay == Duration(50.0, "ms")
@@ -281,11 +286,57 @@ async def test_netem_set_show_clear(admin: TwinlabClient, make_lab: LabFactory) 
 
     # REPLACE semantics: a call with no impairments clears the interface —
     # and show lists only ACTIVELY impaired interfaces, so it disappears.
-    _ = await admin.set_netem(detail.name, "n1", interface)
+    _ = await admin.set_netem(detail.name, NetemAction(node="n1", interface=interface))
     cleared = {imp.interface: imp for imp in await admin.show_netem(detail.name, "n1")}
     assert interface not in cleared
     (cleared_link,) = (await admin.links(detail.name)).links
     assert all(endpoint.impairment is None for endpoint in cleared_link.endpoints)
+
+
+async def test_batch_actions_stage_and_report(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    """Delta 24: many impairments + a power event in ONE request — the round
+    trip the frontend's two-endpoint link fan-out used to choreograph."""
+    detail = await _deployed_lab(admin, make_lab)
+    (link,) = (await admin.links(detail.name)).links
+    interfaces = {endpoint.node: endpoint.interface for endpoint in link.endpoints}
+
+    # Both endpoints of the link, shaped identically, plus an item naming a node
+    # that does not exist: the batch still RUNS, and only that item fails.
+    report = await admin.apply_actions(
+        detail.name,
+        [
+            NetemAction(node="n1", interface=interfaces["n1"], delay=Duration(40.0, "ms")),
+            NetemAction(node="n2", interface=interfaces["n2"], delay=Duration(40.0, "ms")),
+            NetemAction(node="ghost", interface="eth1", loss=1.0),
+        ],
+    )
+    assert [result.ok for result in report.results] == [True, True, False]
+    assert report.results[2].code == "node_not_found"
+
+    # Both directions really are shaped — the batch is the whole link's write.
+    (shaped,) = (await admin.links(detail.name)).links
+    by_node = {endpoint.node: endpoint for endpoint in shaped.endpoints}
+    for node in ("n1", "n2"):
+        impairment = by_node[node].impairment
+        assert impairment is not None and impairment.delay == Duration(40.0, "ms")
+
+    # Power items ride the same batch; a stop is visible in the lab detail.
+    powered = await admin.apply_actions(detail.name, [PowerAction(node="n2", action="stop")])
+    assert powered.results[0].ok
+    stopped = {node.name: node for node in (await admin.get_lab(detail.name)).nodes}
+    assert stopped["n2"].state != "running"
+    _ = await admin.apply_actions(detail.name, [PowerAction(node="n2", action="start")])
+
+    # An impairment-less item clears (REPLACE), same as the single verb.
+    cleared = await admin.apply_actions(
+        detail.name, [NetemAction(node="n1", interface=interfaces["n1"])]
+    )
+    assert cleared.results[0].ok
+    assert not [
+        imp
+        for imp in await admin.show_netem(detail.name, "n1")
+        if imp.interface == interfaces["n1"]
+    ]
 
 
 async def test_node_power_cycle(admin: TwinlabClient, make_lab: LabFactory) -> None:

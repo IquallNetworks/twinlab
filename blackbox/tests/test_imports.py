@@ -221,12 +221,8 @@ async def test_import_round_trip_deploys_and_diffs_clean(
     report = await admin.config_diff(
         lab.name,
         [
-            DiffSource(
-                node="r1", content=_R1_VYOS, interface_map=imported.interface_map["r1"]
-            ),
-            DiffSource(
-                node="r2", content=_R2_VYOS, interface_map=imported.interface_map["r2"]
-            ),
+            DiffSource(node="r1", content=_R1_VYOS, interface_map=imported.interface_map["r1"]),
+            DiffSource(node="r2", content=_R2_VYOS, interface_map=imported.interface_map["r2"]),
         ],
     )
     by_node = {entry.node: entry for entry in report.nodes}

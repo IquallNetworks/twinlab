@@ -21,6 +21,8 @@ from twinlab_client import (
     LabNodeState,
     LayoutGroupStyle,
     LayoutPosition,
+    NetemAction,
+    PowerAction,
     Principal,
     SshAccess,
     SshKey,
@@ -727,8 +729,68 @@ async def test_set_netem_replace_semantics_body(make_client: ClientFactory) -> N
         return httpx.Response(200, json={"message": "netem applied"})
 
     async with make_client(handler) as client:
-        result = await client.set_netem("lab1", "r1", "eth1", delay=Duration(50.0, "ms"), loss=1.5)
+        result = await client.set_netem(
+            "lab1", NetemAction(node="r1", interface="eth1", delay=Duration(50.0, "ms"), loss=1.5)
+        )
     assert result.message == "netem applied"
+
+
+async def test_apply_actions_tags_items_and_aligns_results(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/actions"
+        # A netem item IS the single route's body + node + kind (delta 24).
+        assert _json_body(request) == {
+            "actions": [
+                {
+                    "kind": "netem",
+                    "node": "r1",
+                    "interface": "eth1",
+                    "delay": {"value": 50.0, "unit": "ms"},
+                    "jitter": None,
+                    "loss": None,
+                    "rate": None,
+                    "corruption": None,
+                },
+                {"kind": "power", "node": "r2", "action": "stop"},
+            ]
+        }
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"ok": True, "code": None, "message": "impaired eth1"},
+                    {"ok": False, "code": "clab_not_found", "message": "no such node"},
+                ]
+            },
+        )
+
+    async with make_client(handler) as client:
+        report = await client.apply_actions(
+            "lab1",
+            [
+                NetemAction(node="r1", interface="eth1", delay=Duration(50.0, "ms")),
+                PowerAction(node="r2", action="stop"),
+            ],
+        )
+    # A failed item is DATA — the call returns, it does not raise.
+    assert [result.ok for result in report.results] == [True, False]
+    assert report.results[1].code == "clab_not_found"
+    assert report.results[0].code is None
+
+
+async def test_apply_actions_surfaces_upfront_rejection_as_an_error(
+    make_client: ClientFactory,
+) -> None:
+    # A structurally invalid item never executes: that IS an HTTP error.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422, json={"code": "validation_error", "message": "jitter requires delay", "extras": {}}
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabApiError) as excinfo:
+            _ = await client.apply_actions("lab1", [PowerAction(node="r1", action="stop")])
+    assert excinfo.value.code == "validation_error"
 
 
 async def test_show_netem_parses_durations(make_client: ClientFactory) -> None:

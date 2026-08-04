@@ -510,9 +510,11 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
 
 14. **A comprehensive end-to-end test suite driving the real frontend with
     Playwright (Apache-2.0), verifying the UX** — decided 2026-07-31. Sequencing
-    is locked: it lands after the parked backend batch (builder link forms,
-    definition input methods, scenarios) and the NOS platform sweep
-    (item 17) so the surfaces it pins down are final, and before the v1.0
+    is locked: it lands after the parked backend batch (CLOSED 2026-08-04 —
+    scenarios shelved post-v1.0, their v1.0 remnant delta 24 shipped; see
+    16.5) and the
+    NOS platform sweep with its two companion reviews (item 17) so the surfaces
+    it pins down are final, and before the v1.0
     release train, which must not ship without it. The black-box suite already proves the API contract through the
     client; this suite covers what that cannot — the browser layer: login/auth
     flows, role-gated affordances actually hidden/shown, the dashboard → lab
@@ -605,7 +607,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     train: backend → client → blackbox → the frozen frontend panel
     rebuild.
 
-### Parked backend batch — order agreed 2026-08-03 · **planned**
+### Parked backend batch — order agreed 2026-08-03 · **done 2026-08-04** (16.1–16.4 shipped; 16.5 scenarios SHELVED post-v1.0, its v1.0 remnant delta 24 shipped)
 
 16. **The remaining parked backend items** (detailed in
     `docs/frontend-rework.md`'s parked list) run in this order, small quick
@@ -705,41 +707,83 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        false` on their unaddressed endpoints, since netlab otherwise
        invents an address (live-proven). Blackbox 133 green, the flagship
        round trip now carrying an L2 wire end to end. Next: scenarios.
-    5. **Scenario definition** — traffic between nodes/attached clients,
-       impairment schedules. The least-specified item; also starts with a
-       design discussion.
+    5. **Scenario definition** — **SHELVED until after v1.0** (maintainer's
+       call 2026-08-04, at the opening of its design discussion). What shipped
+       for v1.0 instead is the minimal primitive the discussion surfaced:
+       **batch runtime actions — DONE 2026-08-04 (contract delta 24)** — one
+       request setting/clearing MANY netem impairments and node power events,
+       so a caller (frontend or external orchestrator) can stage a whole
+       degraded condition without round-trip choreography. Approved with one
+       review revision: TYPE-unified with the single verbs, not route-merged
+       (a batch netem item IS the single route's body + node + kind; the
+       single routes keep their fail-loudly HTTP errors, since a batch item's
+       failure is data — merging would kill one or leave `ok` a dead field);
+       `set_netem` took `NetemAction` so an impairment has ONE spelling
+       client-wide. Sequential in request order, continuing past failures,
+       index-aligned report, 422 up front with nothing executed, ≤64 items,
+       sync (so runtime control survives the per-lab job mutex),
+       `lab:configure`. Shipped across backend (one shared executor —
+       a standalone verb is a batch of one) + client + blackbox (136 green
+       live) + the frontend, where the two-endpoint link fan-out became one
+       call with honest partial-failure reporting. **This closes the parked
+       batch.** The scenario analysis groundwork is
+       recorded so the post-v1.0 pickup doesn't re-derive it: a scenario is
+       a declarative, repeatable TIMELINE of runtime actions against a
+       deployed lab (the runtime counterpart of a test suite — re-run after
+       a config change and compare), and it composes almost entirely from
+       existing verbs (netem, power control, suite runs as assertion steps,
+       the job model, `last_validation`-style persistence). The only
+       genuinely NEW machinery is traffic generation and the time axis.
+       Grounded facts (probed 2026-08-04): the VyOS image ships
+       iperf3/iperf/mtr/nping; netlab's clab default image for `linux` is
+       `python:3.13-alpine` (busybox ping/nc/wget only — iperf3 flows need
+       an image decision); IOL has only IOS ping (the netmiko interactive
+       channel already solves its exec truncation). Recommended-but-undecided
+       at shelving: sequential-runbook time model (no user code, house
+       rule); flow types ping (universal) + iperf3 (`--json` output feeds
+       the napalm compare grammar); scenario references EXISTING nodes only
+       (never injects probes — the rejected-FRR-probe reasoning);
+       snapshot-restore cleanup (interacts with 17.2's `tc:`
+       baseline-vs-runtime question — settle once for both); a scenario run
+       is a job, which forces the first job CANCEL verb and a progress
+       surface; permission `lab:configure`, no new grant.
     Each contract-touching item goes through the review gate
     (sketch → user review → implement). Also due before the tag, independent
     of this batch: **pin the fact-namespace subset** (the delta 17 resolution —
     the raw netlab node dict is provisional; `GET /labs/{name}/facts` is the
     insulation layer).
 
-### NOS platform sweep · **planned** (after the batch, BEFORE the Playwright suite; added 2026-08-03)
+### NOS platform sweep — and the two reviews it informs · **planned** (after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
 
-17. **Research, obtain, and test as many NOSes as possible** — containerlab's
-    kinds list is the starting inventory, netlab's device list the cross-check.
-    We cannot *distribute* proprietary images (the open-source constraint
-    applies to what we ship, not what we test against), but we can obtain them
-    legitimately, confirm or deny Twinlab support per platform, and use them
-    ourselves. The expected side effect is the real payoff: every new NOS
-    stresses deploy, config push, interface naming, facts, parsing and
+17. **One work item with three strands, run in parallel.** The sweep is the
+    driver; the two reviews were previously carried as unsequenced items 18 and
+    19 and were folded in here (maintainer's call 2026-08-04) because both are
+    *informed by what the sweep finds* — the platform matrix decides what an
+    image pre-flight must cover and where the builder's typed core actually
+    falls short. They run alongside the sweep, not after it.
+
+    **17.1 — Research, obtain, and test as many NOSes as possible.**
+    containerlab's kinds list is the starting inventory, netlab's device list
+    the cross-check. We cannot *distribute* proprietary images (the open-source
+    constraint applies to what we ship, not what we test against), but we can
+    obtain them legitimately, confirm or deny Twinlab support per platform, and
+    use them ourselves. The expected side effect is the real payoff: every new
+    NOS stresses deploy, config push, interface naming, facts, parsing and
     validation differently, so the sweep is also a bug hunt across the whole
     stack before v1.0. Widening CLAUDE.md's supported set (VyOS + IOL) is
-    explicitly "a maintainer decision that starts with testing" — this item IS
+    explicitly "a maintainer decision that starts with testing" — this strand IS
     that testing. Prior art: Nokia SR Linux is already proven end-to-end in the
     parallel `nokia/` work; SR OS (TiMOS) is blocked on a client-provided
     qcow2 + license (see `docs/nokia-sros.md`). Scope, the platform matrix, and
     what "supported" formally requires (deploy? config push? facts? suites?)
     are designed when picked up.
 
-### `netlab up` parity — remaining gaps · **planned** (unsequenced; recorded 2026-08-04)
-
-18. **Resolve the honest remainder of the `netlab up` parity audit (2026-07-31).**
-    The audit found `netlab up`'s clab pre/post hooks have exactly two members —
-    host bridges and kernel modules — both since owned by the hostprep sidecar.
-    Three gaps remain, each a silent-ignore of valid definition content or a late
-    opaque error; "never silent" is the agreed principle, and **each needs a
-    maintainer decision before implementation**:
+    **17.2 — The honest remainder of the `netlab up` parity audit
+    (2026-07-31).** The audit found `netlab up`'s clab pre/post hooks have
+    exactly two members — host bridges and kernel modules — both since owned by
+    the hostprep sidecar. Three gaps remain, each a silent-ignore of valid
+    definition content or a late opaque error; "never silent" is the agreed
+    principle, and **each needs a maintainer decision before implementation**:
     - **`tc:` link/interface attributes are silently dropped.** First-class netlab
       schema (the same seven knobs as our netem API), applied by `netlab up` after
       start via `execute_tc_commands`. A definition carrying `tc:` validates and
@@ -747,6 +791,8 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
       Options: reject/warn at PUT, or honor it post-deploy through the existing
       clab-api netem path (attractive: impairment reproducible-by-definition;
       wrinkle: baseline-vs-runtime-override semantics against the netem API).
+      *Interacts with 16.5* — impairment schedules are the scenario item's other
+      half, so settle the baseline-vs-runtime question once, for both.
     - **`tools:` is silently dropped** (graphite, suzieq, nuts, nso, edgeshark —
       side containers `up`/`down` would start). Standing recommendation: declare
       out of scope *explicitly* (reject or strip-with-warning), not build it.
@@ -756,25 +802,26 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
       contract delta 18 gave the runner `GET /images` and the backend the matching
       policy (the catalog's best-effort presence), so the visibility problem is
       solved — the remaining decision is deploy-time semantics: hard-block vs
-      warn, and what a degraded check (runner unreachable) does. Natural affinity
-      with the NOS platform sweep (item 17), which multiplies the image set.
+      warn, and what a degraded check (runner unreachable) does. **This is why
+      the strand runs with the sweep**: 17.1 multiplies the image set and is the
+      first consumer of a friendly missing-image error.
 
-### Builder supported-configuration review · **planned** (unsequenced; recorded 2026-08-04)
-
-19. **Review extending the builder's supported configuration surface.** The Build
-    tab's Visual mode covers a deliberate typed core (nodes, p2p/LAN/stub links
-    incl. dict + interfaces forms, groups, ospf/bgp/mpls/vrf, extras passthrough
-    at every level); everything beyond it is text-mode territory. This item is
-    the deliberate review of what to promote next, in one pass rather than
-    ad-hoc: the still-gated link forms (link groups and attribute-only entries,
-    the dict-of-lists `links:` shape, self-links, interfaces mixed with node
-    keys, hyphenated names), netlab `components`/`include` (live-probed at the
-    delta-21 discussion — expansion semantics are understood, the builder just
-    can't see through them yet), and the typed module set beyond
-    ospf/bgp/mpls/vrf (catalog-driven; the device×module matrix already comes
-    from the server). The unknown-device POLICY gate is explicitly NOT in scope
-    here — that boundary belongs to the NOS platform sweep (item 17), and this
-    review sits naturally after it, when the supported set is settled.
+    **17.3 — Review extending the builder's supported configuration surface.**
+    The Build tab's Visual mode covers a deliberate typed core (nodes, p2p/LAN/
+    stub links incl. dict + interfaces forms, groups, ospf/bgp/mpls/vrf, extras
+    passthrough at every level); everything beyond it is text-mode territory.
+    This strand is the deliberate review of what to promote next, in one pass
+    rather than ad-hoc: the still-gated link forms (link groups and
+    attribute-only entries, the dict-of-lists `links:` shape, self-links,
+    interfaces mixed with node keys, hyphenated names), netlab
+    `components`/`include` (live-probed at the delta-21 discussion — expansion
+    semantics are understood, the builder just can't see through them yet), and
+    the typed module set beyond ospf/bgp/mpls/vrf (catalog-driven; the
+    device×module matrix already comes from the server; `lag` is the known
+    candidate from the config-import work). The unknown-device POLICY gate lives
+    in 17.1 — **that shared boundary is the second reason these run together**:
+    the promotion decisions land against the supported set the sweep settles,
+    and the catalog is the one surface both strands write to.
 
 ### i18n · **deferred**
 

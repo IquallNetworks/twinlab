@@ -1,21 +1,33 @@
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 
 import pydantic
 import pytest
 
-from twinlab_backend.api.labs import lab_detail, lab_summary, link_oper_state, merge_links
+from twinlab_backend.api.labs import (
+    apply_runtime_actions,
+    lab_detail,
+    lab_summary,
+    link_oper_state,
+    merge_links,
+)
 from twinlab_backend.db.models import Lab, User
 from twinlab_backend.models import (
     CreateLabRequest,
     Duration,
+    NetemActionItem,
     NetemImpairment,
     NetemSetRequest,
     NodeInterface,
+    PowerActionItem,
     PutLayoutRequest,
+    RuntimeActionsReport,
+    RuntimeActionsRequest,
     UpdateCustomConfigRequest,
 )
-from twinlab_backend.services.clab_api import NodeInfo
+from twinlab_backend.result import Err, Ok, Result
+from twinlab_backend.services.clab_api import ClabApiClient, ClabApiError, NodeInfo
 from twinlab_backend.services.netlab import TopologyLink, TopologyLinkEndpoint
 
 _TS = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
@@ -337,3 +349,166 @@ def test_merge_links_attaches_impairment_by_resolved_name() -> None:
     assert link.endpoints[0].impairment == impairment
     assert link.endpoints[1].impairment is None
     assert link.oper_state == "up"
+
+
+# --------------------------------------------------------------------------- #
+# Batch runtime actions (contract delta 24)
+# --------------------------------------------------------------------------- #
+
+
+def test_batch_item_inherits_the_single_netem_body() -> None:
+    # The wire identity the contract pins: a netem item IS the single route's
+    # body + node + kind, so the inherited rules must still bite.
+    item = NetemActionItem(kind="netem", node="r1", interface="eth1", loss=1.5)
+    assert isinstance(item, NetemSetRequest) and item.loss == 1.5
+    with pytest.raises(pydantic.ValidationError, match="jitter requires delay"):
+        _ = NetemActionItem(
+            kind="netem", node="r1", interface="eth1", jitter=Duration(value=5, unit="ms")
+        )
+
+
+def test_batch_discriminates_on_kind_and_bounds_the_list() -> None:
+    request = RuntimeActionsRequest(
+        actions=[
+            NetemActionItem(kind="netem", node="r1", interface="eth1"),
+            PowerActionItem(kind="power", node="r2", action="stop"),
+        ]
+    )
+    assert [item.kind for item in request.actions] == ["netem", "power"]
+    # An empty batch is a caller bug, not a no-op; 64 is the sync-cost bound.
+    with pytest.raises(pydantic.ValidationError):
+        _ = RuntimeActionsRequest(actions=[])
+    with pytest.raises(pydantic.ValidationError):
+        _ = RuntimeActionsRequest(
+            actions=[PowerActionItem(kind="power", node="r1", action="stop")] * 65
+        )
+    with pytest.raises(pydantic.ValidationError, match="kind"):
+        _ = RuntimeActionsRequest.model_validate({"actions": [{"kind": "reboot", "node": "r1"}]})
+
+
+class _FakeClab:
+    """Records the call order so the executor's sequencing is observable.
+    `fail` names the calls that come back as errors."""
+
+    def __init__(self, nodes: tuple[str, ...] = ("r1", "r2"), fail: frozenset[str] = frozenset()):
+        self.calls: list[str] = []
+        self._nodes = nodes
+        self._fail = fail
+
+    async def inspect(self, lab_name: str) -> Result[tuple[NodeInfo, ...], ClabApiError]:
+        self.calls.append("inspect")
+        if "inspect" in self._fail:
+            return Err(ClabApiError(status_code=502, message="clab down"))
+        return Ok(
+            tuple(
+                NodeInfo(
+                    node_name=node,
+                    container_name=f"clab-{lab_name}-{node}",
+                    image="img",
+                    state="running",
+                    ipv4_address="",
+                )
+                for node in self._nodes
+            )
+        )
+
+    async def reset_netem(self, container_name: str, interface: str) -> Result[str, ClabApiError]:
+        self.calls.append(f"reset:{container_name}:{interface}")
+        if f"reset:{container_name}" in self._fail:
+            return Err(ClabApiError(status_code=500, message="netem busy"))
+        return Ok(f"cleared {interface}")
+
+    async def set_netem(
+        self, container_name: str, interface: str, **kwargs: object
+    ) -> Result[str, ClabApiError]:
+        self.calls.append(f"set:{container_name}:{interface}")
+        return Ok(f"impaired {interface}")
+
+    async def node_action(
+        self, lab_name: str, node_name: str, action: str
+    ) -> Result[str, ClabApiError]:
+        self.calls.append(f"power:{node_name}:{action}")
+        if f"power:{node_name}" in self._fail:
+            return Err(ClabApiError(status_code=404, message="no such node"))
+        return Ok(f"{action}ed {node_name}")
+
+
+def _batch(*items: NetemActionItem | PowerActionItem) -> RuntimeActionsRequest:
+    return RuntimeActionsRequest(actions=list(items))
+
+
+async def _apply(clab: _FakeClab, request: RuntimeActionsRequest) -> RuntimeActionsReport:
+    # The route body under test; the guards/DI above it are blackbox territory.
+    return await apply_runtime_actions("lab1", request, cast(ClabApiClient, clab))
+
+
+async def test_batch_runs_in_order_with_one_shared_inspect() -> None:
+    clab = _FakeClab()
+    report = await _apply(
+        clab,
+        _batch(
+            NetemActionItem(kind="netem", node="r1", interface="eth1", loss=1.0),
+            PowerActionItem(kind="power", node="r2", action="stop"),
+            NetemActionItem(kind="netem", node="r2", interface="eth1"),
+        ),
+    )
+    assert all(result.ok for result in report.results)
+    # ONE inspect for the whole batch (not one per netem item), then the items
+    # in request order. The third item has no impairments — a plain clear, so
+    # no `set` follows its reset (REPLACE semantics).
+    assert clab.calls == [
+        "inspect",
+        "reset:clab-lab1-r1:eth1",
+        "set:clab-lab1-r1:eth1",
+        "power:r2:stop",
+        "reset:clab-lab1-r2:eth1",
+    ]
+
+
+async def test_batch_continues_past_a_failed_item_and_stays_index_aligned() -> None:
+    clab = _FakeClab(fail=frozenset({"power:r2"}))
+    report = await _apply(
+        clab,
+        _batch(
+            PowerActionItem(kind="power", node="r2", action="stop"),
+            NetemActionItem(kind="netem", node="r1", interface="eth1"),
+        ),
+    )
+    # The failure is DATA on its own index; the later item still ran.
+    assert [result.ok for result in report.results] == [False, True]
+    assert report.results[0].code == "clab_not_found"
+    assert "reset:clab-lab1-r1:eth1" in clab.calls
+
+
+async def test_batch_unknown_node_fails_only_its_own_item() -> None:
+    clab = _FakeClab()
+    report = await _apply(
+        clab,
+        _batch(
+            NetemActionItem(kind="netem", node="ghost", interface="eth1"),
+            NetemActionItem(kind="netem", node="r1", interface="eth1"),
+        ),
+    )
+    assert [result.ok for result in report.results] == [False, True]
+    assert report.results[0].code == "node_not_found"
+
+
+async def test_batch_power_items_survive_an_inspect_failure() -> None:
+    # Netem needs the container map; power takes the short name and does not.
+    clab = _FakeClab(fail=frozenset({"inspect"}))
+    report = await _apply(
+        clab,
+        _batch(
+            NetemActionItem(kind="netem", node="r1", interface="eth1"),
+            PowerActionItem(kind="power", node="r2", action="stop"),
+        ),
+    )
+    assert [result.ok for result in report.results] == [False, True]
+    assert report.results[0].code == "upstream_error"
+
+
+async def test_power_only_batch_never_inspects() -> None:
+    clab = _FakeClab()
+    report = await _apply(clab, _batch(PowerActionItem(kind="power", node="r1", action="start")))
+    assert report.results[0].ok
+    assert clab.calls == ["power:r1:start"]

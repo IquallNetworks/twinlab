@@ -68,12 +68,16 @@ from twinlab_backend.models import (
     NetemImpairment,
     NetemSetRequest,
     NetworkTemplateSummary,
+    NodeAction,
     NodeConfigResult,
     NodeInterface,
     NodeInterfaces,
     NodeLogsResponse,
     Principal,
     PutLayoutRequest,
+    RuntimeActionResult,
+    RuntimeActionsReport,
+    RuntimeActionsRequest,
     SaveConfigResponse,
     SuiteReport,
     TestSuite,
@@ -131,7 +135,8 @@ SuiteName = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
 LifecycleAction = Literal["start", "stop", "restart"]
 # Per-node controls. clab-api adds pause/unpause on top of the lab-level set;
 # they share the /nodes/{node}/{action} path, so node_action handles them as-is.
-NodeAction = Literal["start", "stop", "restart", "pause", "unpause"]
+# The vocabulary itself lives in models.py (contract delta 24): the batch items
+# and this path param must never drift apart.
 # Lab-level freeze verbs. clab-api has no whole-lab pause, so these fan out over
 # the lab's nodes (see `_lab_freeze`); non-atomic by nature.
 FreezeAction = Literal["pause", "unpause"]
@@ -1650,17 +1655,42 @@ async def show_node_netem(
 async def set_node_netem(
     lab_name: LabName, node_name: NodeName, request: NetemSetRequest, clab: ClabClientDep
 ) -> LabActionResponse:
+    container = await _resolve_container(clab, lab_name, node_name)
+    applied = await _netem_once(clab, container, request)
+    if isinstance(applied, Err):
+        raise applied.error
+    return LabActionResponse(message=applied.value)
+
+
+@router.post(
+    "/{lab_name}/nodes/{node_name}/{action}",
+    dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))],
+)
+async def node_lifecycle(
+    lab_name: LabName, node_name: NodeName, action: NodeAction, clab: ClabClientDep
+) -> LabActionResponse:
+    applied = await _power_once(clab, lab_name, node_name, action)
+    if isinstance(applied, Err):
+        raise applied.error
+    return LabActionResponse(message=applied.value)
+
+
+# One executor per verb, shared by the single route and the batch (contract
+# delta 24): a standalone verb IS a batch of one. Errors come back as values —
+# the single routes raise at the edge, the batch records them as data.
+async def _netem_once(
+    clab: ClabApiClient, container: str, request: NetemSetRequest
+) -> Result[str, ApiError]:
     # REPLACE semantics (contract delta 7): clear the interface first, then
     # apply exactly what the body states — the result is the complete desired
     # impairment regardless of prior shaping, and a body with no impairments
     # is a plain clear (subsuming the removed /netem/reset endpoint).
-    container = await _resolve_container(clab, lab_name, node_name)
     cleared = await clab.reset_netem(container, request.interface)
     if isinstance(cleared, Err):
-        raise _clab_action_failed(cleared.error)
+        return Err(_clab_action_failed(cleared.error))
     impairments = (request.delay, request.jitter, request.loss, request.rate, request.corruption)
     if all(value is None for value in impairments):
-        return LabActionResponse(message=cleared.value)
+        return Ok(cleared.value)
     result = await clab.set_netem(
         container,
         request.interface,
@@ -1671,21 +1701,66 @@ async def set_node_netem(
         corruption=request.corruption,
     )
     if isinstance(result, Err):
-        raise _clab_action_failed(result.error)
-    return LabActionResponse(message=result.value)
+        return Err(_clab_action_failed(result.error))
+    return Ok(result.value)
 
 
-@router.post(
-    "/{lab_name}/nodes/{node_name}/{action}",
-    dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))],
-)
-async def node_lifecycle(
-    lab_name: LabName, node_name: NodeName, action: NodeAction, clab: ClabClientDep
-) -> LabActionResponse:
+async def _power_once(
+    clab: ClabApiClient, lab_name: str, node_name: str, action: NodeAction
+) -> Result[str, ApiError]:
     result = await clab.node_action(lab_name, node_name, action)
     if isinstance(result, Err):
-        raise _clab_action_failed(result.error)
-    return LabActionResponse(message=result.value)
+        return Err(_clab_action_failed(result.error))
+    return Ok(result.value)
+
+
+# A static segment beside the other static lab POSTs (deploy, configure, save,
+# start/stop/restart) — no {action} path param exists at lab level to capture it.
+@router.post("/{lab_name}/actions", dependencies=[Depends(require_lab(perms.LAB_CONFIGURE))])
+async def apply_runtime_actions(
+    lab_name: LabName, request: RuntimeActionsRequest, clab: ClabClientDep
+) -> RuntimeActionsReport:
+    """Apply many netem impairments and node power events in one request
+    (contract delta 24). Items run SEQUENTIALLY in request order and execution
+    CONTINUES past a failure: a 2xx means the batch ran, and each item's
+    outcome is index-aligned in the report. Deliberately NOT a transaction —
+    no rollback, no isolation against a concurrent single verb."""
+    # ONE inspect resolves every netem item's container (netem is keyed by
+    # container, the node routes by short name — the clab-api naming quirk), the
+    # same trick the link table uses instead of N per-item resolves. Container
+    # names survive stop/start, so a power item can't invalidate this map.
+    containers: dict[str, str] = {}
+    resolve_error: ApiError | None = None
+    if any(item.kind == "netem" for item in request.actions):
+        inspected = await clab.inspect(lab_name)
+        if isinstance(inspected, Err):
+            # Netem items cannot run without the map; power items take the short
+            # name and are unaffected, so they still get their turn.
+            resolve_error = _clab_action_failed(inspected.error)
+        else:
+            containers = {node.node_name: node.container_name for node in inspected.value}
+
+    results: list[RuntimeActionResult] = []
+    for item in request.actions:
+        if item.kind == "power":
+            applied = await _power_once(clab, lab_name, item.node, item.action)
+        elif resolve_error is not None:
+            applied = Err(resolve_error)
+        elif (container := containers.get(item.node)) is None:
+            applied = Err(
+                ApiError(404, "node_not_found", f"node '{item.node}' not found in lab '{lab_name}'")
+            )
+        else:
+            applied = await _netem_once(clab, container, item)
+        if isinstance(applied, Err):
+            results.append(
+                RuntimeActionResult(
+                    ok=False, code=applied.error.code, message=applied.error.message
+                )
+            )
+        else:
+            results.append(RuntimeActionResult(ok=True, message=applied.value))
+    return RuntimeActionsReport(results=results)
 
 
 # Lab-level power controls use explicit action segments (not a `{action}` path

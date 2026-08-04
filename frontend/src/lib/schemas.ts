@@ -482,6 +482,25 @@ export type LifecycleAction = 'start' | 'stop' | 'restart'
 export type FreezeAction = 'pause' | 'unpause'
 export type NodeAction = LifecycleAction | FreezeAction
 
+// Batch runtime actions (delta 24): many impairments + node power events in one
+// request. A netem item is the single route's body plus `node` and the `kind`
+// tag — the same shape, never a second spelling.
+export type RuntimeActionInput =
+  | ({ kind: 'netem'; node: string } & NetemSetInput)
+  | { kind: 'power'; node: string; action: NodeAction }
+
+// Index-aligned with the submitted list. A failed item is DATA — the batch
+// itself still returns 2xx, so `ok` is the only place failure shows up.
+export const runtimeActionResultSchema = z.object({
+  ok: z.boolean(),
+  code: z.string().nullable(),
+  message: z.string(),
+})
+export const runtimeActionsReportSchema = z.object({
+  results: z.array(runtimeActionResultSchema),
+})
+export type RuntimeActionsReport = z.infer<typeof runtimeActionsReportSchema>
+
 // --- Async jobs (contract delta 12). The four long operations (deploy,
 // configure, destroy, suite run) return 202 + a Job; callers poll it to its
 // terminal state. `result` is set only on "succeeded" and is the operation's

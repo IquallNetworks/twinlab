@@ -64,6 +64,7 @@ from twinlab_client.models import (
     LayoutPosition,
     LinkEndpoint,
     Liveness,
+    NetemAction,
     NetemImpairment,
     NetworkImport,
     NetworkTemplate,
@@ -75,12 +76,15 @@ from twinlab_client.models import (
     NodeInterfaces,
     NodeLogsResponse,
     NodeTemplate,
+    PowerAction,
     Principal,
     Principals,
     QuarantineEntry,
     Readiness,
     Role,
     RoleScope,
+    RuntimeActionResult,
+    RuntimeActionsReport,
     SaveConfigResponse,
     SshAccess,
     SshKey,
@@ -744,6 +748,49 @@ def parse_netem_impairment(value: object) -> NetemImpairment:
         rate=_get_int(obj, "rate", where),
         corruption=_get_float(obj, "corruption", where),
     )
+
+
+def parse_runtime_actions_report(value: object) -> RuntimeActionsReport:
+    where = "RuntimeActionsReport"
+    obj = as_object(value, where)
+    return RuntimeActionsReport(
+        results=[
+            _parse_runtime_action_result(item)
+            for item in as_list(_req(obj, "results", where), f"{where}.results")
+        ]
+    )
+
+
+def _parse_runtime_action_result(value: object) -> RuntimeActionResult:
+    where = "RuntimeActionResult"
+    obj = as_object(value, where)
+    return RuntimeActionResult(
+        ok=_get_bool(obj, "ok", where),
+        code=_get_opt_str(obj, "code", where),
+        message=_get_str(obj, "message", where),
+    )
+
+
+def netem_action_to_wire(action: NetemAction) -> dict[str, object]:
+    """The batch item's wire form: the single netem route's body + node + the
+    kind tag (delta 24's pinned identity)."""
+    return {"kind": "netem", "node": action.node, **netem_body_to_wire(action)}
+
+
+def netem_body_to_wire(action: NetemAction) -> dict[str, object]:
+    """The single netem route's body — `node` rides the path there."""
+    return {
+        "interface": action.interface,
+        "delay": duration_to_wire(action.delay),
+        "jitter": duration_to_wire(action.jitter),
+        "loss": action.loss,
+        "rate": action.rate,
+        "corruption": action.corruption,
+    }
+
+
+def power_action_to_wire(action: PowerAction) -> dict[str, object]:
+    return {"kind": "power", "node": action.node, "action": action.action}
 
 
 def parse_link_endpoint(value: object) -> LinkEndpoint:

@@ -11,12 +11,15 @@ import { BUILDER_MODULES, FALLBACK_DEVICE_CATALOG, type BuilderModule } from './
 // names, unknown devices — a policy gate, not a data one); unknown or
 // overflow DATA never gates and is never dropped.
 //
-// Typed core: nodes + p2p/LAN links, groups (members + config templates), the
-// proven module set (ospf/bgp/mpls/vrf) with bgp.as, mpls.ldp, mpls.vpn and
-// vrf membership, the curated device catalog, and the keys the backend itself
+// Typed core: nodes + links (stub/p2p/LAN by endpoint count, with a typed
+// name and lossless link-level + per-endpoint extras — the string, list,
+// dict, and interfaces forms all parse; dict and interfaces are equivalent
+// in netlab's expansion), groups (members + config templates), the proven
+// module set (ospf/bgp/mpls/vrf) with bgp.as, mpls.ldp, mpls.vpn and vrf
+// membership, the curated device catalog, and the keys the backend itself
 // injects on save (name, addressing.mgmt). Emission is canonical; the
 // round-trip invariant is: for any doc emitBuildDoc accepts,
-// parseBuildDoc(emit(doc)) equals doc (up to LAN ids, which are session
+// parseBuildDoc(emit(doc)) equals doc (up to LAN/stub ids, which are session
 // metadata).
 //
 // Pure module (no React, no `@/` alias imports) so a plain node script can
@@ -52,13 +55,43 @@ export interface BuildGroup {
   extras?: Extras
 }
 
+export interface LinkEndpoint {
+  node: string
+  // Per-endpoint attributes (ifname, ipv4, ospf.cost, …), preserved verbatim
+  // — the dict form's node-key value, or an interfaces-form record minus its
+  // `node`. Dict and interfaces forms expand identically in netlab (verified
+  // against netlab create 2026-08-04), so both parse here and emit canonical.
+  extras?: Extras
+}
+
+// Endpoint COUNT decides the kind (netlab's `type` is derived, not authored):
+// 1 → stub, 2 → p2p, 3+ → LAN. Every kind carries the link-level passthrough:
+// `name` (typed — a label the canvas shows) and `extras` (bandwidth, mtu,
+// prefix, and any other link attribute, verbatim).
 export type BuildLink =
-  // Emitted as the "a-b" string form (safe: builder names cannot carry '-').
-  | { kind: 'p2p'; a: string; b: string }
-  // 3+ endpoints, emitted as a member list. Ids are `lan:<n>` in document
-  // order — the SAME scheme as lib/topology.ts, so manual canvas layouts
-  // keyed by these ids carry across the Topology and Build tabs.
-  | { kind: 'lan'; id: string; members: string[] }
+  // Bare (no name, no extras anywhere) emits as the terse "a-b" string form
+  // (safe: builder names cannot carry '-'); attributed links emit dict form.
+  | { kind: 'p2p'; a: LinkEndpoint; b: LinkEndpoint; name?: string; extras?: Extras }
+  // 3+ endpoints, emitted as a member list when bare. Ids are `lan:<n>` in
+  // document order — the SAME scheme as lib/topology.ts, so manual canvas
+  // layouts keyed by these ids carry across the Topology and Build tabs.
+  | { kind: 'lan'; id: string; members: LinkEndpoint[]; name?: string; extras?: Extras }
+  // One endpoint — netlab resolves it to a loopback/stub interface. Always
+  // emits dict form (`- <node>:`). Ids are `stub:<n>`, session metadata like
+  // LAN ids.
+  | { kind: 'stub'; id: string; endpoint: LinkEndpoint; name?: string; extras?: Extras }
+
+/** The endpoints of any link kind, in document order. */
+export function linkEndpoints(link: BuildLink): LinkEndpoint[] {
+  switch (link.kind) {
+    case 'p2p':
+      return [link.a, link.b]
+    case 'lan':
+      return link.members
+    case 'stub':
+      return [link.endpoint]
+  }
+}
 
 export interface MgmtAddressing {
   mgmt: { ipv4: string; _network?: string }
@@ -264,6 +297,20 @@ export function groupExtrasKeyError(key: string, value: unknown): string | null 
   return null
 }
 
+/** Advanced-editor validation, link level. A key naming ANY declared node
+ * would re-parse as an endpoint (the dict form's discrimination rule), so it
+ * can never ride the extras — not even a node absent from this link. */
+export function linkExtrasKeyError(
+  key: string,
+  value: unknown,
+  declaredNodes: ReadonlySet<string>,
+): string | null {
+  if (declaredNodes.has(key)) return `"${key}" is a declared node — endpoints are edited on the canvas`
+  if (key === 'name' && typeof value === 'string') return 'use the Name field'
+  if (key === 'interfaces') return 'endpoint lists are managed by the builder'
+  return null
+}
+
 /** The vrf names a node may reference: the typed list plus — when a vrf
  * carries attributes and the whole `vrfs` key rode into extras — the names
  * declared there. */
@@ -404,27 +451,94 @@ function parseGroups(value: unknown, docExtras: Extras): BuildGroup[] {
   return groups
 }
 
-function parseLinkEndpoints(entry: unknown, index: number, reasons: string[]): string[] | null {
+interface ParsedLinkEntry {
+  endpoints: LinkEndpoint[]
+  name?: string
+  extras?: Extras
+}
+
+/** One link entry in any accepted form. String "a-b" and list forms carry
+ * bare endpoints; the dict form splits node keys (endpoints, their value the
+ * per-endpoint extras) from `name` and the link extras; the interfaces form
+ * reads its records the same way. Gated: link groups and attribute-only
+ * entries (no endpoints), a node listed twice, scalar endpoint values. */
+function parseLinkEntry(entry: unknown, index: number, declared: ReadonlySet<string>, reasons: string[]): ParsedLinkEntry | null {
+  const where = `link ${index + 1}`
   if (typeof entry === 'string') {
     const parts = entry.split('-').filter((part) => part !== '')
     if (parts.length < 2) {
-      reasons.push(`link ${index + 1} ("${entry}") is not an "a-b" endpoint pair`)
+      reasons.push(`${where} ("${entry}") is not an "a-b" endpoint pair`)
       return null
     }
-    return parts
+    return { endpoints: parts.map((node) => ({ node })) }
   }
   if (Array.isArray(entry)) {
     const members = entry.filter((member): member is string => typeof member === 'string')
-    if (members.length !== entry.length || members.length < 2) {
-      reasons.push(`link ${index + 1} must be a list of at least two node names`)
+    if (members.length !== entry.length || members.length < 1) {
+      reasons.push(`${where} must be a list of node names`)
       return null
     }
-    return members
+    return { endpoints: members.map((node) => ({ node })) }
   }
-  reasons.push(
-    `link ${index + 1} uses a form the builder can't represent (attributes, interfaces, or link groups)`,
-  )
-  return null
+  if (!isRecord(entry)) {
+    reasons.push(`${where} (${describe(entry)}) is not a link form the builder knows`)
+    return null
+  }
+
+  const parsed: ParsedLinkEntry = { endpoints: [] }
+  const extras: Extras = {}
+  const rawInterfaces = entry['interfaces']
+  if (rawInterfaces !== undefined) {
+    // interfaces form: the endpoint list lives under `interfaces`, every
+    // sibling key is a link attribute. Emit re-spells it as the equivalent
+    // dict form (proven identical in netlab's expansion).
+    if (!Array.isArray(rawInterfaces)) {
+      reasons.push(`${where}: "interfaces" must be a list of {node, …} records`)
+      return null
+    }
+    for (const record of rawInterfaces) {
+      if (!isRecord(record) || typeof record['node'] !== 'string') {
+        reasons.push(`${where}: every interfaces record needs a "node" name`)
+        return null
+      }
+      const { node, ...rest } = record as { node: string } & Extras
+      parsed.endpoints.push(Object.keys(rest).length > 0 ? { node, extras: rest } : { node })
+    }
+    for (const [key, value] of Object.entries(entry)) {
+      if (key === 'interfaces') continue
+      if (declared.has(key)) {
+        reasons.push(`${where} mixes the interfaces form with node keys`)
+        return null
+      }
+      if (key === 'name' && typeof value === 'string') parsed.name = value
+      else extras[key] = value
+    }
+  } else {
+    // dict form: keys in the declared-node set are endpoints (netlab's own
+    // discrimination rule), everything else is `name` or a link attribute.
+    for (const [key, value] of Object.entries(entry)) {
+      if (declared.has(key)) {
+        if (value === null || value === undefined) parsed.endpoints.push({ node: key })
+        else if (isRecord(value)) parsed.endpoints.push({ node: key, extras: value })
+        else {
+          reasons.push(`${where}: endpoint "${key}" must be empty or a mapping of attributes`)
+          return null
+        }
+      } else if (key === 'name' && typeof value === 'string') {
+        parsed.name = value
+      } else {
+        extras[key] = value
+      }
+    }
+  }
+  if (parsed.endpoints.length === 0) {
+    reasons.push(
+      `${where} has no declared node as an endpoint (link groups and attribute-only entries are text-editor territory)`,
+    )
+    return null
+  }
+  if (Object.keys(extras).length > 0) parsed.extras = extras
+  return parsed
 }
 
 function parseLinks(
@@ -439,24 +553,33 @@ function parseLinks(
   }
   const links: BuildLink[] = []
   let lanCount = 0
+  let stubCount = 0
   value.forEach((entry, index) => {
-    const endpoints = parseLinkEndpoints(entry, index, reasons)
-    if (endpoints === null) return
-    const undeclaredEndpoint = endpoints.find((name) => !declared.has(name))
+    const parsed = parseLinkEntry(entry, index, declared, reasons)
+    if (parsed === null) return
+    const { endpoints } = parsed
+    const undeclaredEndpoint = endpoints.find((endpoint) => !declared.has(endpoint.node))
     if (undeclaredEndpoint !== undefined) {
-      reasons.push(`link ${index + 1} references undeclared node "${undeclaredEndpoint}"`)
+      reasons.push(`link ${index + 1} references undeclared node "${undeclaredEndpoint.node}"`)
       return
     }
-    if (new Set(endpoints).size !== endpoints.length) {
-      reasons.push(`link ${index + 1} connects a node to itself`)
+    if (new Set(endpoints.map((endpoint) => endpoint.node)).size !== endpoints.length) {
+      reasons.push(`link ${index + 1} lists a node more than once (self-links are text-editor territory)`)
       return
     }
-    if (endpoints.length === 2) {
-      const [a, b] = endpoints as [string, string]
-      links.push({ kind: 'p2p', a, b })
+    const shared = {
+      ...(parsed.name !== undefined && { name: parsed.name }),
+      ...(parsed.extras !== undefined && { extras: parsed.extras }),
+    }
+    if (endpoints.length === 1) {
+      stubCount += 1
+      links.push({ kind: 'stub', id: `stub:${stubCount}`, endpoint: endpoints[0] as LinkEndpoint, ...shared })
+    } else if (endpoints.length === 2) {
+      const [a, b] = endpoints as [LinkEndpoint, LinkEndpoint]
+      links.push({ kind: 'p2p', a, b, ...shared })
     } else {
       lanCount += 1
-      links.push({ kind: 'lan', id: `lan:${lanCount}`, members: endpoints })
+      links.push({ kind: 'lan', id: `lan:${lanCount}`, members: endpoints, ...shared })
     }
   })
   return links
@@ -625,6 +748,31 @@ function groupYaml(group: BuildGroup): Record<string, unknown> | null {
   return Object.keys(out).length > 0 ? out : null
 }
 
+function bareEndpoint(endpoint: LinkEndpoint): boolean {
+  return endpoint.extras === undefined || Object.keys(endpoint.extras).length === 0
+}
+
+/** Canonical link emission: the terse string/list forms when the link carries
+ * nothing but endpoints, the dict form (name first, endpoints in order,
+ * attributes after) otherwise. Stubs always emit dict form — the one-key
+ * mapping is the spelling netlab documents for them. */
+function linkYaml(link: BuildLink): unknown {
+  const endpoints = linkEndpoints(link)
+  const bare =
+    link.name === undefined &&
+    (link.extras === undefined || Object.keys(link.extras).length === 0) &&
+    endpoints.every(bareEndpoint)
+  if (bare && link.kind === 'p2p') return `${link.a.node}-${link.b.node}`
+  if (bare && link.kind === 'lan') return link.members.map((member) => member.node)
+  const out: Record<string, unknown> = {}
+  if (link.name !== undefined) out['name'] = link.name
+  for (const endpoint of endpoints) {
+    out[endpoint.node] = bareEndpoint(endpoint) ? null : { ...endpoint.extras }
+  }
+  for (const [key, value] of Object.entries(link.extras ?? {})) out[key] = value
+  return out
+}
+
 /** The advanced editors refuse builder-owned keys, so a same-key collision
  * between an extras entry and a typed field can only arise through edge
  * paths — this guard turns any such state into a loud save blocker instead
@@ -663,7 +811,7 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
       }
     }
   }
-  for (const link of doc.links) {
+  doc.links.forEach((link, index) => {
     if (link.kind === 'lan' && link.members.length < 3) {
       problems.push(
         link.members.length < 2
@@ -671,7 +819,21 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
           : `LAN segment "${link.id}" has two members, which is a point-to-point link — connect a third member or use a direct link`,
       )
     }
-  }
+    // Same guard as the other extras levels, plus the link-specific rule: an
+    // extras key naming any declared node would re-parse as an endpoint.
+    const written = new Set(linkEndpoints(link).map((endpoint) => endpoint.node))
+    if (link.name !== undefined) written.add('name')
+    for (const [key, value] of Object.entries(link.extras ?? {})) {
+      const err = linkExtrasKeyError(key, value, nodeNames)
+      if (err !== null) {
+        problems.push(`link ${index + 1}: advanced property "${key}" — ${err}`)
+      } else if (written.has(key)) {
+        problems.push(
+          `link ${index + 1}: advanced property "${key}" duplicates a builder-managed key — remove one of them`,
+        )
+      }
+    }
+  })
   for (const group of doc.groups) {
     // `_auto_create: true` asks netlab to create the members itself, so the
     // declared-node rule doesn't apply to that group.
@@ -730,9 +892,7 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
   }
   for (const [key, value] of Object.entries(doc.extras)) out[key] = value
   out['nodes'] = Object.fromEntries(doc.nodes.map((node) => [node.name, nodeYaml(node)]))
-  out['links'] = doc.links.map((link) =>
-    link.kind === 'p2p' ? `${link.a}-${link.b}` : [...link.members],
-  )
+  out['links'] = doc.links.map(linkYaml)
   return { ok: true, yaml: stringify(out) }
 }
 
@@ -759,6 +919,17 @@ export function nextLanId(doc: BuildDoc): string {
     }
   }
   return `lan:${max + 1}`
+}
+
+export function nextStubId(doc: BuildDoc): string {
+  let max = 0
+  for (const link of doc.links) {
+    if (link.kind === 'stub') {
+      const n = Number(link.id.slice('stub:'.length))
+      if (Number.isInteger(n) && n > max) max = n
+    }
+  }
+  return `stub:${max + 1}`
 }
 
 /** Deep key-sort for extras comparison: YAML mappings that differ only in key
@@ -811,15 +982,19 @@ function canonical(doc: BuildDoc): unknown {
           : null,
       extras: canonicalExtras(node.extras),
     })),
-    links: doc.links.map((link) =>
-      link.kind === 'p2p'
-        ? { kind: 'p2p', a: link.a, b: link.b }
-        : { kind: 'lan', members: link.members },
-    ),
+    links: doc.links.map((link) => ({
+      kind: link.kind,
+      name: link.name ?? null,
+      extras: canonicalExtras(link.extras),
+      endpoints: linkEndpoints(link).map((endpoint) => ({
+        node: endpoint.node,
+        extras: canonicalExtras(endpoint.extras),
+      })),
+    })),
   }
 }
 
-/** Round-trip equality, ignoring LAN ids (session metadata reassigned on
+/** Round-trip equality, ignoring LAN/stub ids (session metadata reassigned on
  * every parse), empty-vs-absent vrf membership records, and extras key
  * order. */
 export function buildDocEquals(a: BuildDoc, b: BuildDoc): boolean {

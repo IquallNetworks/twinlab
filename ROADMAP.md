@@ -633,13 +633,17 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        the inspector's group blocks pick the color; unstyled groups get a
        deterministic name-hashed default client-side, so the server stores
        explicit choices only.
-    3. **Builder link attribute forms** (slotted here 2026-08-04; frontend-
-       only, no contract change) — extend the builder's extras-passthrough
-       pattern to netlab's dict-form links (node names and attributes as
-       sibling keys — discriminate via the declared-node set), `interfaces:`
-       lists, and per-endpoint attributes, so `examples/campus-lan.yml`
-       becomes fully buildable visually. The follow-up agreed 2026-08-03 when
-       the extras/groups rework shipped (detail in `docs/frontend-rework.md`).
+    3. **Builder link attribute forms** — **DONE 2026-08-04** (frontend-only,
+       no contract change; slotted same day). The extras-passthrough pattern
+       extended to links: dict-form and interfaces-form links parse (endpoints
+       discriminate via the declared-node set; netlab expands both forms
+       identically — verified live), links carry a typed name plus lossless
+       link-level and per-endpoint extras, and one-endpoint stubs became a
+       third link kind with canvas terminator nodes. `examples/campus-lan.yml`
+       is fully buildable visually; its original vs builder-emitted netlab
+       expansion is byte-equal. Still text-editor territory: link groups,
+       the dict-of-lists `links:` shape, self-links. Outcome detail in
+       `docs/frontend-rework.md`.
     4. **Definition input methods** — full-network templates, single-node
        templates, definitions built from real config files. Starts with a
        design discussion, not a sketch.

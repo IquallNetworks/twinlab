@@ -21,7 +21,10 @@ export interface DeviceNodeData {
 
 export type DeviceFlowNode = Node<DeviceNodeData, 'device'>
 export type LanFlowNode = Node<{ label: string; [key: string]: unknown }, 'lan'>
-export type AppNode = DeviceFlowNode | LanFlowNode
+// A one-endpoint (stub/loopback) link, drawn as a small terminator so it is
+// selectable and deletable — invisible data can't be edited. Builder-only.
+export type StubFlowNode = Node<{ label: string; [key: string]: unknown }, 'stub'>
+export type AppNode = DeviceFlowNode | LanFlowNode | StubFlowNode
 
 export const NOT_DEPLOYED = 'not-deployed'
 
@@ -36,3 +39,5 @@ export const DEVICE_W = 156
 export const DEVICE_H = 56
 export const LAN_W = 48
 export const LAN_H = 48
+export const STUB_W = 40
+export const STUB_H = 40

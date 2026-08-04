@@ -1,4 +1,4 @@
-import type { BuildDoc, BuildGroup, BuildLink, BuildNode } from '@/lib/build-doc'
+import type { BuildDoc, BuildGroup, BuildLink, BuildNode, Extras, LinkEndpoint } from '@/lib/build-doc'
 
 // The builder's editing state: the BuildDoc is the single source of truth
 // (canvas nodes/edges and the inspector are pure derivations of it), plus a
@@ -11,6 +11,7 @@ export type Selection =
   | { kind: 'node'; name: string }
   | { kind: 'lan'; linkIndex: number }
   | { kind: 'link'; linkIndex: number }
+  | { kind: 'stub'; linkIndex: number }
   | { kind: 'member'; linkIndex: number; node: string }
 
 export interface BuilderState {
@@ -24,9 +25,13 @@ export type BuilderAction =
   | { type: 'add-node'; name: string; device: string }
   | { type: 'add-lan'; id: string }
   | { type: 'connect'; source: string; target: string } // canvas ids: node name or `lan:<n>`
+  | { type: 'add-stub'; id: string; node: string }
   | { type: 'delete-node'; name: string }
   | { type: 'delete-link'; linkIndex: number }
   | { type: 'remove-member'; linkIndex: number; node: string }
+  | { type: 'patch-link'; linkIndex: number; patch: { name?: string; extras?: Extras } }
+  // Replace one endpoint's attributes (undefined clears them).
+  | { type: 'patch-endpoint'; linkIndex: number; node: string; extras: Extras | undefined }
   | { type: 'rename-node'; from: string; to: string }
   | { type: 'patch-node'; name: string; patch: Partial<Omit<BuildNode, 'name'>> }
   | {
@@ -46,6 +51,7 @@ export function initialBuilderState(doc: BuildDoc): BuilderState {
 }
 
 const isLanId = (id: string): boolean => id.startsWith('lan:')
+const isStubId = (id: string): boolean => id.startsWith('stub:')
 
 export type ConnectVerdict = { ok: true } | { ok: false; reason: string }
 
@@ -54,6 +60,9 @@ export type ConnectVerdict = { ok: true } | { ok: false; reason: string }
  * hub's id is the link's `lan:<n>`. */
 export function validateConnect(doc: BuildDoc, source: string, target: string): ConnectVerdict {
   if (source === target) return { ok: false, reason: 'a node cannot link to itself' }
+  if (isStubId(source) || isStubId(target)) {
+    return { ok: false, reason: 'a stub link has only its one endpoint' }
+  }
   if (isLanId(source) && isLanId(target)) {
     return { ok: false, reason: 'LAN segments cannot be linked to each other' }
   }
@@ -67,7 +76,7 @@ export function validateConnect(doc: BuildDoc, source: string, target: string): 
     if (lan === undefined || lan.kind !== 'lan') {
       return { ok: false, reason: `unknown LAN segment "${lanId}"` }
     }
-    if (lan.members.includes(device)) {
+    if (lan.members.some((member) => member.node === device)) {
       return { ok: false, reason: `${device} is already a member of this segment` }
     }
   }
@@ -91,14 +100,14 @@ function connect(doc: BuildDoc, source: string, target: string): BuildDoc {
   const lanId = isLanId(source) ? source : isLanId(target) ? target : null
   const device = isLanId(source) ? target : source
   if (lanId === null) {
-    const link: BuildLink = { kind: 'p2p', a: source, b: target }
+    const link: BuildLink = { kind: 'p2p', a: { node: source }, b: { node: target } }
     return { ...doc, links: [...doc.links, link] }
   }
   return {
     ...doc,
     links: doc.links.map((link) =>
       link.kind === 'lan' && link.id === lanId
-        ? { ...link, members: [...link.members, device] }
+        ? { ...link, members: [...link.members, { node: device }] }
         : link,
     ),
   }
@@ -108,9 +117,11 @@ function deleteNode(doc: BuildDoc, name: string): BuildDoc {
   const links: BuildLink[] = []
   for (const link of doc.links) {
     if (link.kind === 'p2p') {
-      if (link.a !== name && link.b !== name) links.push(link)
+      if (link.a.node !== name && link.b.node !== name) links.push(link)
+    } else if (link.kind === 'stub') {
+      if (link.endpoint.node !== name) links.push(link)
     } else {
-      const members = link.members.filter((member) => member !== name)
+      const members = link.members.filter((member) => member.node !== name)
       // A segment everyone has left is gone; partially-emptied ones stay
       // (the emitter blocks a <3-member LAN loudly at save).
       if (members.length > 0) links.push({ ...link, members })
@@ -131,15 +142,36 @@ function deleteNode(doc: BuildDoc, name: string): BuildDoc {
 }
 
 function renameInLinks(links: readonly BuildLink[], from: string, to: string): BuildLink[] {
-  return links.map((link) =>
-    link.kind === 'p2p'
-      ? {
-          ...link,
-          a: link.a === from ? to : link.a,
-          b: link.b === from ? to : link.b,
-        }
-      : { ...link, members: link.members.map((member) => (member === from ? to : member)) },
-  )
+  const rename = (endpoint: LinkEndpoint): LinkEndpoint =>
+    endpoint.node === from ? { ...endpoint, node: to } : endpoint
+  return links.map((link) => {
+    switch (link.kind) {
+      case 'p2p':
+        return { ...link, a: rename(link.a), b: rename(link.b) }
+      case 'stub':
+        return { ...link, endpoint: rename(link.endpoint) }
+      case 'lan':
+        return { ...link, members: link.members.map(rename) }
+    }
+  })
+}
+
+/** Replace one endpoint's attributes on any link kind. */
+function patchEndpoint(link: BuildLink, node: string, extras: Extras | undefined): BuildLink {
+  const apply = (endpoint: LinkEndpoint): LinkEndpoint =>
+    endpoint.node !== node
+      ? endpoint
+      : extras === undefined || Object.keys(extras).length === 0
+        ? { node: endpoint.node }
+        : { node: endpoint.node, extras }
+  switch (link.kind) {
+    case 'p2p':
+      return { ...link, a: apply(link.a), b: apply(link.b) }
+    case 'stub':
+      return { ...link, endpoint: apply(link.endpoint) }
+    case 'lan':
+      return { ...link, members: link.members.map(apply) }
+  }
 }
 
 /** Does the selection still point at something that exists? Link indices are
@@ -160,9 +192,15 @@ function coherentSelection(selection: Selection, doc: BuildDoc): Selection {
       const link = doc.links[selection.linkIndex]
       return link !== undefined && link.kind === 'lan' ? selection : { kind: 'lab' }
     }
+    case 'stub': {
+      const link = doc.links[selection.linkIndex]
+      return link !== undefined && link.kind === 'stub' ? selection : { kind: 'lab' }
+    }
     case 'member': {
       const link = doc.links[selection.linkIndex]
-      return link !== undefined && link.kind === 'lan' && link.members.includes(selection.node)
+      return link !== undefined &&
+        link.kind === 'lan' &&
+        link.members.some((member) => member.node === selection.node)
         ? selection
         : { kind: 'lab' }
     }
@@ -188,6 +226,12 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       const doc = { ...state.doc, links: [...state.doc.links, link] }
       return { doc, dirty: true, selection: { kind: 'lan', linkIndex: doc.links.length - 1 } }
     }
+    case 'add-stub': {
+      if (!state.doc.nodes.some((node) => node.name === action.node)) return state
+      const link: BuildLink = { kind: 'stub', id: action.id, endpoint: { node: action.node } }
+      const doc = { ...state.doc, links: [...state.doc.links, link] }
+      return { doc, dirty: true, selection: { kind: 'stub', linkIndex: doc.links.length - 1 } }
+    }
     case 'connect': {
       if (!validateConnect(state.doc, action.source, action.target).ok) return state
       return {
@@ -212,11 +256,40 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         ...state.doc,
         links: state.doc.links.map((link, index) =>
           index === action.linkIndex && link.kind === 'lan'
-            ? { ...link, members: link.members.filter((member) => member !== action.node) }
+            ? { ...link, members: link.members.filter((member) => member.node !== action.node) }
             : link,
         ),
       }
       return { doc, dirty: true, selection: coherentSelection(state.selection, doc) }
+    }
+    case 'patch-link': {
+      const doc = {
+        ...state.doc,
+        links: state.doc.links.map((link, index) => {
+          if (index !== action.linkIndex) return link
+          const next = { ...link }
+          if ('name' in action.patch) {
+            if (action.patch.name === undefined || action.patch.name === '') delete next.name
+            else next.name = action.patch.name
+          }
+          if ('extras' in action.patch) {
+            const extras = action.patch.extras
+            if (extras === undefined || Object.keys(extras).length === 0) delete next.extras
+            else next.extras = extras
+          }
+          return next
+        }),
+      }
+      return { ...state, doc, dirty: true }
+    }
+    case 'patch-endpoint': {
+      const doc = {
+        ...state.doc,
+        links: state.doc.links.map((link, index) =>
+          index === action.linkIndex ? patchEndpoint(link, action.node, action.extras) : link,
+        ),
+      }
+      return { ...state, doc, dirty: true }
     }
     case 'rename-node': {
       if (action.from === action.to) return state

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Trash2, Unlink, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, CircleDot, Trash2, Unlink, X } from 'lucide-react'
 import { useState, type Dispatch } from 'react'
 
 import {
@@ -15,6 +15,11 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -25,6 +30,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   BUILDER_MODULES,
   NODE_NAME_MAX,
@@ -33,11 +39,15 @@ import {
   extrasOwn,
   groupExtrasKeyError,
   labExtrasKeyError,
+  linkExtrasKeyError,
+  nextStubId,
   nodeExtrasKeyError,
   type BuildDoc,
   type BuildGroup,
+  type BuildLink,
   type BuildNode,
   type BuilderModule,
+  type LinkEndpoint,
 } from '@/lib/build-doc'
 import { catalogDevice, deviceSupports } from '@/lib/device-catalog'
 import { GROUP_PALETTE, groupColor, type GroupStyles } from '@/lib/group-colors'
@@ -59,6 +69,37 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     </h3>
   )
 }
+
+// Inspector tab plumbing: triggers are compact (the panel is w-80) and carry
+// a count so populated tabs are visible without a click; content stays
+// force-mounted so un-applied editor drafts survive a tab switch.
+function InspectorTab({ value, children }: { value: string; children: React.ReactNode }) {
+  return (
+    <TabsTrigger className="min-w-0 px-1.5 text-xs" value={value}>
+      {children}
+    </TabsTrigger>
+  )
+}
+
+function InspectorTabContent({
+  value,
+  children,
+}: {
+  value: string
+  children: React.ReactNode
+}) {
+  return (
+    <TabsContent
+      forceMount
+      value={value}
+      className="flex flex-col gap-4 pt-1 data-[state=inactive]:hidden"
+    >
+      {children}
+    </TabsContent>
+  )
+}
+
+const countSuffix = (count: number): string => (count > 0 ? ` (${count})` : '')
 
 const nameError = (draft: string, doc: BuildDoc, current: string): string | null => {
   if (draft === current) return null
@@ -128,12 +169,67 @@ const groupNameError = (draft: string, doc: BuildDoc, current?: string): string 
   return null
 }
 
+function GroupColorDot({
+  group,
+  color,
+  onGroupColor,
+}: {
+  group: string
+  color: string
+  onGroupColor: (group: string, color: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title="Group color"
+          aria-label={`Color for group ${group}`}
+          className="size-4 shrink-0 cursor-pointer rounded-full border border-background"
+          style={{ backgroundColor: color }}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="flex w-auto items-center gap-1.5 p-2">
+        {GROUP_PALETTE.map((swatch) => (
+          <button
+            key={swatch}
+            type="button"
+            title={swatch}
+            aria-label={`Color ${swatch}`}
+            onClick={() => {
+              onGroupColor(group, swatch)
+              setOpen(false)
+            }}
+            className={cn(
+              'size-4 rounded-full border border-background',
+              color.toLowerCase() === swatch && 'ring-2 ring-primary',
+            )}
+            style={{ backgroundColor: swatch }}
+          />
+        ))}
+        <input
+          type="color"
+          aria-label={`Custom color for group ${group}`}
+          title="Custom color"
+          value={color}
+          onChange={(event) => onGroupColor(group, event.target.value)}
+          className="size-5 cursor-pointer rounded-[2px] border bg-transparent p-0"
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function GroupBlock({
   doc,
   group,
   knownTemplates,
   groupStyles,
   onGroupColor,
+  expanded,
+  onToggleExpanded,
+  onRenamed,
   dispatch,
 }: {
   doc: BuildDoc
@@ -141,6 +237,10 @@ function GroupBlock({
   knownTemplates: readonly string[]
   groupStyles: GroupStyles
   onGroupColor: (group: string, color: string) => void
+  expanded: boolean
+  onToggleExpanded: () => void
+  // Keeps the section's expanded-group tracking on the new name after a rename.
+  onRenamed: (to: string) => void
   dispatch: Dispatch<BuilderAction>
 }) {
   const color = groupColor(groupStyles, group.name)
@@ -149,7 +249,30 @@ function GroupBlock({
   const commitName = () => {
     if (nameDraft !== group.name && draftError === null) {
       dispatch({ type: 'rename-group', from: group.name, to: nameDraft })
+      onRenamed(nameDraft)
     }
+  }
+
+  if (!expanded) {
+    return (
+      <button
+        type="button"
+        aria-expanded={false}
+        onClick={onToggleExpanded}
+        className="flex items-center gap-2 rounded-[2px] border px-2 py-1.5 text-left hover:bg-accent/50"
+      >
+        <span
+          aria-hidden="true"
+          className="size-2.5 shrink-0 rounded-full border border-background"
+          style={{ backgroundColor: color }}
+        />
+        <span className="flex-1 font-mono text-sm">{group.name}</span>
+        <span className="text-xs text-muted-foreground">
+          {group.members.length} member{group.members.length === 1 ? '' : 's'}
+        </span>
+        <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden="true" />
+      </button>
+    )
   }
   const setConfig = (next: string[]) =>
     dispatch({
@@ -165,11 +288,9 @@ function GroupBlock({
   return (
     <div className="flex flex-col gap-2 rounded-[2px] border p-2">
       <div className="flex items-start gap-1.5">
-        <span
-          aria-hidden="true"
-          className="mt-2.5 size-2.5 shrink-0 rounded-full border border-background"
-          style={{ backgroundColor: color }}
-        />
+        <span className="mt-2 flex shrink-0">
+          <GroupColorDot group={group.name} color={color} onGroupColor={onGroupColor} />
+        </span>
         <div className="flex-1">
           <Input
             className="h-8 font-mono"
@@ -191,6 +312,15 @@ function GroupBlock({
           onClick={() => dispatch({ type: 'delete-group', name: group.name })}
         >
           <Trash2 className="size-3" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-expanded={true}
+          title={`Collapse group ${group.name}`}
+          onClick={onToggleExpanded}
+        >
+          <ChevronDown className="size-3" />
         </Button>
       </div>
 
@@ -279,34 +409,6 @@ function GroupBlock({
         )}
       </div>
 
-      <div className="flex flex-col gap-1">
-        <span className="text-xs text-muted-foreground">Color</span>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {GROUP_PALETTE.map((swatch) => (
-            <button
-              key={swatch}
-              type="button"
-              title={swatch}
-              aria-label={`Color ${swatch}`}
-              onClick={() => onGroupColor(group.name, swatch)}
-              className={cn(
-                'size-4 rounded-full border border-background',
-                color.toLowerCase() === swatch && 'ring-2 ring-primary',
-              )}
-              style={{ backgroundColor: swatch }}
-            />
-          ))}
-          <input
-            type="color"
-            aria-label={`Custom color for group ${group.name}`}
-            title="Custom color"
-            value={color}
-            onChange={(event) => onGroupColor(group.name, event.target.value)}
-            className="size-5 cursor-pointer rounded-[2px] border bg-transparent p-0"
-          />
-        </div>
-      </div>
-
       <ExtrasEditor
         key={JSON.stringify(group.extras ?? {})}
         idPrefix={`build-group-${group.name}`}
@@ -339,29 +441,28 @@ function GroupsSection({
     ...Object.keys(templates.data?.custom_config ?? {}).map((path) => path.replace(/\.j2$/, '')),
   ]
   const [draft, setDraft] = useState('')
+  // One group edits at a time — the rest collapse to summary rows.
+  const [expanded, setExpanded] = useState<string | null>(null)
   const draftError = draft === '' ? null : groupNameError(draft, doc)
   const add = () => {
     if (draft !== '' && draftError === null) {
       dispatch({ type: 'add-group', name: draft })
+      setExpanded(draft)
       setDraft('')
     }
   }
 
   if (extrasOwn(doc.extras, 'groups')) {
     return (
-      <div className="flex flex-col gap-1.5">
-        <Label>Groups</Label>
-        <p className="text-xs text-muted-foreground">
-          The groups block uses a form the controls can&apos;t edit — managed in Advanced
-          properties.
-        </p>
-      </div>
+      <p className="text-xs text-muted-foreground">
+        The groups block uses a form the controls can&apos;t edit — managed in Advanced
+        properties.
+      </p>
     )
   }
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Label>Groups</Label>
       {doc.groups.length === 0 && (
         <p className="text-xs text-muted-foreground">
           None yet — a group broadcasts config templates and other properties to its members.
@@ -375,6 +476,9 @@ function GroupsSection({
           knownTemplates={knownTemplates}
           groupStyles={groupStyles}
           onGroupColor={onGroupColor}
+          expanded={expanded === group.name}
+          onToggleExpanded={() => setExpanded(expanded === group.name ? null : group.name)}
+          onRenamed={(to) => setExpanded(to)}
           dispatch={dispatch}
         />
       ))}
@@ -420,11 +524,22 @@ function LabInspector({
     doc.nodes.filter((node) => node.vrfs !== undefined && vrf in node.vrfs).length
   const modulesOwned = extrasOwn(doc.extras, 'module')
   const vrfsOwned = extrasOwn(doc.extras, 'vrfs')
+  const vrfCount = vrfsOwned ? 0 : doc.vrfs.length
+  const labExtrasCount = Object.keys(doc.extras).length
 
   return (
     <div className="flex flex-col gap-4">
       <SectionTitle>lab settings</SectionTitle>
 
+      <Tabs defaultValue="defaults">
+        <TabsList className="w-full">
+          <InspectorTab value="defaults">Defaults</InspectorTab>
+          <InspectorTab value="vrfs">VRFs{countSuffix(vrfCount)}</InspectorTab>
+          <InspectorTab value="groups">Groups{countSuffix(doc.groups.length)}</InspectorTab>
+          <InspectorTab value="advanced">Advanced{countSuffix(labExtrasCount)}</InspectorTab>
+        </TabsList>
+
+        <InspectorTabContent value="defaults">
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="build-default-device">Default device</Label>
         <Select
@@ -504,19 +619,22 @@ function LabInspector({
           </Label>
         </div>
       )}
+        </InspectorTabContent>
 
+        <InspectorTabContent value="vrfs">
       {vrfsOwned && (
-        <div className="flex flex-col gap-1.5">
-          <Label>VRFs</Label>
-          <p className="text-xs text-muted-foreground">
-            The vrfs carry attributes (rd, rt, …) the controls can&apos;t edit — managed in
-            Advanced properties.
-          </p>
-        </div>
+        <p className="text-xs text-muted-foreground">
+          The vrfs carry attributes (rd, rt, …) the controls can&apos;t edit — managed in
+          Advanced properties.
+        </p>
+      )}
+      {!vrfsOwned && !doc.modules.includes('vrf') && (
+        <p className="text-xs text-muted-foreground">
+          Enable the vrf module (Defaults tab) to declare VRFs.
+        </p>
       )}
       {!vrfsOwned && doc.modules.includes('vrf') && (
         <div className="flex flex-col gap-1.5">
-          <Label>VRFs</Label>
           {doc.vrfs.length === 0 && (
             <p className="text-xs text-muted-foreground">None yet — add one to place customer sites.</p>
           )}
@@ -591,22 +709,29 @@ function LabInspector({
           </div>
         </div>
       )}
+        </InspectorTabContent>
 
-      <GroupsSection
-        doc={doc}
-        labName={labName}
-        groupStyles={groupStyles}
-        onGroupColor={onGroupColor}
-        dispatch={dispatch}
-      />
+        <InspectorTabContent value="groups">
+          <GroupsSection
+            doc={doc}
+            labName={labName}
+            groupStyles={groupStyles}
+            onGroupColor={onGroupColor}
+            dispatch={dispatch}
+          />
+        </InspectorTabContent>
 
-      <ExtrasEditor
-        key={JSON.stringify(doc.extras)}
-        idPrefix="build-lab"
-        value={doc.extras}
-        keyError={labExtrasKeyError}
-        onApply={(extras) => dispatch({ type: 'patch-lab', patch: { extras: extras ?? {} } })}
-      />
+        <InspectorTabContent value="advanced">
+          <ExtrasEditor
+            key={JSON.stringify(doc.extras)}
+            idPrefix="build-lab"
+            value={doc.extras}
+            keyError={labExtrasKeyError}
+            onApply={(extras) => dispatch({ type: 'patch-lab', patch: { extras: extras ?? {} } })}
+            bare
+          />
+        </InspectorTabContent>
+      </Tabs>
     </div>
   )
 }
@@ -637,11 +762,31 @@ function NodeInspector({
   const modulesOwned = extrasOwn(node.extras, 'module')
   const vrfsOwned = extrasOwn(node.extras, 'vrfs')
   const vrfNames = declaredVrfs(doc)
+  const hasProtocol =
+    effectiveModules.includes('bgp') ||
+    vrfNames.length > 0 ||
+    vrfsOwned ||
+    mplsVpnReady ||
+    node.mplsVpn === true
+  const protocolCount =
+    (node.bgpAs !== undefined ? 1 : 0) +
+    (node.mplsVpn === true ? 1 : 0) +
+    Object.keys(node.vrfs ?? {}).length +
+    (vrfsOwned ? 1 : 0)
+  const advancedCount = (node.image !== undefined ? 1 : 0) + Object.keys(node.extras ?? {}).length
 
   return (
     <div className="flex flex-col gap-4">
       <SectionTitle>node</SectionTitle>
 
+      <Tabs defaultValue="general">
+        <TabsList className="w-full">
+          <InspectorTab value="general">General</InspectorTab>
+          <InspectorTab value="protocols">Protocols{countSuffix(protocolCount)}</InspectorTab>
+          <InspectorTab value="advanced">Advanced{countSuffix(advancedCount)}</InspectorTab>
+        </TabsList>
+
+        <InspectorTabContent value="general">
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="build-node-name">Name</Label>
         <Input
@@ -761,6 +906,71 @@ function NodeInspector({
       </div>
       )}
 
+      {doc.groups.length > 0 && !extrasOwn(doc.extras, 'groups') && (
+        <div className="flex flex-col gap-1.5">
+          <Label>Groups</Label>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {doc.groups.map((group) => {
+              const id = `build-node-group-${group.name}`
+              const member = group.members.includes(node.name)
+              return (
+                <div key={group.name} className="flex items-center gap-1.5">
+                  <Checkbox
+                    id={id}
+                    checked={member}
+                    onCheckedChange={(checked) =>
+                      dispatch({
+                        type: 'patch-group',
+                        name: group.name,
+                        patch: {
+                          members:
+                            checked === true
+                              ? [...group.members, node.name]
+                              : group.members.filter((entry) => entry !== node.name),
+                        },
+                      })
+                    }
+                  />
+                  <Label htmlFor={id} className="font-mono text-xs font-normal">
+                    {group.name}
+                  </Label>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      <Separator />
+      <Button
+        variant="ghost"
+        size="sm"
+        className="justify-start gap-2 text-muted-foreground"
+        title="A one-endpoint link — netlab resolves it to a loopback interface"
+        onClick={() => dispatch({ type: 'add-stub', id: nextStubId(doc), node: node.name })}
+      >
+        <CircleDot className="size-3.5" />
+        Add stub link
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="justify-start gap-2 text-destructive"
+        onClick={() => dispatch({ type: 'delete-node', name: node.name })}
+      >
+        <Trash2 className="size-3.5" />
+        Delete node (removes its links)
+      </Button>
+        </InspectorTabContent>
+
+        <InspectorTabContent value="protocols">
+      {!hasProtocol && (
+        <p className="text-xs text-muted-foreground">
+          Enable bgp, mpls or vrf modules (General tab) to configure protocol behavior.
+        </p>
+      )}
+      {hasProtocol && (
+        <>
       {effectiveModules.includes('bgp') && (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="build-node-as">BGP AS (node)</Label>
@@ -864,45 +1074,11 @@ function NodeInspector({
           })}
         </div>
       )}
-
-      {doc.groups.length > 0 && !extrasOwn(doc.extras, 'groups') && (
-        <div className="flex flex-col gap-1.5">
-          <Label>Groups</Label>
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
-            {doc.groups.map((group) => {
-              const id = `build-node-group-${group.name}`
-              const member = group.members.includes(node.name)
-              return (
-                <div key={group.name} className="flex items-center gap-1.5">
-                  <Checkbox
-                    id={id}
-                    checked={member}
-                    onCheckedChange={(checked) =>
-                      dispatch({
-                        type: 'patch-group',
-                        name: group.name,
-                        patch: {
-                          members:
-                            checked === true
-                              ? [...group.members, node.name]
-                              : group.members.filter((entry) => entry !== node.name),
-                        },
-                      })
-                    }
-                  />
-                  <Label htmlFor={id} className="font-mono text-xs font-normal">
-                    {group.name}
-                  </Label>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        </>
       )}
+        </InspectorTabContent>
 
-      <details>
-        <summary className="cursor-pointer text-xs text-muted-foreground select-none">Advanced</summary>
-        <div className="mt-2 flex flex-col gap-3">
+        <InspectorTabContent value="advanced">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="build-node-image">Image override</Label>
             <Input
@@ -928,23 +1104,97 @@ function NodeInspector({
             onApply={(extras) =>
               dispatch({ type: 'patch-node', name: node.name, patch: { extras } })
             }
+            bare
           />
-        </div>
-      </details>
-
-      <Separator />
-      <Button
-        variant="outline"
-        size="sm"
-        className="justify-start gap-2 text-destructive"
-        onClick={() => dispatch({ type: 'delete-node', name: node.name })}
-      >
-        <Trash2 className="size-3.5" />
-        Delete node (removes its links)
-      </Button>
+        </InspectorTabContent>
+      </Tabs>
     </div>
   )
 }
+
+function LinkNameInput({
+  link,
+  linkIndex,
+  dispatch,
+}: {
+  link: BuildLink
+  linkIndex: number
+  dispatch: Dispatch<BuilderAction>
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={`build-link-${linkIndex}-name`}>Name</Label>
+      <Input
+        id={`build-link-${linkIndex}-name`}
+        className="h-8 font-mono"
+        placeholder="unnamed"
+        value={link.name ?? ''}
+        onChange={(event) =>
+          dispatch({ type: 'patch-link', linkIndex, patch: { name: event.target.value } })
+        }
+      />
+    </div>
+  )
+}
+
+/** Link-level attributes (bandwidth, mtu, prefix, …). The classifier refuses
+ * keys naming declared nodes — those would re-parse as endpoints. */
+function LinkAdvanced({
+  doc,
+  link,
+  linkIndex,
+  dispatch,
+  bare,
+}: {
+  doc: BuildDoc
+  link: BuildLink
+  linkIndex: number
+  dispatch: Dispatch<BuilderAction>
+  bare?: boolean
+}) {
+  const nodeNames = new Set(doc.nodes.map((node) => node.name))
+  return (
+    <ExtrasEditor
+      key={JSON.stringify(link.extras ?? {})}
+      idPrefix={`build-link-${linkIndex}`}
+      value={link.extras}
+      keyError={(key, value) => linkExtrasKeyError(key, value, nodeNames)}
+      onApply={(extras) => dispatch({ type: 'patch-link', linkIndex, patch: { extras } })}
+      placeholder={'link attributes, e.g.\nbandwidth: 100000\nmtu: 9000'}
+      bare={bare}
+    />
+  )
+}
+
+function EndpointAdvanced({
+  endpoint,
+  linkIndex,
+  dispatch,
+  bare,
+}: {
+  endpoint: LinkEndpoint
+  linkIndex: number
+  dispatch: Dispatch<BuilderAction>
+  bare?: boolean
+}) {
+  return (
+    <ExtrasEditor
+      key={JSON.stringify(endpoint.extras ?? {})}
+      idPrefix={`build-link-${linkIndex}-${endpoint.node}`}
+      label={`${endpoint.node} attributes`}
+      value={endpoint.extras}
+      keyError={() => null}
+      onApply={(extras) =>
+        dispatch({ type: 'patch-endpoint', linkIndex, node: endpoint.node, extras })
+      }
+      placeholder={'per-endpoint attributes, e.g.\nifname: eth9\nipv4: 10.0.0.1/30'}
+      bare={bare}
+    />
+  )
+}
+
+const extrasCount = (extras: Record<string, unknown> | undefined): number =>
+  Object.keys(extras ?? {}).length
 
 /** The builder's right-hand inspector, dispatching on the selection.
  * `labName` feeds the groups section's template picker (custom-config query);
@@ -990,17 +1240,117 @@ export function Inspector({
         <div className="flex flex-col gap-4">
           <SectionTitle>link</SectionTitle>
           <p className="font-mono text-sm">
-            {link.a} ↔ {link.b}
+            {link.a.node} ↔ {link.b.node}
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="justify-start gap-2 text-destructive"
-            onClick={() => dispatch({ type: 'delete-link', linkIndex: selection.linkIndex })}
-          >
-            <Unlink className="size-3.5" />
-            Delete link
-          </Button>
+          <Tabs defaultValue="general">
+            <TabsList className="w-full">
+              <InspectorTab value="general">General</InspectorTab>
+              <InspectorTab value="ep-a">
+                <span className="truncate font-mono">{link.a.node}</span>
+                {countSuffix(extrasCount(link.a.extras))}
+              </InspectorTab>
+              <InspectorTab value="ep-b">
+                <span className="truncate font-mono">{link.b.node}</span>
+                {countSuffix(extrasCount(link.b.extras))}
+              </InspectorTab>
+              <InspectorTab value="advanced">
+                Advanced{countSuffix(extrasCount(link.extras))}
+              </InspectorTab>
+            </TabsList>
+            <InspectorTabContent value="general">
+              <LinkNameInput link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
+              <Separator />
+              <Button
+                variant="outline"
+                size="sm"
+                className="justify-start gap-2 text-destructive"
+                onClick={() => dispatch({ type: 'delete-link', linkIndex: selection.linkIndex })}
+              >
+                <Unlink className="size-3.5" />
+                Delete link
+              </Button>
+            </InspectorTabContent>
+            <InspectorTabContent value="ep-a">
+              <EndpointAdvanced
+                endpoint={link.a}
+                linkIndex={selection.linkIndex}
+                dispatch={dispatch}
+                bare
+              />
+            </InspectorTabContent>
+            <InspectorTabContent value="ep-b">
+              <EndpointAdvanced
+                endpoint={link.b}
+                linkIndex={selection.linkIndex}
+                dispatch={dispatch}
+                bare
+              />
+            </InspectorTabContent>
+            <InspectorTabContent value="advanced">
+              <LinkAdvanced
+                doc={doc}
+                link={link}
+                linkIndex={selection.linkIndex}
+                dispatch={dispatch}
+                bare
+              />
+            </InspectorTabContent>
+          </Tabs>
+        </div>
+      )
+    }
+    case 'stub': {
+      const link = doc.links[selection.linkIndex]
+      if (link === undefined || link.kind !== 'stub') return lab
+      return (
+        <div className="flex flex-col gap-4">
+          <SectionTitle>stub link</SectionTitle>
+          <p className="font-mono text-sm">{link.endpoint.node}</p>
+          <p className="text-xs text-muted-foreground">
+            One endpoint — netlab resolves it to a loopback interface on the node.
+          </p>
+          <Tabs defaultValue="general">
+            <TabsList className="w-full">
+              <InspectorTab value="general">General</InspectorTab>
+              <InspectorTab value="endpoint">
+                <span className="truncate font-mono">{link.endpoint.node}</span>
+                {countSuffix(extrasCount(link.endpoint.extras))}
+              </InspectorTab>
+              <InspectorTab value="advanced">
+                Advanced{countSuffix(extrasCount(link.extras))}
+              </InspectorTab>
+            </TabsList>
+            <InspectorTabContent value="general">
+              <LinkNameInput link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
+              <Separator />
+              <Button
+                variant="outline"
+                size="sm"
+                className="justify-start gap-2 text-destructive"
+                onClick={() => dispatch({ type: 'delete-link', linkIndex: selection.linkIndex })}
+              >
+                <Trash2 className="size-3.5" />
+                Delete stub link
+              </Button>
+            </InspectorTabContent>
+            <InspectorTabContent value="endpoint">
+              <EndpointAdvanced
+                endpoint={link.endpoint}
+                linkIndex={selection.linkIndex}
+                dispatch={dispatch}
+                bare
+              />
+            </InspectorTabContent>
+            <InspectorTabContent value="advanced">
+              <LinkAdvanced
+                doc={doc}
+                link={link}
+                linkIndex={selection.linkIndex}
+                dispatch={dispatch}
+                bare
+              />
+            </InspectorTabContent>
+          </Tabs>
         </div>
       )
     }
@@ -1010,20 +1360,35 @@ export function Inspector({
       return (
         <div className="flex flex-col gap-4">
           <SectionTitle>lan segment</SectionTitle>
+          <Tabs defaultValue="general">
+            <TabsList className="w-full">
+              <InspectorTab value="general">General</InspectorTab>
+              <InspectorTab value="advanced">
+                Advanced{countSuffix(extrasCount(link.extras))}
+              </InspectorTab>
+            </TabsList>
+            <InspectorTabContent value="general">
           {link.members.length === 0 && (
             <p className="text-xs text-muted-foreground">
               No members yet — drag from a node onto this segment.
             </p>
           )}
           {link.members.map((member) => (
-            <div key={member} className="flex items-center justify-between gap-2 rounded-[2px] border px-2 py-1">
-              <span className="font-mono text-sm">{member}</span>
+            <div
+              key={member.node}
+              className="flex items-center justify-between gap-2 rounded-[2px] border px-2 py-1"
+            >
+              <span className="font-mono text-sm">{member.node}</span>
               <Button
                 variant="ghost"
                 size="icon-xs"
-                title={`Remove ${member} from the segment`}
+                title={`Remove ${member.node} from the segment`}
                 onClick={() =>
-                  dispatch({ type: 'remove-member', linkIndex: selection.linkIndex, node: member })
+                  dispatch({
+                    type: 'remove-member',
+                    linkIndex: selection.linkIndex,
+                    node: member.node,
+                  })
                 }
               >
                 <X className="size-3" />
@@ -1036,6 +1401,8 @@ export function Inspector({
               {link.members.length === 2 ? ' — for two, use a direct link' : ''}.
             </p>
           )}
+          <LinkNameInput link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
+          <Separator />
           <Button
             variant="outline"
             size="sm"
@@ -1045,24 +1412,48 @@ export function Inspector({
             <Trash2 className="size-3.5" />
             Delete segment
           </Button>
+            </InspectorTabContent>
+            <InspectorTabContent value="advanced">
+              <LinkAdvanced
+                doc={doc}
+                link={link}
+                linkIndex={selection.linkIndex}
+                dispatch={dispatch}
+                bare
+              />
+            </InspectorTabContent>
+          </Tabs>
         </div>
       )
     }
     case 'member': {
       const link = doc.links[selection.linkIndex]
       if (link === undefined || link.kind !== 'lan') return lab
+      const member = link.members.find((entry) => entry.node === selection.node)
+      if (member === undefined) return lab
       return (
         <div className="flex flex-col gap-4">
           <SectionTitle>lan membership</SectionTitle>
           <p className="font-mono text-sm">
-            {selection.node} on {link.id}
+            {selection.node} on {link.name ?? link.id}
           </p>
+          <EndpointAdvanced
+            endpoint={member}
+            linkIndex={selection.linkIndex}
+            dispatch={dispatch}
+            bare
+          />
+          <Separator />
           <Button
             variant="outline"
             size="sm"
             className="justify-start gap-2 text-destructive"
             onClick={() =>
-              dispatch({ type: 'remove-member', linkIndex: selection.linkIndex, node: selection.node })
+              dispatch({
+                type: 'remove-member',
+                linkIndex: selection.linkIndex,
+                node: selection.node,
+              })
             }
           >
             <Unlink className="size-3.5" />

@@ -345,11 +345,24 @@ Frontend-driven wants that surfaced in this roadmap:
   beside the name, a palette row, and a native custom-color input (canvas updates immediately,
   the PUT debounces 400ms since color pickers fire continuously). The Build tab owns the styles
   beside the positions: group rename migrates the entry, delete drops it.
-- **Builder link attribute forms** (agreed 2026-08-03; slotted NEXT — batch item 16.3 —
-  2026-08-04): extend the
-  passthrough pattern to netlab's dict-form links (node names and attributes as sibling keys —
-  discriminate via the declared-node set), `interfaces:` lists, and per-endpoint attributes,
-  so campus-lan.yml becomes fully buildable visually.
+- **Builder link attribute forms** — **DONE 2026-08-04** (frontend-only; batch item 16.3,
+  agreed 2026-08-03). The passthrough pattern extended to links: endpoints are
+  `{node, extras?}` objects, every link kind carries a typed `name` plus verbatim link-level
+  extras, and one-endpoint **stubs** are a third kind (small selectable terminator nodes on the
+  canvas, `stub:<n>` session ids; the node inspector adds them). The **dict form** parses —
+  declared-node keys are endpoints (netlab's own discrimination rule), their mapping values the
+  per-endpoint extras, `name` typed, everything else link extras — and the **interfaces form**
+  parses to the same model; emit re-spells it as the equivalent dict form (netlab expands both
+  identically — verified live 2026-08-04, incl. a per-endpoint `ifname` override; campus-lan's
+  original vs builder-emitted expansion is byte-equal on links AND nodes). Bare links keep the
+  terse `a-b`/list spellings; named links wear edge labels. Inspector link/LAN/stub panels: Name
+  field + link-level and per-endpoint "Advanced properties" (the LAN-member panel edits that
+  endpoint). New emit blockers: a link extras key naming ANY declared node (it would re-parse as
+  an endpoint) or shadowing the typed name. Still gated, deliberately: link groups and
+  attribute-only entries, the dict-of-lists `links:` shape, a node listed twice on one link
+  (self-links), interfaces mixed with node keys, hyphenated names. **campus-lan.yml is fully
+  buildable visually** — the 55-check harness pins it plus both MPLS examples, the form
+  fixtures, the gates and the blockers.
 - **Self password change on the Account page** — **DONE 2026-07-30** (frontend-only; no contract
   change). A Password card heads the Account page with a TanStack Form dialog over
   `PUT /auth/password` (`api.changePassword`): current + new + confirm, zod-validated with the

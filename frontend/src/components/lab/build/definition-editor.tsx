@@ -12,11 +12,15 @@ export function DefinitionEditor({
   saving,
   onSave,
   onDirtyChange,
+  corner,
 }: {
   definition: string | null
   saving: boolean
   onSave: (text: string) => Promise<boolean>
   onDirtyChange: (dirty: boolean) => void
+  // Overlaid on the editor's top-right corner (the Build tab's Visual/Text
+  // mode switch) — no toolbar row of its own.
+  corner?: React.ReactNode
 }) {
   const [draft, setDraft] = useState(definition ?? '')
   const [dirty, setDirtyState] = useState(false)
@@ -32,17 +36,20 @@ export function DefinitionEditor({
 
   return (
     <div className="flex flex-col gap-2">
-      <CodeEditor
-        value={draft}
-        onChange={(text) => {
-          setDraft(text)
-          setDirty(text !== (definition ?? ''))
-        }}
-        language="yaml"
-        lint
-        className="h-[max(24rem,calc(100vh-22rem))]"
-        placeholder="netlab definition (provider, defaults.device, nodes, links, …)"
-      />
+      <div className="relative">
+        <CodeEditor
+          value={draft}
+          onChange={(text) => {
+            setDraft(text)
+            setDirty(text !== (definition ?? ''))
+          }}
+          language="yaml"
+          lint
+          className="h-[max(24rem,calc(100vh-22rem))]"
+          placeholder="netlab definition (provider, defaults.device, nodes, links, …)"
+        />
+        {corner !== undefined && <div className="absolute top-2 right-2 z-10">{corner}</div>}
+      </div>
       <div className="flex items-center justify-end gap-2">
         <Button
           variant="outline"

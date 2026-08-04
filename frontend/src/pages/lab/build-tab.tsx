@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useBlocker } from '@tanstack/react-router'
-import { X } from 'lucide-react'
+import { FileCode2, X } from 'lucide-react'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -273,41 +273,31 @@ function BuildTabInner({
     [gateBlocked, lab.definition],
   )
 
+  // The mode switch lives inside the workspace itself — a dedicated toolbar
+  // row cost too much height. On the canvas it's one icon button among the
+  // view tools; the text editor gets the two-way switch overlaid top-right.
+  const textModeButton = (
+    <Button
+      variant="outline"
+      size="icon-sm"
+      title="Edit as text"
+      aria-label="Edit the definition as text"
+      onClick={() => requestMode('text')}
+    >
+      <FileCode2 className="size-3.5" />
+    </Button>
+  )
+  const modeSwitch = (
+    <Tabs value={mode} onValueChange={(value) => requestMode(value as Mode)}>
+      <TabsList className="bg-card/90 backdrop-blur-sm">
+        <TabsTrigger value="visual">Visual</TabsTrigger>
+        <TabsTrigger value="text">Text</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  )
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Tabs value={mode} onValueChange={(value) => requestMode(value as Mode)}>
-          <TabsList>
-            <TabsTrigger value="visual">Visual</TabsTrigger>
-            <TabsTrigger value="text">Text</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        {mode === 'visual' && (
-          <div className="flex items-center gap-2">
-            {serverChanged && (
-              <span className="text-xs text-muted-foreground">
-                Definition changed on the server — saving overwrites it.
-              </span>
-            )}
-            {state.dirty && (
-              <>
-                <span className="font-mono text-xs text-muted-foreground">unsaved changes</span>
-                <Button variant="outline" size="sm" onClick={discardVisual} disabled={save.isPending}>
-                  Discard
-                </Button>
-              </>
-            )}
-            <Button
-              size="sm"
-              onClick={saveVisual}
-              disabled={!state.dirty || !emitted.ok || save.isPending}
-            >
-              {save.isPending ? 'Saving…' : 'Save'}
-            </Button>
-          </div>
-        )}
-      </div>
-
       {mode === 'visual' && state.dirty && !emitted.ok && (
         <div className="rounded-[2px] border border-destructive/50 bg-card px-3 py-2 text-sm">
           <p className="text-destructive">Not saveable yet:</p>
@@ -373,18 +363,52 @@ function BuildTabInner({
                   positions={positions}
                   onPositions={onPositions}
                   groupStyles={groupStyles}
+                  topRight={textModeButton}
                 />
               </div>
             </CardContent>
           </Card>
-          <aside className="w-80 shrink-0 overflow-y-auto rounded-[2px] border bg-card p-4">
-            <Inspector
-              state={state}
-              labName={name}
-              dispatch={dispatch}
-              groupStyles={groupStyles}
-              onGroupColor={onGroupColor}
-            />
+          <aside className="flex w-80 shrink-0 flex-col rounded-[2px] border bg-card">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <Inspector
+                state={state}
+                labName={name}
+                dispatch={dispatch}
+                groupStyles={groupStyles}
+                onGroupColor={onGroupColor}
+              />
+            </div>
+            <div className="flex flex-col gap-2 border-t p-3">
+              {serverChanged && (
+                <p className="text-xs text-muted-foreground">
+                  Definition changed on the server — saving overwrites it.
+                </p>
+              )}
+              <div className="flex items-center justify-end gap-2">
+                {state.dirty && (
+                  <>
+                    <span className="mr-auto font-mono text-xs text-muted-foreground">
+                      unsaved changes
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={discardVisual}
+                      disabled={save.isPending}
+                    >
+                      Discard
+                    </Button>
+                  </>
+                )}
+                <Button
+                  size="sm"
+                  onClick={saveVisual}
+                  disabled={!state.dirty || !emitted.ok || save.isPending}
+                >
+                  {save.isPending ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            </div>
           </aside>
         </div>
       ) : (
@@ -393,6 +417,7 @@ function BuildTabInner({
           saving={save.isPending}
           onSave={saveText}
           onDirtyChange={setTextDirty}
+          corner={modeSwitch}
         />
       )}
 

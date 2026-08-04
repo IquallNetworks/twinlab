@@ -32,9 +32,12 @@ import {
   LAN_H,
   LAN_W,
   NOT_DEPLOYED,
+  STUB_H,
+  STUB_W,
   type AppNode,
 } from '../topology/flow-types'
 import { LanNode } from '../topology/lan-node'
+import { StubNode } from '../topology/stub-node'
 import { layoutNodes, type RankDir } from '../topology/layout'
 import type { SavedPositions } from '../topology/flow-types'
 
@@ -42,14 +45,15 @@ import { validateConnect, type BuilderAction, type BuilderState, type Selection 
 import { BuilderPalette } from './builder-palette'
 
 // Module-scope so React Flow never sees a new nodeTypes identity per render.
-const NODE_TYPES = { device: DeviceNode, lan: LanNode }
+const NODE_TYPES = { device: DeviceNode, lan: LanNode, stub: StubNode }
 
 const FIT_VIEW = { padding: 0.2, maxZoom: 1.25 }
 const GRID = 24
 
 // Edge ids carry their doc coordinates ('|' never appears in node names or
-// lan ids, so splitting is unambiguous): a p2p link is `link|<index>`, a LAN
-// membership is `member|<lanId>|<node>`.
+// lan/stub ids, so splitting is unambiguous): a p2p link — and a stub's tether
+// to its endpoint — is `link|<index>`, a LAN membership is
+// `member|<lanId>|<node>`.
 const p2pEdgeId = (index: number) => `link|${index}`
 const memberEdgeId = (lanId: string, node: string) => `member|${lanId}|${node}`
 
@@ -62,6 +66,9 @@ interface BuilderCanvasProps {
   onPositions: (next: SavedPositions, persist: boolean) => void
   // Shared per-group styling (delta 20) — read-only here; the inspector edits.
   groupStyles: GroupStyles
+  // Extra toolbar content for the top-right corner panel, after the view
+  // tools (the Build tab's edit-as-text switch).
+  topRight?: React.ReactNode
 }
 
 function sameSelection(a: Selection, b: Selection): boolean {
@@ -96,11 +103,30 @@ function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode
     if (link.kind === 'p2p') {
       edges.push({
         id: p2pEdgeId(index),
-        source: link.a,
-        target: link.b,
+        source: link.a.node,
+        target: link.b.node,
         sourceHandle: 'c-s',
         targetHandle: 'c-t',
         type: 'straight',
+        ...(link.name !== undefined && { label: link.name }),
+      })
+    } else if (link.kind === 'stub') {
+      nodes.push({
+        id: link.id,
+        type: 'stub',
+        position: { x: 0, y: 0 },
+        width: STUB_W,
+        height: STUB_H,
+        data: { label: link.name ?? `stub link on ${link.endpoint.node}` },
+      })
+      edges.push({
+        id: p2pEdgeId(index),
+        source: link.id,
+        target: link.endpoint.node,
+        sourceHandle: 'c-s',
+        targetHandle: 'c-t',
+        type: 'straight',
+        ...(link.name !== undefined && { label: link.name }),
       })
     } else {
       nodes.push({
@@ -109,13 +135,18 @@ function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode
         position: { x: 0, y: 0 },
         width: LAN_W,
         height: LAN_H,
-        data: { label: `${link.members.length}-node LAN` },
+        data: {
+          label:
+            link.name !== undefined
+              ? `${link.name} (${link.members.length}-node LAN)`
+              : `${link.members.length}-node LAN`,
+        },
       })
       for (const member of link.members) {
         edges.push({
-          id: memberEdgeId(link.id, member),
+          id: memberEdgeId(link.id, member.node),
           source: link.id,
-          target: member,
+          target: member.node,
           sourceHandle: 'c-s',
           targetHandle: 'c-t',
           type: 'straight',
@@ -127,7 +158,14 @@ function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode
   return { nodes, edges }
 }
 
-function CanvasInner({ state, dispatch, positions, onPositions, groupStyles }: BuilderCanvasProps) {
+function CanvasInner({
+  state,
+  dispatch,
+  positions,
+  onPositions,
+  groupStyles,
+  topRight,
+}: BuilderCanvasProps) {
   const { resolvedTheme } = useTheme()
   const { fitView, screenToFlowPosition } = useReactFlow()
   const [rankdir, setRankdir] = useState<RankDir>('LR')
@@ -253,14 +291,20 @@ function CanvasInner({ state, dispatch, positions, onPositions, groupStyles }: B
       if (node.type === 'device') {
         next = { kind: 'node', name: node.id }
       } else {
-        const linkIndex = doc.links.findIndex((link) => link.kind === 'lan' && link.id === node.id)
-        if (linkIndex >= 0) next = { kind: 'lan', linkIndex }
+        const linkIndex = doc.links.findIndex(
+          (link) => link.kind !== 'p2p' && link.id === node.id,
+        )
+        const kind = doc.links[linkIndex]?.kind
+        if (kind === 'lan') next = { kind: 'lan', linkIndex }
+        else if (kind === 'stub') next = { kind: 'stub', linkIndex }
       }
     } else if (edge !== undefined) {
       const [tag, first, second] = edge.id.split('|')
       if (tag === 'link' && first !== undefined) {
         const linkIndex = Number(first)
-        if (doc.links[linkIndex]?.kind === 'p2p') next = { kind: 'link', linkIndex }
+        const kind = doc.links[linkIndex]?.kind
+        if (kind === 'p2p') next = { kind: 'link', linkIndex }
+        else if (kind === 'stub') next = { kind: 'stub', linkIndex }
       } else if (tag === 'member' && first !== undefined && second !== undefined) {
         const linkIndex = doc.links.findIndex((link) => link.kind === 'lan' && link.id === first)
         if (linkIndex >= 0) next = { kind: 'member', linkIndex, node: second }
@@ -292,7 +336,10 @@ function CanvasInner({ state, dispatch, positions, onPositions, groupStyles }: B
       if (node.type === 'device') {
         nodeDeletions.push(node.id)
       } else {
-        const linkIndex = doc.links.findIndex((link) => link.kind === 'lan' && link.id === node.id)
+        // LAN hubs and stub terminators both stand for a link.
+        const linkIndex = doc.links.findIndex(
+          (link) => link.kind !== 'p2p' && link.id === node.id,
+        )
         if (linkIndex >= 0) linkDeletions.push(linkIndex)
       }
     }
@@ -356,7 +403,11 @@ function CanvasInner({ state, dispatch, positions, onPositions, groupStyles }: B
           <MiniMap
             pannable
             zoomable
-            nodeColor={(node) => (node.type === 'lan' ? 'var(--muted)' : 'var(--muted-foreground)')}
+            nodeColor={(node) =>
+              node.type === 'lan' || node.type === 'stub'
+                ? 'var(--muted)'
+                : 'var(--muted-foreground)'
+            }
           />
         )}
 
@@ -413,6 +464,7 @@ function CanvasInner({ state, dispatch, positions, onPositions, groupStyles }: B
           >
             {rankdir === 'LR' ? <MoveVertical className="size-3.5" /> : <MoveHorizontal className="size-3.5" />}
           </Button>
+          {topRight}
         </Panel>
       </ReactFlow>
     </div>

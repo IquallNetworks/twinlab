@@ -244,8 +244,10 @@ User-stated, for after the frontend work:
   Frontend: create-lab "Start from" selector, node templates in the builder's Add menu
   (stamped through `parseNodeFragment`), "Save as template" in the node inspector, and the
   lab header's publish-toggle dialog + `template` badge. **Config-file import (part two) DONE
-  2026-08-04 (contract delta 22)** — record in `docs/config-import.md`. Frontend: the
-  `/labs/import` two-step wizard (sources with per-file device select → review: warnings,
+  2026-08-04 (contract deltas 22 + 23)** — record in `docs/config-import.md`. Frontend: the
+  `/labs/import` three-step wizard (sources with per-file device select → WIRING, prefilled
+  from the server's suggestion and edited by the user, since delta 23 removed inferred
+  adjacency → review: warnings,
   renames, inferred definition, per-node interface maps + collapsible carry + quarantine with
   reason badges → create composes createLab → putCustomConfig → updateLabDefinition — custom
   config FIRST, the PUT validates `config:` refs against the stored fileset), an Import button

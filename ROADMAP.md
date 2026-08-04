@@ -686,10 +686,25 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        in the diff) + frontend (the `/labs/import` wizard and the builder's
        "From config file…"). Live-proven en route: compose order is
        put_custom_config BEFORE update_definition; VyOS op-mode collection
-       needs the vyatta-op-cmd-wrapper over docker exec. **Next per the
-       2026-08-04 sequencing: the aux-input analysis** (CDP/LLDP neighbor
-       dumps / explicit wiring lists to pin adjacencies addressing cannot —
-       the Batfish-layer1 precedent), immediately, before scenarios.
+       needs the vyatta-op-cmd-wrapper over docker exec. **The aux-input
+       analysis followed IMMEDIATELY (as sequenced) and became contract
+       delta 23 — explicit wiring — APPROVED and SHIPPED 2026-08-04.**
+       Maintainer's decisions: wiring list only (CDP/LLDP neighbor dumps
+       PARKED, groundwork noted — ntc-templates already parses the IOS
+       output and they would normalize into the same entries); the wiring
+       is REQUIRED and inferred adjacency is REMOVED (topology is intent —
+       import stops guessing it, and the same sources + wiring always give
+       the same lab); the subnet join demoted to a suggestion generator
+       (`POST /import/wiring-suggestion`) that only prefills the wizard's
+       editor. Per-interface realization stays (loopback pins, mgmt
+       quarantine, stubs for unwired addressed interfaces — the twin's
+       boundary); contradictions became 422s (`wiring_invalid` /
+       `wiring_conflict`, carrying the entry index); all-unnumbered wires
+       emit `prefix: false` L2 links — the unnumbered-core/trunk/LAG-member
+       case addressing could never see — and mixed wires spell `ipv4:
+       false` on their unaddressed endpoints, since netlab otherwise
+       invents an address (live-proven). Blackbox 133 green, the flagship
+       round trip now carrying an L2 wire end to end. Next: scenarios.
     5. **Scenario definition** — traffic between nodes/attached clients,
        impairment schedules. The least-specified item; also starts with a
        design discussion.

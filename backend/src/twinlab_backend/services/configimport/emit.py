@@ -13,7 +13,7 @@ import re
 
 import yaml
 
-from twinlab_backend.services.configimport.inference import Inference, NodeSource
+from twinlab_backend.services.configimport.wiring import NodeSource, Wiring
 
 # Link-attribute words netlab reads off a dict-form link entry: a node whose
 # sanitized name collided with one would corrupt the emitted links.
@@ -50,7 +50,7 @@ def quarantine_relpath(node: str) -> str:
 
 
 def emit_definition(
-    sources: list[NodeSource], inference: Inference, carry_nodes: frozenset[str]
+    sources: list[NodeSource], topology: Wiring, carry_nodes: frozenset[str]
 ) -> str:
     """The thin skeleton as netlab YAML. `carry_nodes` are the nodes whose
     carry template is non-empty — only they get a `config:` reference
@@ -58,7 +58,7 @@ def emit_definition(
     nodes: dict[str, object] = {}
     for source in sources:
         node: dict[str, object] = {"device": source.device}
-        loopback = inference.loopbacks.get(source.node)
+        loopback = topology.loopbacks.get(source.node)
         if loopback is not None:
             node["loopback"] = {"ipv4": loopback.ipv4}
         if source.node in carry_nodes:
@@ -66,11 +66,17 @@ def emit_definition(
         nodes[source.node] = node
 
     links: list[dict[str, object]] = []
-    for link in inference.links:
+    for link in topology.links:
+        # An unaddressed endpoint MUST spell `ipv4: false`: left bare, netlab
+        # invents an address for it (live-proven — and not even from the
+        # pinned prefix), which is exactly the silent invention import must
+        # never emit. An all-unaddressed wire pins `prefix: false` the same
+        # way, yielding a real unaddressed veth pair.
         entry: dict[str, object] = {
-            endpoint.node: {"ipv4": endpoint.ipv4} for endpoint in link.endpoints
+            endpoint.node: {"ipv4": endpoint.ipv4 if endpoint.ipv4 is not None else False}
+            for endpoint in link.endpoints
         }
-        entry["prefix"] = link.network
+        entry["prefix"] = link.network if link.network is not None else False
         links.append(entry)
 
     doc: dict[str, object] = {"provider": "clab", "nodes": nodes}

@@ -36,7 +36,7 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (twenty-two deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (twenty-three deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
 2026-08-03, delta 18 the device/image catalog, delta 19 the deployed-definition snapshot +
@@ -44,9 +44,11 @@ shared topology layout — both approved same day — delta 20 group canvas styl
 layout resource, approved 2026-08-04, delta 21 the template library — input methods part
 one, approved same day with the reviewer-directed per-kind split — and delta 22 config
 import — input methods part two, approved 2026-08-04, design record in
-`docs/config-import.md`). Two non-compose
+`docs/config-import.md` — and delta 23 explicit wiring, which REVISED that
+import surface the same day: the wiring list became a required input and
+inferred adjacency was removed). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 130 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 133 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -92,8 +94,10 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   the lab header wears a `template` badge with a publish-toggle dialog in its `⋯` menu; the
   library queries live under their own `['templates']` root so SSE lab bursts don't churn
   them), and
-  **config import DONE 2026-08-04** (contract delta 22 — see the backend bullet; the frontend
-  gained the `/labs/import` wizard — gather sources with per-file device select → analyze via
+  **config import DONE 2026-08-04** (contract deltas 22 + 23 — see the backend bullet; the
+  frontend gained the `/labs/import` wizard — gather sources with per-file device select →
+  declare the WIRING (delta 23: prefilled from the server's suggestion, entries editable with a
+  p2p/LAN badge; the import consumes only what the user confirms) → analyze via
   the pure factory → review warnings/renames/definition/per-node maps + carry + quarantine →
   create composes createLab → putCustomConfig → updateLabDefinition, custom config FIRST
   because the definition PUT validates its `config:` refs against the STORED fileset — plus an
@@ -311,7 +315,23 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   exec) and classifies every comparable source line matched/missing/extra modulo quarantine +
   an address-join map recompute; informational, never a gate. 422 slugs `unsupported_device` /
   `config_unparseable` / `duplicate_node` (+ `netlab_invalid` with stderr); `CatalogDevice`
-  gained `config_import`, derived from the parser set),
+  gained `config_import`, derived from the parser set. **Delta 23 revised this the same day:**
+  `wiring` is a REQUIRED input of `POST /import/network` and inferred adjacency is GONE —
+  topology is intent, so a link exists because the caller declared it. Each entry lists
+  `node:interface` endpoints (SOURCE names, first-colon split so channelized names survive;
+  count decides — 2 p2p, 3+ LAN), an all-unaddressed wire emits a `prefix: false` L2 link (the
+  unnumbered-core / trunk / LAG-member case addressing can never see; LAG needs nothing special
+  — wire the members, the bundle rides the carry), and a MIXED wire spells `ipv4: false` on its
+  unaddressed endpoints because netlab otherwise INVENTS an address for them (live-proven, and
+  not even from the pinned prefix). What is NOT adjacency stays automatic: loopback pins, mgmt
+  quarantine, and an addressed interface in no wire becoming a STUB (the twin's boundary).
+  Contradictions are ERRORS now — 422 `wiring_invalid` (unknown node/interface, an interface
+  wired twice, <2 endpoints, loopback/mgmt endpoints, self-links) and `wiring_conflict`
+  (endpoints in different subnets — the mask-typo catch), both carrying the offending `entry`
+  index in extras. The subnet join survives ONLY as advice: `POST /import/wiring-suggestion`
+  (`services/configimport/suggestion.py`) proposes wiring for a client to prefill an editor
+  with and is never consumed implicitly. `DiffSource.interface_map` overrides the diff's
+  address join for L2-linked interfaces, which carry no address on either side),
   `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
   live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
   `permissions` MASKED to the lab-scoped set; **delta 19**: both carry `definition_drifted` —

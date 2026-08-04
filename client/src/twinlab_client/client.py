@@ -71,6 +71,8 @@ from twinlab_client.models import (
     TestSuitesResponse,
     UserInfo,
     UserSummary,
+    WiringEntry,
+    WiringSuggestion,
 )
 
 
@@ -498,25 +500,52 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # Definition import (delta 22)
     # ------------------------------------------------------------------ #
 
-    async def import_network(self, sources: list[ImportSource]) -> NetworkImport:
+    async def import_network(
+        self, sources: list[ImportSource], wiring: list[WiringEntry]
+    ) -> NetworkImport:
         """POST /import/network — the definition factory: dumped running
-        configs in; netlab definition + carry + quarantine + maps out. PURE
-        (no lab is touched): compose create_lab -> put_custom_config ->
-        update_definition (custom config FIRST — the definition PUT
-        validates its `config:` references against the stored fileset).
-        GLOBAL lab:create. 422 unsupported_device /
-        config_unparseable / duplicate_node / netlab_invalid (stderr in
-        extras); inference gaps are warnings, never errors."""
+        configs + the EXPLICIT wiring in; netlab definition + carry +
+        quarantine + maps out. PURE (no lab is touched): compose create_lab
+        -> put_custom_config -> update_definition (custom config FIRST — the
+        definition PUT validates its `config:` references against the stored
+        fileset). GLOBAL lab:create.
+
+        `wiring` is REQUIRED (delta 23): adjacency is never inferred. Each
+        entry lists "node:interface" endpoints — 2 = p2p, 3+ = LAN,
+        all-unaddressed = an L2 link; an addressed interface in no entry
+        becomes a stub, and `[]` is legal (a linkless set of stubs).
+        suggest_wiring() exists to prefill an editor, never to feed this
+        call implicitly. 422 unsupported_device / config_unparseable /
+        duplicate_node / netlab_invalid (stderr in extras) / wiring_invalid
+        / wiring_conflict (extras carry the offending `entry` index)."""
         payload = await self._send_json(
             "POST",
             "/import/network",
             json_body={
                 "sources": [
                     {"device": s.device, "content": s.content, "name": s.name} for s in sources
-                ]
+                ],
+                "wiring": wiring,
             },
         )
         return _wire.parse_network_import(payload)
+
+    async def suggest_wiring(self, sources: list[ImportSource]) -> WiringSuggestion:
+        """POST /import/wiring-suggestion — the subnet join as ADVICE: a
+        proposed wiring list from the sources' addressing, plus warnings for
+        what it cannot place (unnumbered interfaces). Pure parse, no netlab
+        run; GLOBAL lab:create. The import never consumes a suggestion
+        implicitly: review, edit, then pass it to import_network."""
+        payload = await self._send_json(
+            "POST",
+            "/import/wiring-suggestion",
+            json_body={
+                "sources": [
+                    {"device": s.device, "content": s.content, "name": s.name} for s in sources
+                ]
+            },
+        )
+        return _wire.parse_wiring_suggestion(payload)
 
     async def import_node(self, device: str, content: str) -> NodeImport:
         """POST /import/node — the single-node granularity: a stampable
@@ -538,7 +567,12 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         payload = await self._send_json(
             "POST",
             f"/labs/{name}/config-diff",
-            json_body={"sources": [{"node": s.node, "content": s.content} for s in sources]},
+            json_body={
+                "sources": [
+                    {"node": s.node, "content": s.content, "interface_map": s.interface_map}
+                    for s in sources
+                ]
+            },
         )
         return _wire.parse_config_diff_report(payload)
 

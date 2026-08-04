@@ -1106,12 +1106,16 @@ async def test_import_network_round_trip(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/import/network"
         body = json.loads(request.content)
-        assert body == {"sources": [{"device": "iol", "content": "hostname r1\n", "name": "r1"}]}
+        assert body == {
+            "sources": [{"device": "iol", "content": "hostname r1\n", "name": "r1"}],
+            "wiring": [["r1:Ethernet0/1", "r2:Ethernet0/1"]],
+        }
         return httpx.Response(200, json=_NETWORK_IMPORT_PAYLOAD)
 
     async with make_client(handler) as client:
         result = await client.import_network(
-            [ImportSource(device="iol", content="hostname r1\n", name="r1")]
+            [ImportSource(device="iol", content="hostname r1\n", name="r1")],
+            [["r1:Ethernet0/1", "r2:Ethernet0/1"]],
         )
     assert "provider: clab" in result.definition
     assert result.interface_map["r1"]["GigabitEthernet0/0/1"] == "Ethernet0/1"
@@ -1134,7 +1138,7 @@ async def test_import_network_error_slug(make_client: ClientFactory) -> None:
 
     async with make_client(handler) as client:
         with pytest.raises(TwinlabApiError) as excinfo:
-            _ = await client.import_network([ImportSource(device="iol", content="x\n")])
+            _ = await client.import_network([ImportSource(device="iol", content="x\n")], [])
     assert excinfo.value.code == "duplicate_node"
 
 
@@ -1163,7 +1167,11 @@ async def test_config_diff_round_trip(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/labs/lab1/config-diff"
         body = json.loads(request.content)
-        assert body == {"sources": [{"node": "r1", "content": "hostname r1\n"}]}
+        assert body == {
+            "sources": [
+                {"node": "r1", "content": "hostname r1\n", "interface_map": {"Gi0/1": "Et0/1"}}
+            ]
+        }
         return httpx.Response(
             200,
             json={
@@ -1180,7 +1188,58 @@ async def test_config_diff_round_trip(make_client: ClientFactory) -> None:
         )
 
     async with make_client(handler) as client:
-        report = await client.config_diff("lab1", [DiffSource(node="r1", content="hostname r1\n")])
+        report = await client.config_diff(
+            "lab1",
+            [
+                DiffSource(
+                    node="r1",
+                    content="hostname r1\n",
+                    interface_map={"Gi0/1": "Et0/1"},
+                )
+            ],
+        )
     assert report.nodes[0].matched == 12
     assert report.nodes[0].missing == [" passive-interface Ethernet0/1"]
     assert report.nodes[0].quarantined == 3
+
+
+async def test_suggest_wiring_parses(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/import/wiring-suggestion"
+        assert json.loads(request.content) == {
+            "sources": [{"device": "iol", "content": "hostname r1\n", "name": None}]
+        }
+        return httpx.Response(
+            200,
+            json={
+                "wiring": [["r1:Ethernet0/1", "r2:Ethernet0/1"]],
+                "warnings": [{"node": "r1", "message": "Ethernet0/4 is unnumbered"}],
+            },
+        )
+
+    async with make_client(handler) as client:
+        suggestion = await client.suggest_wiring(
+            [ImportSource(device="iol", content="hostname r1\n")]
+        )
+    assert suggestion.wiring == [["r1:Ethernet0/1", "r2:Ethernet0/1"]]
+    assert suggestion.warnings[0].node == "r1"
+
+
+async def test_import_network_wiring_error_slug(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "code": "wiring_conflict",
+                "message": "wiring entry 0: the wired interfaces sit in different subnets",
+                "extras": {"entry": 0},
+            },
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabApiError) as excinfo:
+            _ = await client.import_network(
+                [ImportSource(device="iol", content="x\n")], [["r1:Et0/1", "r2:Et0/2"]]
+            )
+    assert excinfo.value.code == "wiring_conflict"
+    assert excinfo.value.extras == {"entry": 0}

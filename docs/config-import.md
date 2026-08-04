@@ -191,3 +191,71 @@ review). **New dependency `netutils` (Apache-2.0) needs explicit approval before
 - Abbreviated interface references in carried IOS config (`Gi0/0/1` in `ip route` etc.):
   rewrite canonical abbreviations + warn on unmatched, or warn-only.
 - Wizard entry points (labs page + builder Add menu proposed).
+
+## Revision: explicit wiring (delta 23, APPROVED 2026-08-04)
+
+The aux-input analysis (sequenced immediately after v1) landed on a stronger position than
+"optional hints": **the wiring list becomes a REQUIRED input and inferred adjacency is
+removed from the import.** Topology is intent — the import stops guessing it. Decisions
+(maintainer, 2026-08-04):
+
+- **Wiring list only; neighbor dumps (CDP/LLDP) PARKED** for a later delta. Groundwork noted
+  for when it returns: ntc-templates (already a backend dep) parses IOS
+  `show cdp/lldp neighbors detail`; VyOS lldpd needs a small hand parse; both would
+  normalize into the same wiring entries.
+- **`wiring` is required on `POST /import/network`** — a list of entries, each a list of
+  `"node:interface"` endpoints (SOURCE hostnames + SOURCE interface names; split on the
+  FIRST colon — channelized names like `Serial0/1/0:0` keep their colon). Endpoint count
+  decides, mirroring netlab's own model: 2 = p2p, 3+ = LAN. `[]` is legal (a linkless
+  network of stubs).
+- **The subnet join is DEMOTED to a suggestion generator**, never acted on: a cheap pure
+  helper (`POST /import/wiring-suggestion`) that proposes a wiring list from the sources'
+  addressing; the wizard prefills its wiring editor with it, the user reviews/edits, and
+  import consumes only the explicit list. Determinism is absolute — same sources + same
+  wiring = same lab.
+- **Per-interface realization is NOT inference and stays**: an addressed interface in no
+  wiring entry still becomes a stub link (the twin's boundary; its address and config must
+  land somewhere — nothing-dropped); an unwired unnumbered interface stays a warning.
+  Mgmt-VRF quarantine and loopback pinning are also untouched (not adjacency).
+- **Contradictions are factory errors now** (the user asserts the wiring, so a
+  contradiction is broken intent, not a finding): 422 `wiring_invalid` — unknown
+  node/interface, an interface in more than one entry, an entry with fewer than two
+  endpoints, wiring a mgmt-quarantined interface, malformed endpoint spelling — and 422
+  `wiring_conflict` — a wire whose endpoint addresses sit in different subnets (catches
+  mask typos harder than the old overlap warning did). Extras name the offending entry.
+- **All-unnumbered wires emit `prefix: false` L2 links** (live-proven: a real veth pair,
+  unaddressed interfaces) — the ISIS-core / trunk / LAG-member case that inference could
+  never see. LAG needs no special handling: wire the member ports (L2 links), and the
+  bundle interface + its address ride the carry as they already do.
+- **Mixed wires** (some endpoints addressed, some not) are LEGAL — resolved by live probe
+  2026-08-04: an endpoint spelled `ipv4: false` keeps its address suppressed while the
+  link's pinned prefix and its addressed endpoints stand. Left BARE instead, netlab
+  invents an address for it — and not even from the pinned prefix (it allocates
+  `10.1.0.2/30` beside a pinned `10.1.2.1/30`), which is exactly the silent invention the
+  importer must never emit. So every unaddressed wired endpoint emits `ipv4: false`, and
+  an all-unaddressed wire emits `prefix: false` too.
+- **`DiffSource` gains an optional `interface_map` override** for config-diff: L2-linked
+  interfaces carry no addresses on either side, so the address-join recompute cannot map
+  them — the client feeds back the map the import returned (still stateless).
+- **No `wiring_report`**: with contradictions as 422s, every accepted entry's outcome is
+  visible in the definition itself; warnings keep carrying the unwired-interface notes.
+
+### Implementation plan (delta 23)
+
+1. **Contract delta 23 sketch** (revises delta 22's import surface) → ⛔ review.
+2. **Backend: wiring model + validation** — endpoint parsing, the 422 checks, `wire()`
+   replacing the join inside the pipeline (wiring → p2p/LAN/L2 links; unwired addressed →
+   stubs; loopback/mgmt logic unchanged); the join moves to `suggestion.py` (same grouping
+   code, now emitting wiring entries + notes). Probe the mixed-wire `ipv4: false` question
+   live first.
+3. **Backend: routes** — `POST /import/wiring-suggestion` (same `lab:create`, pure parse,
+   no netlab run), revised `POST /import/network`, `DiffSource.interface_map`.
+4. **Client**: `import_network(sources, wiring)`, `suggest_wiring(sources)`,
+   `DiffSource.interface_map`.
+5. **Blackbox**: revise the imports slice (wiring threaded through every call incl. the
+   deploy round trip), add: suggestion→feed-back equivalence, `wiring_invalid` /
+   `wiring_conflict` 422s, an L2 wire asserting `prefix: false` in the emitted definition.
+6. **Frontend**: the wizard gains a wiring step between sources and analyze — prefilled
+   from the suggestion, entries editable (add/remove endpoints, count badge p2p/LAN);
+   the builder's single-node flow is untouched.
+7. **Docs + memory** (this file's status, CLAUDE.md, ROADMAP, blackbox README).

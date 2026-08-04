@@ -21,12 +21,6 @@ from twinlab_backend.services.configimport.emit import (
     quarantine_relpath,
     sanitize_node_name,
 )
-from twinlab_backend.services.configimport.inference import (
-    Inference,
-    NodeSource,
-    infer,
-    is_mgmt_vrf,
-)
 from twinlab_backend.services.configimport.ios import parse_ios
 from twinlab_backend.services.configimport.model import (
     Note,
@@ -39,7 +33,17 @@ from twinlab_backend.services.configimport.rewrite import (
     rewrite_vyos,
     wrap_raw,
 )
+from twinlab_backend.services.configimport.suggestion import (
+    WiringSuggestion,
+    suggest_wiring,
+)
 from twinlab_backend.services.configimport.vyos import parse_vyos
+from twinlab_backend.services.configimport.wiring import (
+    NodeSource,
+    Wiring,
+    is_mgmt_vrf,
+    wire,
+)
 from twinlab_backend.services.netlab import ClabArtifacts, create_clab_topology
 
 _PARSERS: dict[str, Callable[[str], Result[ParsedSource, ParseError]]] = {
@@ -86,7 +90,12 @@ class NodeImportResult:
 
 
 type ImportProblemCode = Literal[
-    "unsupported_device", "config_unparseable", "duplicate_node", "netlab_invalid"
+    "unsupported_device",
+    "config_unparseable",
+    "duplicate_node",
+    "netlab_invalid",
+    "wiring_invalid",
+    "wiring_conflict",
 ]
 
 
@@ -95,6 +104,8 @@ class ImportProblem:
     code: ImportProblemCode
     message: str
     stderr: str = ""
+    # Index of the offending wiring entry, for the wiring_* codes.
+    entry: int | None = None
 
 
 def _parse_one(spec: ImportSourceSpec, label: str) -> Result[ParsedSource, ImportProblem]:
@@ -112,33 +123,40 @@ def _parse_one(spec: ImportSourceSpec, label: str) -> Result[ParsedSource, Impor
 
 
 def _interface_map(
-    inference: Inference, artifacts: ClabArtifacts, warnings: list[Note]
+    topology: Wiring, artifacts: ClabArtifacts, warnings: list[Note]
 ) -> dict[str, dict[str, str]]:
-    """source interface -> netlab NOS-side ifname, joined on the pinned
-    addresses (the skeleton pinned every inferred endpoint, so the join is
-    total; a miss is a named warning, not a silent gap)."""
-    by_address: dict[tuple[str, str], str] = {}
-    for link in artifacts.links:
-        for endpoint in link.endpoints:
-            if endpoint.ipv4 is not None:
-                by_address[(endpoint.node, endpoint.ipv4)] = endpoint.ifname
+    """source interface -> netlab NOS-side ifname.
 
+    Joined POSITIONALLY: netlab assigns linkindex in definition order, so the
+    i-th emitted link is the i-th expanded link, and within it a node appears
+    at most once (self-links are rejected upstream). Position beats an address
+    join because delta 23's L2 links carry no address on either side."""
+    expanded = sorted(artifacts.links, key=lambda link: link.index)
     result: dict[str, dict[str, str]] = {}
-    for link in inference.links:
-        for endpoint in link.endpoints:
-            ifname = by_address.get((endpoint.node, endpoint.ipv4))
-            if ifname is None:
+    if len(expanded) != len(topology.links):
+        warnings.append(
+            Note(
+                None,
+                f"netlab expanded {len(expanded)} links from {len(topology.links)} wired ones; "
+                "carried interface references may stay unrewritten",
+            )
+        )
+    for wired_link, expanded_link in zip(topology.links, expanded, strict=False):
+        by_node = {endpoint.node: endpoint for endpoint in expanded_link.endpoints}
+        for endpoint in wired_link.endpoints:
+            counterpart = by_node.get(endpoint.node)
+            if counterpart is None:
                 warnings.append(
                     Note(
                         endpoint.node,
-                        f"interface {endpoint.interface} ({endpoint.ipv4}) has no expanded-"
-                        "topology counterpart; its carried references stay unrewritten",
+                        f"interface {endpoint.interface} has no expanded-topology counterpart; "
+                        "its carried references stay unrewritten",
                     )
                 )
                 continue
-            result.setdefault(endpoint.node, {})[endpoint.interface] = ifname
+            result.setdefault(endpoint.node, {})[endpoint.interface] = counterpart.ifname
 
-    for node, pin in inference.loopbacks.items():
+    for node, pin in topology.loopbacks.items():
         loopback = artifacts.node_facts.get(node, {}).get("loopback")
         ifname = (
             cast("dict[str, object]", loopback).get("ifname")
@@ -150,9 +168,11 @@ def _interface_map(
     return result
 
 
-def import_network(
+def _read_sources(
     specs: list[ImportSourceSpec],
-) -> Result[NetworkImportResult, ImportProblem]:
+) -> Result[tuple[list[NodeSource], dict[str, str], list[Note]], ImportProblem]:
+    """Parse every source and bind it to its final node name. Shared by the
+    factory and the wiring suggestion, so both see identical node names."""
     sources: list[NodeSource] = []
     name_map: dict[str, str] = {}
     warnings: list[Note] = []
@@ -180,16 +200,43 @@ def import_network(
         if hostname is not None:
             name_map[hostname] = node
         warnings.extend(Note(node, message) for message in parsed.value.warnings)
-        sources.append(NodeSource(node=node, device=spec.device, parsed=parsed.value))
+        sources.append(
+            NodeSource(node=node, device=spec.device, parsed=parsed.value, hostname=hostname)
+        )
+    return Ok((sources, name_map, warnings))
 
-    inference = infer(sources)
-    warnings.extend(inference.notes)
+
+def suggest(specs: list[ImportSourceSpec]) -> Result[WiringSuggestion, ImportProblem]:
+    """The subnet join as ADVICE (delta 23): proposed wiring for a client to
+    prefill an editor with. Never consumed by import_network implicitly."""
+    read = _read_sources(specs)
+    if isinstance(read, Err):
+        return read
+    sources, _, warnings = read.value
+    proposal = suggest_wiring(sources)
+    return Ok(WiringSuggestion(wiring=proposal.wiring, notes=(*warnings, *proposal.notes)))
+
+
+def import_network(
+    specs: list[ImportSourceSpec], wiring: list[list[str]]
+) -> Result[NetworkImportResult, ImportProblem]:
+    read = _read_sources(specs)
+    if isinstance(read, Err):
+        return read
+    sources, name_map, warnings = read.value
+
+    wired = wire(sources, wiring)
+    if isinstance(wired, Err):
+        return Err(ImportProblem(wired.error.code, wired.error.message, entry=wired.error.entry))
+    topology = wired.value
+    warnings.extend(topology.notes)
 
     per_node_addresses: dict[str, dict[str, str]] = {source.node: {} for source in sources}
-    for link in inference.links:
+    for link in topology.links:
         for endpoint in link.endpoints:
-            per_node_addresses[endpoint.node][endpoint.interface] = endpoint.ipv4
-    for node, pin in inference.loopbacks.items():
+            if endpoint.ipv4 is not None:
+                per_node_addresses[endpoint.node][endpoint.interface] = endpoint.ipv4
+    for node, pin in topology.loopbacks.items():
         per_node_addresses[node][pin.interface] = pin.ipv4
 
     splits: dict[str, BucketSplit] = {
@@ -197,14 +244,14 @@ def import_network(
             source.parsed,
             device=source.device,
             modeled_addresses=per_node_addresses[source.node],
-            mgmt_interfaces=inference.mgmt_interfaces.get(source.node, frozenset()),
-            mgmt_vrfs=inference.mgmt_vrfs.get(source.node, frozenset()),
+            mgmt_interfaces=topology.mgmt_interfaces.get(source.node, frozenset()),
+            mgmt_vrfs=topology.mgmt_vrfs.get(source.node, frozenset()),
         )
         for source in sources
     }
 
     carry_nodes = frozenset(node for node, split in splits.items() if split.carried)
-    definition = emit_definition(sources, inference, carry_nodes)
+    definition = emit_definition(sources, topology, carry_nodes)
 
     # The dry create only checks that referenced templates EXIST; content
     # lands after the rewrite, which needs this run's expanded topology.
@@ -213,7 +260,7 @@ def import_network(
     if isinstance(created, Err):
         return Err(ImportProblem("netlab_invalid", created.error.message, created.error.stderr))
 
-    interface_map = _interface_map(inference, created.value, warnings)
+    interface_map = _interface_map(topology, created.value, warnings)
 
     custom_config: dict[str, str] = {}
     quarantine: dict[str, list[QuarantineOut]] = {}

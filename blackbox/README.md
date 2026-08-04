@@ -66,10 +66,12 @@ it unset until the guard is implemented.
 | `test_jobs.py`         | async jobs without deploys: remove-job pollable after delete, hiding, history |
 | `test_ssh_keys.py`     | SSH public-key records: validation, global fingerprint uniqueness, jump coordinates |
 | `test_grants.py`       | delegation, anti-escalation, group grants, ownership transfer |
+| `test_templates.py`    | template library: both collections, publish toggle, template:manage split |
+| `test_imports.py`      | (+`deploy`) config import: wiring rules, factory output, fidelity diff |
 | `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, power, terminal, events |
 | `test_ssh_jump.py`     | (`deploy`) real `ssh` probes through the jump host: permitopen scoping, revocation, fail-safe |
 
-The backend implements the full v1.0 contract (twenty-two deltas — delta 12 made the four long
+The backend implements the full v1.0 contract (twenty-three deltas — delta 12 made the four long
 operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the
 SSH jump host the ssh slices exercise; delta 14 the link table; deltas 15/16 the cross-lab job
 listing and the stream's job events, both covered in the cheap slice; delta 17 reworked test
@@ -87,8 +89,11 @@ factory's output shape and 422 slugs, the permission split, config-diff pre-chec
 composed lifecycle (custom config BEFORE the definition PUT — its dry create validates
 `config:` refs against the stored fileset), and the deploy-marked flagship round trip: import
 two VyOS configs → compose → deploy with configure (the carried OSPF applies) → the fidelity
-diff reports zero missing lines with the quarantined NTP counted),
+diff reports zero missing lines with the quarantined NTP counted; delta 23 made that wiring
+EXPLICIT and required — the slice covers the suggestion-as-advice round trip, an
+all-unnumbered wire becoming a `prefix: false` L2 link, a mixed wire suppressing its
+unaddressed endpoint, and the wiring_invalid/wiring_conflict 422s),
 and the suite is
-**entirely green** (130/130 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+**entirely green** (133/133 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

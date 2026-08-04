@@ -250,6 +250,43 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     renaming and link inference are needed either way, and a second lab
     species forks the whole downstream stack (docs/config-import.md).
     (wire today: no import surface.)
+23. Explicit wiring (APPROVED 2026-08-04 — revises delta 22's import surface; decided at
+    the aux-input analysis, docs/config-import.md): **`wiring` becomes a
+    REQUIRED input of ``POST /import/network`` and inferred adjacency is
+    REMOVED** — topology is intent, and the import stops guessing it. Each
+    wiring entry is a list of ``"node:interface"`` endpoints (SOURCE
+    hostnames + SOURCE interface names, split on the FIRST colon so
+    channelized names keep theirs); endpoint count decides, mirroring
+    netlab's own model: 2 = p2p, 3+ = LAN; ``[]`` is a legal linkless
+    network. The subnet join is DEMOTED to a suggestion generator —
+    ``POST /import/wiring-suggestion`` proposes a wiring list from the
+    sources' addressing, the wizard prefills its editor with it, and import
+    consumes ONLY the explicit list (a suggestion is never acted on).
+    Per-interface realization is NOT inference and stays: an addressed
+    interface in no entry still becomes a stub link (the twin's boundary —
+    nothing-dropped), an unwired unnumbered interface stays a warning, and
+    loopback pinning + mgmt quarantine are untouched. CONTRADICTIONS ARE
+    FACTORY ERRORS now (asserted wiring makes them broken intent, not
+    findings): 422 ``wiring_invalid`` (unknown node/interface, an interface
+    in two entries, an entry with fewer than two endpoints, a wired
+    mgmt-quarantined interface, malformed spelling) and 422
+    ``wiring_conflict`` (a wire whose endpoint addresses sit in different
+    subnets — catches mask typos harder than the old overlap warning);
+    extras name the entry. A wire whose endpoints are ALL unnumbered emits
+    a ``prefix: false`` L2 link (real veth, unaddressed — the ISIS-core /
+    trunk / LAG-member case addressing could never see; LAG needs no
+    special handling: wire the members, the bundle + its address ride the
+    carry). MIXED wires (some endpoints addressed, some not) are legal:
+    each unaddressed endpoint emits ``ipv4: false``, which suppresses
+    netlab's assignment — left bare it INVENTS an address (live-proven),
+    the one thing the importer must never do silently. NO wiring_report: accepted entries are visible in the
+    definition itself. ``DiffSource`` gains an optional ``interface_map``
+    override — L2 interfaces carry no address on either side, so the
+    address-join recompute cannot map them; the client feeds back the map
+    the import returned (config-diff stays stateless). CDP/LLDP neighbor
+    dumps are PARKED as a later input form (they would normalize into the
+    same wiring entries; ntc-templates already parses the IOS output).
+    (wire today: delta 22 — optional-nothing, adjacency inferred.)
 
 Conventions:
 
@@ -626,6 +663,29 @@ class ImportSource:
     name: str | None = None
 
 
+# PROPOSED (delta 23, APPROVED): a wiring entry is a list of "node:interface"
+# endpoints (SOURCE hostnames + SOURCE interface names; split on the FIRST
+# colon — channelized names like "Serial0/1/0:0" keep theirs). Endpoint count
+# decides, mirroring netlab's own link model: 2 = p2p, 3+ = LAN. A wire whose
+# endpoints are ALL unnumbered becomes a `prefix: false` L2 link.
+type WiringEntry = list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class WiringSuggestion:
+    """PROPOSED (delta 23, APPROVED): `POST /import/wiring-suggestion` — the
+    subnet join, demoted to advice: a proposed wiring list derived from the
+    sources' addressing (interfaces sharing a subnet), for the client to
+    prefill a wiring editor with. NEVER acted on by the import itself —
+    import_network consumes only the explicit list the caller sends. Pure
+    parse, no netlab run; same lab:create as the factory."""
+
+    wiring: list[WiringEntry]
+    warnings: list[ImportWarning]  # e.g. unnumbered interfaces the join
+    #                                cannot place — the human's cue to wire
+    #                                them by hand
+
+
 @dataclass(frozen=True, slots=True)
 class QuarantineEntry:
     """One quarantined block of a node's source config, with why."""
@@ -698,6 +758,11 @@ class DiffSource:
 
     node: str
     content: str
+    # PROPOSED (delta 23, APPROVED): explicit source-if -> lab-if entries that
+    # OVERRIDE/extend the address-join recompute. L2-linked interfaces carry
+    # no address on either side, so the join cannot map them — feed back the
+    # map import_network returned (the diff stays stateless).
+    interface_map: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1776,17 +1841,34 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # Definition import (delta 22, APPROVED)
     # ------------------------------------------------------------------ #
 
-    async def import_network(self, sources: list[ImportSource]) -> NetworkImport:
-        """PROPOSED (delta 22, APPROVED) POST /import/network — the definition
-        factory: dumped running configs in; netlab definition + carry +
-        quarantine + maps out. GLOBAL lab:create (proposed: it is the
-        create-a-lab flow's factory, and it runs a netlab subprocess — the
-        dry create that yields the interface map — so it is not free).
-        SYNCHRONOUS (proposed: cost ≈ a PUT's dry validate; not a job —
-        nothing runs on any lab). 422 ``unsupported_device`` /
-        ``config_unparseable`` / ``duplicate_node`` (extras name the
-        offending source). Inference gaps are WARNINGS, never errors — a
-        one-node network with no inferable links is legal."""
+    async def import_network(
+        self, sources: list[ImportSource], wiring: list[WiringEntry]
+    ) -> NetworkImport:
+        """PROPOSED (delta 22, APPROVED; REVISED by delta 23, APPROVED) POST
+        /import/network — the definition factory: dumped running configs +
+        the EXPLICIT wiring in; netlab definition + carry + quarantine +
+        maps out. `wiring` is REQUIRED (delta 23): adjacency is never
+        inferred — links come from the entries (2 endpoints = p2p, 3+ =
+        LAN, all-unnumbered = a `prefix: false` L2 link), addressed
+        interfaces in no entry become stubs, and suggest_wiring exists to
+        prefill an editor, never to feed this call implicitly. GLOBAL
+        lab:create; SYNCHRONOUS (cost ≈ a PUT's dry validate). 422
+        ``unsupported_device`` / ``config_unparseable`` / ``duplicate_node``
+        / ``wiring_invalid`` (unknown node/interface, an interface in two
+        entries, <2 endpoints, a wired mgmt-quarantined interface, bad
+        spelling) / ``wiring_conflict`` (endpoint addresses in different
+        subnets — asserted wiring makes contradictions errors, not
+        findings); extras name the offending source or entry."""
+        raise NotImplementedError
+
+    async def suggest_wiring(self, sources: list[ImportSource]) -> WiringSuggestion:
+        """PROPOSED (delta 23, APPROVED) POST /import/wiring-suggestion — the
+        subnet join as ADVICE: a proposed wiring list from the sources'
+        addressing, plus warnings for what it cannot place (unnumbered
+        interfaces). Pure parse, no netlab run; GLOBAL lab:create (the
+        factory's gate — this is its prefill). The import never consumes a
+        suggestion implicitly: the caller reviews, edits, and passes the
+        result to import_network explicitly."""
         raise NotImplementedError
 
     async def import_node(self, device: str, content: str) -> NodeImport:
@@ -1804,7 +1886,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         exec transport and classify every source line (matched / missing /
         extra, modulo quarantine and the interface map — recomputed
         STATELESSLY by joining the sources' pinned addresses against the
-        lab's facts, because a lab never remembers its import origin).
+        lab's facts, because a lab never remembers its import origin;
+        DiffSource.interface_map overrides/extends the join for the
+        L2-linked interfaces addressing cannot map — delta 23).
         lab:validate (proposed — it execs on nodes, the suite-run class).
         Requires a deployed lab (409 ``lab_not_running``); every
         DiffSource.node must be a lab node (422). SYNCHRONOUS in v1

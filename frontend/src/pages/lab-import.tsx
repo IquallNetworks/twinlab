@@ -1,13 +1,14 @@
-/** Import a lab from dumped running configs (contract delta 22).
+/** Import a lab from dumped running configs (contract deltas 22 + 23).
  *
- * A two-step wizard over the pure definition factory: gather one config per
- * node (upload or paste, device chosen per file), analyze via POST
- * /import/network, then REVIEW — the inferred definition, per-node carry and
- * quarantine, the interface/name maps, every warning — before any lab
- * exists. Create composes the normal lifecycle: createLab ->
- * putCustomConfig -> updateLabDefinition (custom config FIRST: the
- * definition PUT validates its config: references against the stored
- * fileset), then lands on the Build tab.
+ * A three-step wizard over the pure definition factory: gather one config
+ * per node (upload or paste, device chosen per file) → declare the WIRING
+ * (delta 23: adjacency is never inferred; the server's subnet join only
+ * PREFILLS the editor, the user reviews and edits) → analyze via POST
+ * /import/network and REVIEW the definition, per-node carry and quarantine,
+ * the interface/name maps and every warning, all before any lab exists.
+ * Create composes the normal lifecycle: createLab -> putCustomConfig ->
+ * updateLabDefinition (custom config FIRST: the definition PUT validates
+ * its config: references against the stored fileset), then lands on Build.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
@@ -32,7 +33,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { api, type ImportSourceInput } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
 import { deviceCatalogQueryOptions } from '@/lib/queries'
-import type { NetworkImport, QuarantineClass } from '@/lib/schemas'
+import type { ImportWarning, NetworkImport, QuarantineClass } from '@/lib/schemas'
 import { useDocumentTitle } from '@/lib/use-document-title'
 
 interface SourceDraft {
@@ -199,6 +200,50 @@ function ReviewNodeCard({ node, result }: { node: string; result: NetworkImport 
   )
 }
 
+/** One wiring entry, edited as a comma-separated endpoint list. Kept as text
+ * so a half-typed endpoint is never silently dropped; the server is the
+ * validator (delta 23: unknown names, double-wires and subnet conflicts are
+ * 422s, not local guesses). */
+function WiringRow({
+  value,
+  onChange,
+  onRemove,
+}: {
+  value: string
+  onChange: (next: string) => void
+  onRemove: () => void
+}) {
+  const endpoints = value
+    .split(',')
+    .map((endpoint) => endpoint.trim())
+    .filter((endpoint) => endpoint !== '')
+  const kind =
+    endpoints.length < 2 ? 'incomplete' : endpoints.length === 2 ? 'p2p' : `LAN ×${endpoints.length}`
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="r1:eth1, r2:eth1"
+        className="font-mono text-xs"
+        aria-label="Wiring entry"
+      />
+      <Badge variant={endpoints.length < 2 ? 'destructive' : 'outline'} className="shrink-0">
+        {kind}
+      </Badge>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Remove wiring entry"
+        onClick={onRemove}
+      >
+        <Trash2 className="size-3.5" />
+      </Button>
+    </div>
+  )
+}
+
 export function LabImportPage() {
   useDocumentTitle('Import lab')
   const navigate = useNavigate()
@@ -209,11 +254,42 @@ export function LabImportPage() {
   const [sources, setSources] = useState<SourceDraft[]>([
     { id: nextId++, device: '', name: '', content: '', filename: null },
   ])
+  // Step 2 (delta 23): the wiring the caller asserts. Prefilled from the
+  // server's suggestion, then edited — adjacency is never inferred at import.
+  const [wiring, setWiring] = useState<string[] | null>(null)
+  const [suggestionNotes, setSuggestionNotes] = useState<ImportWarning[]>([])
   const [result, setResult] = useState<NetworkImport | null>(null)
   const [labName, setLabName] = useState('')
 
+  const sourceInputs = (): ImportSourceInput[] =>
+    sources.map((s) => ({
+      device: s.device,
+      content: s.content,
+      ...(s.name.trim() !== '' ? { name: s.name.trim() } : {}),
+    }))
+
+  const propose = useMutation({
+    mutationFn: () => api.suggestWiring(sourceInputs()),
+    onSuccess: (suggestion) => {
+      setWiring(suggestion.wiring.map((entry) => entry.join(', ')))
+      setSuggestionNotes(suggestion.warnings)
+    },
+    onError: (err) => toastError(err, 'Could not read the configs'),
+  })
+
   const analyze = useMutation({
-    mutationFn: (inputs: ImportSourceInput[]) => api.importNetwork(inputs),
+    mutationFn: () =>
+      api.importNetwork(
+        sourceInputs(),
+        (wiring ?? [])
+          .map((entry) =>
+            entry
+              .split(',')
+              .map((endpoint) => endpoint.trim())
+              .filter((endpoint) => endpoint !== ''),
+          )
+          .filter((entry) => entry.length > 0),
+      ),
     onSuccess: setResult,
     onError: (err) => toastError(err, 'Import failed'),
   })
@@ -271,14 +347,14 @@ export function LabImportPage() {
         <div>
           <h1 className="font-heading text-2xl font-semibold">Import from config files</h1>
           <p className="text-sm text-muted-foreground">
-            One dumped running config per node. Links are inferred from shared subnets — the
-            logical topology; nothing in a config is dropped: it is modeled, carried, or
-            quarantined.
+            One dumped running config per node, plus the wiring between them — configs cannot
+            carry cabling, so you declare it. Nothing in a config is dropped: it is modeled,
+            carried, or quarantined.
           </p>
         </div>
       </div>
 
-      {result === null ? (
+      {result === null && wiring === null ? (
         <>
           <div className="flex flex-col gap-3">
             {sources.map((draft) => (
@@ -301,27 +377,87 @@ export function LabImportPage() {
               onClick={() =>
                 setSources((prev) => [
                   ...prev,
-                  { id: nextId++, device: prev.at(-1)?.device ?? '', name: '', content: '', filename: null },
+                  {
+                    id: nextId++,
+                    device: prev.at(-1)?.device ?? '',
+                    name: '',
+                    content: '',
+                    filename: null,
+                  },
                 ])
               }
             >
               <Plus className="size-3.5" />
               Add source
             </Button>
+            <Button type="button" disabled={!ready || propose.isPending} onClick={() => propose.mutate()}>
+              {propose.isPending ? 'Reading…' : 'Next: wiring'}
+            </Button>
+          </div>
+        </>
+      ) : result === null ? (
+        <>
+          <div>
+            <h2 className="font-heading text-lg font-semibold">Wiring</h2>
+            <p className="text-sm text-muted-foreground">
+              One entry per link, as <span className="font-mono text-xs">node:interface</span>{' '}
+              endpoints. Two endpoints make a point-to-point link, three or more a LAN; an
+              interface wired to nothing but carrying an address becomes a stub. Entries whose
+              interfaces are all unnumbered become L2 links — the ones addressing can never
+              find. These are prefilled from the addressing in your configs; review them.
+            </p>
+          </div>
+          {suggestionNotes.length > 0 && (
+            <div className="border border-primary/40 bg-primary/5 p-3">
+              <p className="mb-1 flex items-center gap-1.5 text-xs font-medium tracking-wide uppercase">
+                <TriangleAlert className="size-3.5 text-primary" />
+                addressing could not place these
+              </p>
+              <ul className="flex flex-col gap-0.5 text-sm">
+                {suggestionNotes.map((note, index) => (
+                  <li key={index}>
+                    {note.node !== null && <span className="font-mono text-xs">{note.node}: </span>}
+                    {note.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex flex-col gap-2">
+            {(wiring ?? []).map((entry, index) => (
+              <WiringRow
+                key={index}
+                value={entry}
+                onChange={(next) =>
+                  setWiring((prev) =>
+                    (prev ?? []).map((item, position) => (position === index ? next : item)),
+                  )
+                }
+                onRemove={() =>
+                  setWiring((prev) => (prev ?? []).filter((_, position) => position !== index))
+                }
+              />
+            ))}
+            {(wiring ?? []).length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No links — every addressed interface will become a stub.
+              </p>
+            )}
+          </div>
+          <div className="flex gap-3">
             <Button
               type="button"
-              disabled={!ready || analyze.isPending}
-              onClick={() =>
-                analyze.mutate(
-                  sources.map((s) => ({
-                    device: s.device,
-                    content: s.content,
-                    ...(s.name.trim() !== '' ? { name: s.name.trim() } : {}),
-                  })),
-                )
-              }
+              variant="outline"
+              onClick={() => setWiring((prev) => [...(prev ?? []), ''])}
             >
+              <Plus className="size-3.5" />
+              Add link
+            </Button>
+            <Button type="button" disabled={analyze.isPending} onClick={() => analyze.mutate()}>
               {analyze.isPending ? 'Analyzing…' : 'Analyze'}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setWiring(null)}>
+              Back to sources
             </Button>
           </div>
         </>
@@ -391,7 +527,7 @@ export function LabImportPage() {
               {create.isPending ? 'Creating…' : 'Create lab'}
             </Button>
             <Button type="button" variant="outline" onClick={() => setResult(null)}>
-              Back to sources
+              Back to wiring
             </Button>
           </div>
         </>

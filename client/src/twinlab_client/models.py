@@ -372,6 +372,27 @@ class ImportSource:
     name: str | None = None
 
 
+# One wiring entry (delta 23): a list of "node:interface" endpoints — SOURCE
+# hostnames and SOURCE interface names, split on the FIRST colon so
+# channelized names keep theirs. Endpoint count decides, mirroring netlab's
+# own link model: 2 = p2p, 3+ = LAN; all-unaddressed = a `prefix: false` L2
+# link (the unnumbered-core case addressing can never see).
+type WiringEntry = list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class WiringSuggestion:
+    """`POST /import/wiring-suggestion` (delta 23) — the subnet join, demoted
+    to ADVICE: proposed wiring derived from the sources' addressing, for a
+    client to prefill a wiring editor with. import_network never consumes a
+    suggestion implicitly; the caller reviews, edits, and passes the result
+    explicitly. `warnings` names what addressing cannot place (unnumbered
+    interfaces) — the wires a human must supply."""
+
+    wiring: list[WiringEntry]
+    warnings: list["ImportWarning"]
+
+
 @dataclass(frozen=True, slots=True)
 class QuarantineEntry:
     """One quarantined block of a node's source config, with why."""
@@ -430,6 +451,11 @@ class DiffSource:
 
     node: str
     content: str
+    # Delta 23: source-if -> lab-if entries that OVERRIDE/extend the
+    # address-join recompute. L2-linked interfaces carry no address on either
+    # side, so the join cannot map them — feed back the map import_network
+    # returned (the diff stays stateless).
+    interface_map: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)

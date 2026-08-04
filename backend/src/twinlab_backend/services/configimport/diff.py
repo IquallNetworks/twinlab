@@ -17,11 +17,11 @@ from dataclasses import dataclass
 
 from twinlab_backend.result import Err, Ok, Result
 from twinlab_backend.services.configimport.classify import split_buckets
-from twinlab_backend.services.configimport.inference import is_mgmt_vrf
 from twinlab_backend.services.configimport.ios import parse_ios
 from twinlab_backend.services.configimport.model import ParsedSource, ParseError
 from twinlab_backend.services.configimport.rewrite import rewrite_ios, rewrite_vyos
 from twinlab_backend.services.configimport.vyos import parse_vyos
+from twinlab_backend.services.configimport.wiring import is_mgmt_vrf
 
 # The dump command per import-capable device — what the exec transport runs
 # to collect the running config. VyOS's netlab transport is docker exec (a
@@ -47,7 +47,11 @@ def _parse(device: str, content: str) -> Result[ParsedSource, ParseError]:
 
 
 def diff_node(
-    node: str, device: str, source_content: str, running_output: str
+    node: str,
+    device: str,
+    source_content: str,
+    running_output: str,
+    interface_map: dict[str, str] | None = None,
 ) -> Result[NodeDiffData, str]:
     source = _parse(device, source_content)
     if isinstance(source, Err):
@@ -89,6 +93,11 @@ def diff_node(
         counterpart = running_by_address.get(interface.ipv4)
         if counterpart is not None:
             mapping[interface.name] = counterpart
+    # Caller-supplied entries WIN (delta 23): an L2-linked interface carries
+    # no address on either side, so the join above cannot see it — the client
+    # feeds back the map the import returned. The diff stays stateless.
+    if interface_map is not None:
+        mapping.update(interface_map)
 
     source_lines = tuple(line for block in split.carried for line in block.lines)
     rewriter = rewrite_vyos if device == "vyos" else rewrite_ios

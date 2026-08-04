@@ -259,6 +259,14 @@ export const importWarningSchema = z.object({
 })
 export type ImportWarning = z.infer<typeof importWarningSchema>
 
+// Delta 23: the subnet join as ADVICE — proposed wiring to prefill the
+// editor with. The import consumes only the explicit list it is then given.
+export const wiringSuggestionSchema = z.object({
+  wiring: z.array(z.array(z.string())), // "node:interface" endpoints
+  warnings: z.array(importWarningSchema), // what addressing cannot place
+})
+export type WiringSuggestion = z.infer<typeof wiringSuggestionSchema>
+
 export const networkImportSchema = z.object({
   definition: z.string(), // no name:/mgmt — the receiving lab's PUT pins both
   custom_config: z.record(z.string(), z.string()), // ready for the custom-config

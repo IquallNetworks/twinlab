@@ -1360,6 +1360,11 @@ async def put_custom_config(
 class DiffSourceIn(BaseModel):
     node: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", max_length=64)]
     content: Annotated[str, StringConstraints(min_length=1, max_length=512 * 1024)]
+    # Delta 23: explicit source-if -> lab-if entries that override/extend the
+    # address-join recompute. An L2-linked interface carries no address on
+    # either side, so the join cannot see it — the client feeds back the map
+    # the import returned, and the diff stays stateless.
+    interface_map: dict[str, str] | None = None
 
 
 class ConfigDiffRequest(BaseModel):
@@ -1425,7 +1430,9 @@ async def config_diff(
                 "exec_failed",
                 f"could not collect node '{source.node}': {collected.error.message}",
             )
-        diffed = configimport_diff.diff_node(source.node, device, source.content, collected.value)
+        diffed = configimport_diff.diff_node(
+            source.node, device, source.content, collected.value, source.interface_map
+        )
         if isinstance(diffed, Err):
             raise ApiError(422, "config_unparseable", f"node '{source.node}': {diffed.error}")
         results.append(

@@ -94,6 +94,7 @@ from twinlab_client.models import (
     UserInfo,
     UserSummary,
     ValidationTest,
+    WiringSuggestion,
 )
 
 # --------------------------------------------------------------------------- #
@@ -453,6 +454,18 @@ def parse_import_warning(value: object) -> ImportWarning:
     obj = as_object(value, where)
     return ImportWarning(
         node=_get_opt_str(obj, "node", where), message=_get_str(obj, "message", where)
+    )
+
+
+def parse_wiring_suggestion(value: object) -> WiringSuggestion:
+    where = "WiringSuggestion"
+    obj = as_object(value, where)
+    return WiringSuggestion(
+        wiring=[
+            _get_str_list({"entry": entry}, "entry", where)
+            for entry in as_list(_req(obj, "wiring", where), where)
+        ],
+        warnings=[parse_import_warning(v) for v in as_list(_req(obj, "warnings", where), where)],
     )
 
 

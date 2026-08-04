@@ -25,6 +25,7 @@ from twinlab_backend.services.configimport.pipeline import (
     NodeImportResult,
     import_network,
     import_node,
+    suggest,
 )
 
 router = APIRouter(prefix="/import", tags=["import"])
@@ -45,8 +46,28 @@ class ImportSourceIn(BaseModel):
     name: _NameOverride | None = None
 
 
+# One wiring endpoint: "node:interface" (SOURCE names; split on the FIRST
+# colon so channelized interface names keep theirs). The pattern only bounds
+# the shape — resolution and the real rules live in the wiring model.
+_WiringEndpoint = Annotated[
+    str, StringConstraints(pattern=r"^[^:]+:.+$", min_length=3, max_length=160)
+]
+
+
 class ImportNetworkRequest(BaseModel):
     sources: list[ImportSourceIn] = Field(min_length=1, max_length=64)
+    # REQUIRED (delta 23): adjacency is never inferred. An empty list is
+    # legal and means "no links" — every addressed interface becomes a stub.
+    wiring: list[list[_WiringEndpoint]] = Field(max_length=512)
+
+
+class WiringSuggestionRequest(BaseModel):
+    sources: list[ImportSourceIn] = Field(min_length=1, max_length=64)
+
+
+class WiringSuggestionOut(BaseModel):
+    wiring: list[list[str]]
+    warnings: list[ImportWarningOut]
 
 
 class ImportNodeRequest(BaseModel):
@@ -85,7 +106,16 @@ def _problem(problem: ImportProblem) -> ApiError:
     extras: dict[str, object] = {}
     if problem.stderr:
         extras["stderr"] = problem.stderr
+    if problem.entry is not None:
+        extras["entry"] = problem.entry
     return ApiError(422, problem.code, problem.message, extras or None)
+
+
+def _specs(sources: list[ImportSourceIn]) -> list[ImportSourceSpec]:
+    return [
+        ImportSourceSpec(device=source.device, content=source.content, name=source.name)
+        for source in sources
+    ]
 
 
 def _network_out(result: NetworkImportResult) -> NetworkImportOut:
@@ -116,16 +146,30 @@ def _node_out(result: NodeImportResult) -> NodeImportOut:
 
 @router.post("/network", dependencies=[Depends(require_global(perms.LAB_CREATE))])
 async def import_network_route(request: ImportNetworkRequest) -> NetworkImportOut:
-    specs = [
-        ImportSourceSpec(device=source.device, content=source.content, name=source.name)
-        for source in request.sources
-    ]
     # The pipeline runs a blocking netlab subprocess (the dry create the
     # interface map joins on) — off the event loop.
-    outcome = await run_in_threadpool(import_network, specs)
+    outcome = await run_in_threadpool(
+        import_network, _specs(request.sources), [list(entry) for entry in request.wiring]
+    )
     if isinstance(outcome, Err):
         raise _problem(outcome.error)
     return _network_out(outcome.value)
+
+
+@router.post("/wiring-suggestion", dependencies=[Depends(require_global(perms.LAB_CREATE))])
+async def wiring_suggestion_route(request: WiringSuggestionRequest) -> WiringSuggestionOut:
+    # Advice, never action (delta 23): the subnet join proposes wiring for a
+    # client to prefill an editor with; import_network consumes only the
+    # explicit list it is then given. Pure parse — no netlab run.
+    outcome = suggest(_specs(request.sources))
+    if isinstance(outcome, Err):
+        raise _problem(outcome.error)
+    return WiringSuggestionOut(
+        wiring=outcome.value.wiring,
+        warnings=[
+            ImportWarningOut(node=note.node, message=note.message) for note in outcome.value.notes
+        ],
+    )
 
 
 @router.post("/node")

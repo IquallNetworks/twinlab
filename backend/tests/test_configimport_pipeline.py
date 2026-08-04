@@ -182,6 +182,13 @@ set system login user vyos authentication encrypted-password '$6$x'
 """
 
 
+# The caller's wiring (delta 23): only the p2p between the two IOL routers.
+# r1's Ethernet0/2 and r3's eth1 are deliberately left out — an addressed
+# interface in no wire is per-interface realization, not adjacency, so each
+# must come out a stub (r3's realizing as a VyOS dummy).
+_WIRING = [["r1:Ethernet0/1", "r2:Ethernet0/1"]]
+
+
 def test_import_network_end_to_end() -> None:
     """The whole factory against the real dry netlab create."""
     outcome = import_network(
@@ -189,7 +196,8 @@ def test_import_network_end_to_end() -> None:
             ImportSourceSpec(device="iol", content=_IOS),
             ImportSourceSpec(device="iol", content=_R2_IOS),
             ImportSourceSpec(device="vyos", content=_R3_VYOS),
-        ]
+        ],
+        _WIRING,
     )
     assert isinstance(outcome, Ok), getattr(outcome, "error", None)
     result = outcome.value
@@ -225,10 +233,10 @@ def test_import_network_end_to_end() -> None:
 
 
 def test_import_network_problems() -> None:
-    bad_device = import_network([ImportSourceSpec(device="linux", content="hostname x\n")])
+    bad_device = import_network([ImportSourceSpec(device="linux", content="hostname x\n")], [])
     assert isinstance(bad_device, Err) and bad_device.error.code == "unsupported_device"
 
-    unparseable = import_network([ImportSourceSpec(device="vyos", content="garbage here\n")])
+    unparseable = import_network([ImportSourceSpec(device="vyos", content="garbage here\n")], [])
     assert isinstance(unparseable, Err) and unparseable.error.code == "config_unparseable"
 
     no_name = import_network(
@@ -236,15 +244,29 @@ def test_import_network_problems() -> None:
             ImportSourceSpec(
                 device="iol", content="interface Ethernet0/1\n ip address 10.0.0.1 255.255.255.0\n"
             )
-        ]
+        ],
+        [],
     )
     assert isinstance(no_name, Err) and no_name.error.code == "config_unparseable"
+
+    # Wiring problems surface through the same factory result (delta 23).
+    conflicting = import_network(
+        [
+            ImportSourceSpec(device="iol", content=_IOS),
+            ImportSourceSpec(device="iol", content=_R2_IOS),
+        ],
+        [["r1:Ethernet0/2", "r2:Ethernet0/1"]],
+    )
+    assert isinstance(conflicting, Err)
+    assert conflicting.error.code == "wiring_conflict"
+    assert conflicting.error.entry == 0
 
     duplicate = import_network(
         [
             ImportSourceSpec(device="iol", content="hostname r-1\ninterface Ethernet0/1\n"),
             ImportSourceSpec(device="iol", content="hostname r_1\ninterface Ethernet0/1\n"),
-        ]
+        ],
+        [],
     )
     assert isinstance(duplicate, Err) and duplicate.error.code == "duplicate_node"
 

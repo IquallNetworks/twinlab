@@ -20,6 +20,7 @@ import {
   labOwnerSchema,
   configDiffReportSchema,
   networkImportSchema,
+  wiringSuggestionSchema,
   networkTemplateListSchema,
   networkTemplateSchema,
   networkTemplateSummarySchema,
@@ -258,8 +259,15 @@ export const api = {
   // Compose importNetwork() -> createLab() -> putCustomConfig() ->
   // updateLabDefinition() (custom config FIRST: the definition PUT validates
   // its config: references against the STORED fileset).
-  importNetwork: (sources: ImportSourceInput[]) =>
+  importNetwork: (sources: ImportSourceInput[], wiring: string[][]) =>
     request('/import/network', networkImportSchema, {
+      method: 'POST',
+      body: JSON.stringify({ sources, wiring }),
+    }),
+  // The subnet join as advice (delta 23): prefill for the wiring editor.
+  // Never fed back implicitly — the user reviews and edits it first.
+  suggestWiring: (sources: ImportSourceInput[]) =>
+    request('/import/wiring-suggestion', wiringSuggestionSchema, {
       method: 'POST',
       body: JSON.stringify({ sources }),
     }),
@@ -270,7 +278,10 @@ export const api = {
     }),
   // The fidelity proof: stateless (sources ride the request), lab:validate,
   // deployed lab required. Informational, never a gate.
-  configDiff: (name: string, sources: { node: string; content: string }[]) =>
+  configDiff: (
+    name: string,
+    sources: { node: string; content: string; interface_map?: Record<string, string> }[],
+  ) =>
     request(`/labs/${encodeURIComponent(name)}/config-diff`, configDiffReportSchema, {
       method: 'POST',
       body: JSON.stringify({ sources }),

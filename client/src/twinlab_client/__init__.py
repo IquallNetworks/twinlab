@@ -92,6 +92,8 @@ from twinlab_client.models import (
     UserInfo,
     UserSummary,
     ValidationTest,
+    WiringEntry,
+    WiringSuggestion,
 )
 
 __all__ = [
@@ -188,4 +190,6 @@ __all__ = [
     "UserInfo",
     "UserSummary",
     "ValidationTest",
+    "WiringEntry",
+    "WiringSuggestion",
 ]

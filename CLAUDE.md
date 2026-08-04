@@ -36,12 +36,13 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (eighteen deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (nineteen deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
-2026-08-03, and delta 18 the device/image catalog, approved same day). Two non-compose
+2026-08-03, delta 18 the device/image catalog, and delta 19 the deployed-definition snapshot +
+shared topology layout, both approved same day). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 112 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 114 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -70,9 +71,17 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   via the runner's `GET /images`, behind a `live` honesty flag; the builder's hardcoded
   `device-catalog.ts` became `use-device-catalog.ts` over the server list with a static fallback
   until the query settles, `parseBuildDoc`'s known-device gate is a parameter so the parse gate
-  and palette share one list per mount, and palette/inspector flag a missing default image); still
-  parked, order agreed 2026-08-03 (ROADMAP item 16): snapshot + server-side
-  layout → definition input methods → scenarios; after that batch comes the **NOS platform
+  and palette share one list per mount, and palette/inspector flag a missing default image), and
+  **deploy snapshot + shared layout DONE 2026-08-03** (contract delta 19: the lab header wears a
+  `drifted` badge off `definition_drifted`, the Overview Definition card gains a **Changes** view
+  — a dependency-free LCS line diff (`lib/diff.ts`) of deployed → stored — and manual topology
+  arrangements moved server-side: `GET/PUT /labs/{name}/layout` replaces the localStorage
+  `layout-store.ts` (deleted; `SavedPositions` now lives in `topology/flow-types.ts`), the Build
+  tab is the ONLY layout writer (auto-PUT on drag end, full-replace) and the Overview canvas is
+  **read/operate-only** — `nodesDraggable={false}`, it renders the shared arrangement and waits
+  for the layout query to settle so the saved positions apply on first paint); still
+  parked, order agreed 2026-08-03 (ROADMAP item 16): definition input methods → scenarios;
+  after that batch comes the **NOS platform
   sweep** (ROADMAP item 17), then a
   comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
   the browser-layer complement to the blackbox suite), and only then the v1.0
@@ -219,7 +228,16 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `image_present=null` + `live=false`, never an error; any authenticated user),
   `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
   live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
-  `permissions` MASKED to the lab-scoped set). **Test suites v2** (contract delta 17, shipped
+  `permissions` MASKED to the lab-scoped set; **delta 19**: both carry `definition_drifted` —
+  non-None only while `deployed` — and the detail serves `deployed_definition`, the snapshot the
+  deploy job writes from the text it ACTUALLY deployed (a PUT landing mid-deploy must not leak
+  in), cleared on destroy; drift is exact text equality, and since PUT normalizes the stored
+  definition (YAML re-dump while re-pinning name/subnet) comment/formatting edits normalize away
+  — only changes that survive normalization flag, live-verified; a hint, never a gate), and
+  **`GET/PUT /labs/{name}/layout`** (delta 19: ONE shared manual topology arrangement per lab —
+  `{canvas-id: {x, y}}`, ids OPAQUE presentation data never validated against the definition;
+  GET `lab:read` and never 409s (an empty layout is honest), PUT `lab:edit` full-replace with
+  shape-only bounds — ≤512 keys, ≤128 chars, finite floats). **Test suites v2** (contract delta 17, shipped
   2026-08-03 — Twinlab's own validation, not `netlab validate`, see ROADMAP item 15): declarative
   assertions stored on the lab record (never sent to `netlab create`), each test a **render →
   execute → parse → assert pipeline**, all data, no user code. A test's `run` is one `TestCase`

@@ -15,7 +15,9 @@ from twinlab_client import (
     JobEvent,
     LabDetail,
     LabEvent,
+    LabLayout,
     LabNodeState,
+    LayoutPosition,
     Principal,
     SshAccess,
     SshKey,
@@ -54,6 +56,8 @@ _LAB_DETAIL = {
     "name": "lab1",
     "status": "deployed",
     "definition": "provider: clab\n",
+    "deployed_definition": "provider: clab\n",
+    "definition_drifted": False,
     "owner": {"id": _OWNER_ID, "name": "admin"},
     "created_at": "2026-07-23T10:00:00+00:00",
     "updated_at": "2026-07-23T11:00:00+00:00",
@@ -228,6 +232,78 @@ async def test_get_lab_parses_detail(make_client: ClientFactory) -> None:
     ]
     assert detail.permissions == {"lab:read", "lab:edit"}
     assert detail.config_time_status == "passed"
+    assert detail.deployed_definition == "provider: clab\n"
+    assert detail.definition_drifted is False
+
+
+async def test_get_lab_parses_drift(make_client: ClientFactory) -> None:
+    # Delta 19: an edited stored definition reads as drift against the
+    # deployed snapshot; both fields are served so a client can diff them.
+    drifted = dict(_LAB_DETAIL) | {
+        "definition": "provider: clab\nedited: true\n",
+        "definition_drifted": True,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=drifted)
+
+    async with make_client(handler) as client:
+        detail = await client.get_lab("lab1")
+    assert detail.definition_drifted is True
+    assert detail.deployed_definition == "provider: clab\n"
+
+
+async def test_get_layout_parses_positions(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/labs/lab1/layout"
+        return httpx.Response(
+            200,
+            json={"positions": {"r1": {"x": 10.5, "y": -3}, "link:3": {"x": 0, "y": 0}}},
+        )
+
+    async with make_client(handler) as client:
+        layout = await client.get_layout("lab1")
+    assert layout == LabLayout(
+        positions={
+            "r1": LayoutPosition(x=10.5, y=-3.0),
+            "link:3": LayoutPosition(x=0.0, y=0.0),
+        }
+    )
+
+
+async def test_put_layout_sends_full_replace(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PUT"
+        assert request.url.path == "/api/v1/labs/lab1/layout"
+        body = _json_body(request)
+        assert body == {"positions": {"r1": {"x": 1.0, "y": 2.0}}}
+        return httpx.Response(200, json=body)
+
+    async with make_client(handler) as client:
+        layout = await client.put_layout("lab1", {"r1": LayoutPosition(x=1.0, y=2.0)})
+    assert layout.positions["r1"] == LayoutPosition(x=1.0, y=2.0)
+
+
+async def test_put_layout_empty_clears(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert _json_body(request) == {"positions": {}}
+        return httpx.Response(200, json={"positions": {}})
+
+    async with make_client(handler) as client:
+        layout = await client.put_layout("lab1", {})
+    assert layout.positions == {}
+
+
+async def test_get_layout_malformed_position_is_protocol_error(
+    make_client: ClientFactory,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"positions": {"r1": {"x": "ten", "y": 0}}})
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabProtocolError):
+            _ = await client.get_layout("lab1")
 
 
 async def test_create_lab_posts_name_only(make_client: ClientFactory) -> None:

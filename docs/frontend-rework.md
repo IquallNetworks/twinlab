@@ -298,9 +298,23 @@ Frontend-driven wants that surfaced in this roadmap:
   in-process, so they ride a deliberately lossy broker (bounded queue per stream, drop rather
   than stall the job runner). There is NO replay on reconnect, so the jobs poll was slowed to a
   15s fallback rather than deleted.
-- **Deployed-definition snapshot** — enables "definition drifted since deploy" hints.
-- **Server-side topology layout** — a layout field on the lab record, so a manually arranged
-  topology is shared across users/browsers (today it persists per browser in localStorage).
+- **Deployed-definition snapshot + server-side topology layout** — **DONE 2026-08-03 (contract
+  delta 19)**. The deploy job snapshots the definition it ACTUALLY deployed (captured at job
+  start, so a PUT landing mid-deploy can't leak in); `LabDetail` serves `deployed_definition`
+  and both wire shapes a derived `definition_drifted` (non-None only while `deployed`; destroy
+  clears the snapshot). Drift is exact text equality — and because PUT normalizes the stored
+  definition (YAML re-dump while re-pinning name/subnet), comment/formatting edits normalize
+  away and never flag: the first live probe (a `# comment` append) proved this by NOT drifting.
+  Frontend: a `drifted` badge in the lab header, and the Definition card grew a **Changes** view
+  — a dependency-free LCS line diff (`lib/diff.ts`), deployed → stored. The layout half:
+  `GET/PUT /labs/{name}/layout` stores ONE shared arrangement per lab (`{canvas-id: {x, y}}`,
+  ids opaque to the server, full-replace PUT, `lab:edit`); `topology/layout-store.ts`
+  (localStorage) is deleted — `SavedPositions` moved to `topology/flow-types.ts`, the Build tab
+  is the ONLY writer (auto-PUT on drag end / rename / palette drop) and the Overview canvas is
+  **read/operate-only** (`nodesDraggable={false}`, maintainer's call 2026-08-03): it waits for
+  the layout query to settle so the shared arrangement applies on first paint, and re-seeds when
+  another user's save changes it (structural sharing keeps identity stable otherwise). The
+  canvas's auto-layout button became view-only — it no longer touches the saved arrangement.
 - **Self password change on the Account page** — **DONE 2026-07-30** (frontend-only; no contract
   change). A Password card heads the Account page with a TanStack Form dialog over
   `PUT /auth/password` (`api.changePassword`): current + new + confirm, zod-validated with the

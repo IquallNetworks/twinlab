@@ -50,11 +50,13 @@ from twinlab_client.models import (
     LabDetail,
     LabEvent,
     LabFacts,
+    LabLayout,
     LabLink,
     LabLinks,
     LabNodeState,
     LabOwner,
     LabSummary,
+    LayoutPosition,
     LinkEndpoint,
     Liveness,
     NetemImpairment,
@@ -446,6 +448,7 @@ def parse_lab_summary(value: object) -> LabSummary:
         nodes=_get_int(obj, "nodes", where),
         nodes_running=_get_int(obj, "nodes_running", where),
         config_time_status=_get_literal(obj, "config_time_status", where, CONFIG_TIME_STATUSES),
+        definition_drifted=_get_opt_bool(obj, "definition_drifted", where),
         permissions=_get_str_set(obj, "permissions", where),
     )
 
@@ -457,6 +460,8 @@ def parse_lab_detail(value: object) -> LabDetail:
         name=_get_str(obj, "name", where),
         status=_get_literal(obj, "status", where, LAB_STATUSES),
         definition=_get_opt_str(obj, "definition", where),
+        deployed_definition=_get_opt_str(obj, "deployed_definition", where),
+        definition_drifted=_get_opt_bool(obj, "definition_drifted", where),
         owner=parse_opt_principal(_req(obj, "owner", where)),
         created_at=_get_datetime(obj, "created_at", where),
         updated_at=_get_datetime(obj, "updated_at", where),
@@ -631,6 +636,21 @@ def parse_lab_links(value: object) -> LabLinks:
         links=[parse_lab_link(item) for item in as_list(_req(obj, "links", where), where)],
         live=_get_bool(obj, "live", where),
     )
+
+
+def parse_lab_layout(value: object) -> LabLayout:
+    where = "LabLayout"
+    obj = as_object(value, where)
+    entries = as_object(_req(obj, "positions", where), where)
+    positions: dict[str, LayoutPosition] = {}
+    for key, entry in entries.items():
+        entry_where = f"{where}.positions[{key!r}]"
+        pos = as_object(entry, entry_where)
+        positions[key] = LayoutPosition(
+            x=_get_float(pos, "x", entry_where),
+            y=_get_float(pos, "y", entry_where),
+        )
+    return LabLayout(positions=positions)
 
 
 def parse_lab_event(value: object) -> LabEvent:

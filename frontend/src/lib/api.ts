@@ -14,6 +14,7 @@ import {
   labDetailSchema,
   labInterfacesSchema,
   labFactsSchema,
+  labLayoutSchema,
   labLinksSchema,
   labListSchema,
   labOwnerSchema,
@@ -281,6 +282,15 @@ export const api = {
   // active impairment; 409 no_definition on a bare created record.
   labLinks: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/links`, labLinksSchema),
+  labLayout: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}/layout`, labLayoutSchema),
+  // Full REPLACE ({} clears): the caller always sends the complete current
+  // arrangement. lab:edit — the Build tab is the only writer.
+  putLabLayout: (name: string, positions: Record<string, { x: number; y: number }>) =>
+    request(`/labs/${encodeURIComponent(name)}/layout`, labLayoutSchema, {
+      method: 'PUT',
+      body: JSON.stringify({ positions }),
+    }),
 
   // Netem link impairment, keyed by node + interface (the backend resolves the
   // node to its container). Set takes lab:configure; show takes lab:read. Set

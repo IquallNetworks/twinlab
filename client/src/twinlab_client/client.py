@@ -39,10 +39,12 @@ from twinlab_client.models import (
     LabDetail,
     LabEvent,
     LabFacts,
+    LabLayout,
     LabLinks,
     LabOwner,
     LabPowerAction,
     LabSummary,
+    LayoutPosition,
     Liveness,
     NetemImpairment,
     NodeInterfaces,
@@ -594,6 +596,32 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
             "PUT", f"/labs/{name}/custom-config", json_body={"custom_config": fileset}
         )
         return _wire.parse_custom_config_response(payload)
+
+    # ------------------------------------------------------------------ #
+    # Labs — topology layout (delta 19)
+    # ------------------------------------------------------------------ #
+
+    async def get_layout(self, name: str) -> LabLayout:
+        """GET /labs/{name}/layout — lab:read. The shared manual arrangement;
+        empty positions when none was ever saved. Deliberately NOT 409-gated
+        on a definition (unlike links/facts): an empty layout is honest, not
+        a lie."""
+        payload = await self._send_json("GET", f"/labs/{name}/layout")
+        return _wire.parse_lab_layout(payload)
+
+    async def put_layout(self, name: str, positions: dict[str, LayoutPosition]) -> LabLayout:
+        """PUT /labs/{name}/layout — lab:edit. Full REPLACE ({} clears; no
+        separate DELETE). lab:edit because the shared layout is authoring:
+        only the Build tab edits topology or arrangement, read/operate-only
+        canvases never write this."""
+        payload = await self._send_json(
+            "PUT",
+            f"/labs/{name}/layout",
+            json_body={
+                "positions": {key: {"x": pos.x, "y": pos.y} for key, pos in positions.items()}
+            },
+        )
+        return _wire.parse_lab_layout(payload)
 
     # ------------------------------------------------------------------ #
     # Labs — runtime control & observability (live clab-api state)

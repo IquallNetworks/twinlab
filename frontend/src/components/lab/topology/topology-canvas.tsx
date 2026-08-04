@@ -31,7 +31,7 @@ import {
   PERM_LAB_READ,
   PERM_LAB_TERMINAL,
 } from '@/lib/lab-permissions'
-import { labLinksQueryOptions, nodeNetemQueryOptions } from '@/lib/queries'
+import { labLayoutQueryOptions, labLinksQueryOptions, nodeNetemQueryOptions } from '@/lib/queries'
 import type { LabDetail, LabLink, LinkOperState } from '@/lib/schemas'
 import type { ParsedTopology } from '@/lib/topology'
 
@@ -46,7 +46,6 @@ import {
 } from './flow-types'
 import { LanNode } from './lan-node'
 import { layoutNodes, type RankDir } from './layout'
-import { clearLayout, loadLayout, saveLayout } from './layout-store'
 import { exportTopologyPng } from './export-image'
 
 // Module-scope so React Flow never sees a new nodeTypes identity per render.
@@ -276,6 +275,14 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
   })
   const serverLinks = linksQuery.isSuccess ? linksQuery.data.links : null
 
+  // The shared manual arrangement (delta 19), server-side and read-only here:
+  // arranging happens on the Build tab (lab:edit), this canvas only renders
+  // it. Structural sharing keeps `positions` referentially stable across
+  // identical refetches, so another user's save re-seeds exactly once.
+  const layoutQuery = useQuery(labLayoutQueryOptions(lab.name))
+  const savedPositions = layoutQuery.isSuccess ? layoutQuery.data.positions : null
+  const layoutSettled = !layoutQuery.isPending
+
   const built = useMemo(
     () => buildGraph(lab, topology, impairedByNode, serverLinks),
     [lab, topology, impairedByNode, serverLinks],
@@ -284,17 +291,27 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
   const [nodes, setNodes, onNodesChange] = useNodesState<AppNode>([])
   const [edges, setEdges] = useEdgesState<Edge>([])
 
-  // Seed positions (dagre) only when the graph SHAPE or rank direction
-  // changes; otherwise patch node data in place so live-state refreshes
-  // (SSE-driven refetches) don't blow away the user's drags.
-  const seeded = useRef<{ shape: string; dir: RankDir } | null>(null)
+  // Seed positions (dagre) only when the graph SHAPE, rank direction, or the
+  // shared arrangement changes; otherwise patch node data in place so
+  // live-state refreshes (SSE-driven refetches) don't reshuffle the view.
+  // Seeding waits for the layout query to settle so the saved arrangement
+  // applies on the FIRST paint, not as a jump after it.
+  const seeded = useRef<{
+    shape: string
+    dir: RankDir
+    positions: Record<string, { x: number; y: number }> | null
+  } | null>(null)
   useEffect(() => {
-    if (seeded.current?.shape !== built.shape || seeded.current.dir !== rankdir) {
-      seeded.current = { shape: built.shape, dir: rankdir }
-      // Dagre places everything, then the user's saved manual layout (drag
-      // to arrange; persisted per lab in this browser) overrides the nodes
-      // it knows — new nodes still get sensible automatic spots.
-      const savedPositions = loadLayout(lab.name)
+    if (!layoutSettled) return
+    if (
+      seeded.current?.shape !== built.shape ||
+      seeded.current.dir !== rankdir ||
+      seeded.current.positions !== savedPositions
+    ) {
+      seeded.current = { shape: built.shape, dir: rankdir, positions: savedPositions }
+      // Dagre places everything, then the lab's shared arrangement (saved
+      // from the Build tab, delta 19) overrides the elements it knows — new
+      // nodes still get sensible automatic spots, stale ids are ignored.
       const placed = layoutNodes(built.nodes, built.edges, rankdir).map((node) => {
         const saved = savedPositions?.[node.id]
         return saved ? { ...node, position: saved } : node
@@ -343,12 +360,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
         return changed ? next : current
       })
     }
-  }, [built, rankdir, lab.name, setNodes, setEdges, fitView])
-
-  // Mirror for event handlers: drag-stop needs the freshest node set even if
-  // the final position change lands in the same batch.
-  const nodesRef = useRef(nodes)
-  nodesRef.current = nodes
+  }, [built, rankdir, layoutSettled, savedPositions, setNodes, setEdges, fitView])
 
   const onNodeClick: NodeMouseHandler<AppNode> = (_event, node) => {
     if (node.type === 'device') {
@@ -390,15 +402,10 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
       onNodesChange={onNodesChange}
       onNodeClick={onNodeClick}
       onEdgeClick={onEdgeClick}
-      onNodeDragStop={(_event, _node, dragged) => {
-        // Dragging IS defining the manual layout: persist it per lab.
-        const merged = nodesRef.current.map((node) => {
-          const moved = dragged.find((d) => d.id === node.id)
-          return moved ? { ...node, position: moved.position } : node
-        })
-        saveLayout(lab.name, merged as AppNode[])
-      }}
       onPaneClick={() => setSelection(null)}
+      // Read/operate-only (maintainer's call 2026-08-03): arranging the shared
+      // layout is authoring and lives on the Build tab — no dragging here.
+      nodesDraggable={false}
       nodesConnectable={false}
       edgesFocusable={false}
       deleteKeyCode={null}
@@ -441,10 +448,9 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
         <Button
           variant="outline"
           size="icon-sm"
-          title="Auto-layout (clears your manual layout)"
+          title="Auto-layout the view (the saved arrangement is unchanged)"
           aria-label="Auto-layout"
           onClick={() => {
-            clearLayout(lab.name)
             setNodes(layoutNodes(built.nodes, built.edges, rankdir))
             window.setTimeout(() => void fitView(FIT_VIEW), 0)
           }}

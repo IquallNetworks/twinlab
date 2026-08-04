@@ -135,12 +135,15 @@ async def set_status(session: AsyncSession, name: str, status: str) -> Lab | Lab
 
 
 async def mark_destroyed(session: AsyncSession, name: str) -> Lab | LabStoreError:
-    """Flip a lab to `destroyed`, retaining its definition. `not_found` when the
-    lab was never recorded here (e.g. deployed out-of-band)."""
+    """Flip a lab to `destroyed`, retaining its definition. The deployed-
+    definition snapshot is CLEARED (delta 19): it describes a running
+    environment, and a destroyed lab runs nothing. `not_found` when the lab was
+    never recorded here (e.g. deployed out-of-band)."""
     lab = await get_lab(session, name)
     if lab is None:
         return LabStoreError("not_found", name)
     lab.status = STATUS_DESTROYED
+    lab.deployed_definition = None
     await session.commit()
     return lab
 
@@ -161,15 +164,22 @@ async def soft_delete(session: AsyncSession, name: str) -> Lab | LabStoreError:
     return lab
 
 
-async def mark_deployed(session: AsyncSession, name: str) -> Lab | LabStoreError:
+async def mark_deployed(
+    session: AsyncSession, name: str, *, deployed_definition: str
+) -> Lab | LabStoreError:
     """Flip a lab to `deployed` once its deploy succeeds — from `deploying` after
     a fresh deploy, or from `destroyed`/`deployed` on redeploy. Preserves the
-    definition, owner, and mgmt subnet fixed at reservation. `not_found` when the
-    lab was never recorded here."""
+    definition, owner, and mgmt subnet fixed at reservation. `deployed_definition`
+    is the snapshot (delta 19): the text the job ACTUALLY deployed, passed
+    explicitly rather than re-read from the row — a PUT landing mid-deploy edits
+    the stored definition but not what is running, and that gap is exactly the
+    drift the snapshot exists to expose. `not_found` when the lab was never
+    recorded here."""
     lab = await get_lab(session, name)
     if lab is None:
         return LabStoreError("not_found", name)
     lab.status = STATUS_DEPLOYED
+    lab.deployed_definition = deployed_definition
     await session.commit()
     return lab
 
@@ -198,6 +208,20 @@ async def update_custom_config(
     if lab is None:
         return LabStoreError("not_found", name)
     lab.custom_config = custom_config
+    await session.commit()
+    return lab
+
+
+async def set_layout(
+    session: AsyncSession, name: str, layout: dict[str, object]
+) -> Lab | LabStoreError:
+    """Replace a lab's shared topology arrangement (delta 19). The caller has
+    shape-validated it; here we only persist. `not_found` when the lab was never
+    recorded here."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.layout = layout
     await session.commit()
     return lab
 

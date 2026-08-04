@@ -611,9 +611,17 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        18)**: `GET /catalog`, curated set + drift-guarded module/image
        mirrors + best-effort presence via the runner's `GET /images`; the
        builder now consumes it (outcome in `docs/frontend-rework.md`).
-    2. **Deployed-definition snapshot** ("definition drifted since deploy"
-       hints) + **server-side topology layout** (shared manual arrangements) —
-       a second small pair.
+    2. **Deployed-definition snapshot + server-side topology layout** —
+       **DONE 2026-08-03 (contract delta 19)**: a successful deploy snapshots
+       the definition it deployed (`deployed_definition` on the detail,
+       derived `definition_drifted` on list + detail — a hint, never a gate;
+       cleared on destroy; PUT's YAML normalization filters cosmetic edits,
+       so only changes surviving it flag), and `GET/PUT /labs/{name}/layout`
+       stores ONE shared manual arrangement per lab (opaque canvas-id keys,
+       full-replace PUT on `lab:edit`). Frontend: `drifted` header badge, a
+       Changes diff view on the Definition card, the Build tab as the only
+       layout writer, and the Overview canvas read/operate-only
+       (maintainer's call 2026-08-03); localStorage layouts retired.
     3. **Definition input methods** — full-network templates, single-node
        templates, definitions built from real config files. Starts with a
        design discussion, not a sketch.

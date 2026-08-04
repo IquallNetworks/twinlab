@@ -35,7 +35,7 @@ import {
 } from '../topology/flow-types'
 import { LanNode } from '../topology/lan-node'
 import { layoutNodes, type RankDir } from '../topology/layout'
-import type { SavedPositions } from '../topology/layout-store'
+import type { SavedPositions } from '../topology/flow-types'
 
 import { validateConnect, type BuilderAction, type BuilderState, type Selection } from './build-state'
 import { BuilderPalette } from './builder-palette'

@@ -12,6 +12,7 @@ from twinlab_backend.models import (
     NetemImpairment,
     NetemSetRequest,
     NodeInterface,
+    PutLayoutRequest,
     UpdateCustomConfigRequest,
 )
 from twinlab_backend.services.clab_api import NodeInfo
@@ -95,6 +96,60 @@ def test_summary_config_time_status_tristate() -> None:
     assert lab_summary(lab, {}, []).config_time_status == "passed"
     lab.config_time_ok = False
     assert lab_summary(lab, {}, []).config_time_status == "failed"
+
+
+def test_definition_drifted_tristate() -> None:
+    # Delta 19: None when nothing is running or the snapshot is unknown (a lab
+    # deployed before the column existed); else exact text comparison.
+    lab = _lab("tmp1", "deployed", None)
+    assert lab_summary(lab, {}, []).definition_drifted is None  # pre-feature row
+    lab.deployed_definition = "name: x\n"
+    assert lab_summary(lab, {}, []).definition_drifted is False
+    lab.definition = "name: x\nedited: true\n"
+    assert lab_summary(lab, {}, []).definition_drifted is True
+    lab.status = "destroyed"  # nothing running -> nothing to drift from
+    assert lab_summary(lab, {}, []).definition_drifted is None
+
+
+def test_detail_serves_deployed_snapshot() -> None:
+    lab = _lab("tmp1", "deployed", None)
+    lab.deployed_definition = "name: x\n"
+    detail = lab_detail(lab, (), [])
+    assert detail.deployed_definition == "name: x\n"
+    assert detail.definition_drifted is False
+
+
+def test_detail_drift_comparison_is_exact_text() -> None:
+    # The helper compares raw text — any byte difference is drift. Cosmetic
+    # edits are filtered UPSTREAM: PUT normalizes the stored definition (YAML
+    # re-dump), so comments/formatting never reach this comparison differing
+    # (live-verified in the blackbox lifecycle test).
+    lab = _lab("tmp1", "deployed", None)
+    lab.deployed_definition = "name: x\n\n"
+    assert lab_detail(lab, (), []).definition_drifted is True
+
+
+def test_layout_request_accepts_opaque_ids_and_clears_empty() -> None:
+    # Delta 19: ids are opaque presentation data — node names and frontend
+    # pseudo-nodes alike pass; {} is the documented clear.
+    request = PutLayoutRequest.model_validate(
+        {"positions": {"r1": {"x": 10.5, "y": -3.0}, "link:3": {"x": 0, "y": 0}}}
+    )
+    assert request.positions["link:3"].x == 0.0
+    assert PutLayoutRequest.model_validate({"positions": {}}).positions == {}
+
+
+def test_layout_request_shape_bounds() -> None:
+    # Shape-only validation: bounded key count/length, finite floats.
+    with pytest.raises(pydantic.ValidationError):
+        PutLayoutRequest.model_validate({"positions": {"r1": {"x": float("nan"), "y": 0}}})
+    with pytest.raises(pydantic.ValidationError):
+        PutLayoutRequest.model_validate({"positions": {"": {"x": 0, "y": 0}}})
+    with pytest.raises(pydantic.ValidationError):
+        PutLayoutRequest.model_validate({"positions": {"k" * 129: {"x": 0, "y": 0}}})
+    too_many = {f"n{i}": {"x": 0, "y": 0} for i in range(513)}
+    with pytest.raises(pydantic.ValidationError):
+        PutLayoutRequest.model_validate({"positions": too_many})
 
 
 def test_detail_maps_stored_definition_and_live_nodes() -> None:

@@ -52,11 +52,13 @@ from twinlab_backend.models import (
     LabActionResponse,
     LabDetail,
     LabFactsResponse,
+    LabLayoutResponse,
     LabLink,
     LabLinksResponse,
     LabNodeState,
     LabStatus,
     LabSummary,
+    LayoutPosition,
     LinkEndpoint,
     LinkOperState,
     NetemImpairment,
@@ -66,6 +68,7 @@ from twinlab_backend.models import (
     NodeInterfaces,
     NodeLogsResponse,
     Principal,
+    PutLayoutRequest,
     SaveConfigResponse,
     SuiteReport,
     TestSuite,
@@ -228,6 +231,18 @@ def _lab_status(lab: Lab) -> LabStatus:
             )
 
 
+def _definition_drifted(lab: Lab) -> bool | None:
+    """Delta 19: exact text comparison of the stored definition against the
+    deployed snapshot. PUT normalizes the stored text (YAML re-dump with
+    name/subnet re-pinned), so cosmetic edits — comments, formatting —
+    normalize away and never flag drift; only changes surviving normalization
+    do. None when nothing is running (status != "deployed") or the snapshot is
+    unknown (a lab deployed before the column existed)."""
+    if lab.status != lab_store.STATUS_DEPLOYED or lab.deployed_definition is None:
+        return None
+    return lab.definition != lab.deployed_definition
+
+
 def lab_summary(
     lab: Lab, live: dict[str, tuple[NodeInfo, ...]], permissions: list[str]
 ) -> LabSummary:
@@ -243,6 +258,7 @@ def lab_summary(
         # "running") so one odd node can't 502 the whole listing.
         nodes_running=sum(1 for node in live_nodes if node.state == "running"),
         config_time_status=_config_time_status(lab.config_time_ok),
+        definition_drifted=_definition_drifted(lab),
         permissions=_lab_scoped(permissions),
     )
 
@@ -252,6 +268,8 @@ def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str]) ->
         name=lab.name,
         status=_lab_status(lab),
         definition=lab.definition,
+        deployed_definition=lab.deployed_definition,
+        definition_drifted=_definition_drifted(lab),
         owner=_owner_principal(lab),
         created_at=lab.created_at,
         updated_at=lab.updated_at,
@@ -992,7 +1010,7 @@ async def _deploy_job(
         # predating the columns).
         _ = await lab_store.set_links(db, lab_name, serialize_links(artifacts.links))
         _ = await lab_store.set_node_facts(db, lab_name, dict(artifacts.node_facts))
-        _ = await lab_store.mark_deployed(db, lab_name)
+        _ = await lab_store.mark_deployed(db, lab_name, deployed_definition=definition)
         return await _finish_deploy(
             deployed.value,
             definition,
@@ -1323,6 +1341,49 @@ async def put_custom_config(
     if isinstance(updated, lab_store.LabStoreError):
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _custom_config_response(library, updated)
+
+
+# --- Topology layout (contract delta 19): ONE shared manual arrangement per
+# lab, replacing the frontend's per-browser localStorage. The ids are opaque
+# presentation data; validation is shape-only (the request model bounds key
+# count/length and requires finite floats). PUT rides lab:edit — arranging the
+# shared layout is authoring: only the Build tab edits topology or arrangement
+# (maintainer's call 2026-08-03), other canvases are read/operate-only. ---
+
+
+def _layout_response(lab: Lab) -> LabLayoutResponse:
+    # Stored JSON was shape-validated on write, so a parse failure here is a
+    # corrupt row (a real error), not a caller mistake — same rule as suites.
+    raw = lab.layout or {}
+    return LabLayoutResponse(
+        positions={key: LayoutPosition.model_validate(pos) for key, pos in raw.items()}
+    )
+
+
+@router.get("/{lab_name}/layout", dependencies=[Depends(require_lab(perms.LAB_READ))])
+async def get_layout(lab_name: LabName, db: SessionDep) -> LabLayoutResponse:
+    # Deliberately NOT 409-gated on a definition (unlike links/facts): an empty
+    # layout is honest, not a lie — the layout is an independent presentational
+    # sub-resource.
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    return _layout_response(lab)
+
+
+@router.put("/{lab_name}/layout", dependencies=[Depends(require_lab(perms.LAB_EDIT))])
+async def put_layout(
+    lab_name: LabName, request: PutLayoutRequest, db: SessionDep
+) -> LabLayoutResponse:
+    # Full REPLACE ({} clears): the writer always sends the complete current
+    # arrangement, so replace semantics prune stale ids naturally.
+    serialized: dict[str, object] = {
+        key: pos.model_dump() for key, pos in request.positions.items()
+    }
+    updated = await lab_store.set_layout(db, lab_name, serialized)
+    if isinstance(updated, lab_store.LabStoreError):
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    return _layout_response(updated)
 
 
 async def _destroy_job(

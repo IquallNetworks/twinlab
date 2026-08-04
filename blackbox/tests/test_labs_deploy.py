@@ -82,6 +82,10 @@ async def test_deploy_lifecycle(admin: TwinlabClient, make_lab: LabFactory) -> N
 
     detail = await admin.get_lab(lab.name)
     assert detail.status == "deployed"
+    # Delta 19: the deploy snapshotted exactly what it deployed — the stored
+    # definition — so the lab starts undrifted.
+    assert detail.deployed_definition == detail.definition
+    assert detail.definition_drifted is False
     assert {node.name for node in detail.nodes} == {"n1", "n2"}
     for node in detail.nodes:
         assert node.state == "running"
@@ -96,10 +100,24 @@ async def test_deploy_lifecycle(admin: TwinlabClient, make_lab: LabFactory) -> N
     assert logs.node == "n1"
     assert logs.container == f"clab-{detail.name}-n1"
 
-    # Deploying over a running lab is allowed (overwrite in place).
+    # Delta 19: a SEMANTIC edit to the stored definition of a running lab
+    # flags drift — a hint, never a gate. (A comment-only edit would NOT:
+    # PUT normalizes the stored YAML, stripping comments/formatting, so only
+    # changes that survive normalization can differ from the snapshot.)
+    drifted = await admin.update_definition(
+        detail.name, LINUX_LAB_DEFINITION.replace("[n1, n2]", "[n1, n2, n3]")
+    )
+    assert drifted.definition_drifted is True
+    assert drifted.deployed_definition == detail.deployed_definition
+    row = next(r for r in await admin.list_labs() if r.name == detail.name)
+    assert row.definition_drifted is True
+
+    # Deploying over a running lab is allowed (overwrite in place) — and the
+    # redeploy re-snapshots, clearing the drift.
     again = await admin.deploy_lab(detail.name)
     again_done = await admin.wait_job(detail.name, again.id, timeout=JOB_WAIT)
     assert again_done.status == "succeeded", again_done.error
+    assert (await admin.get_lab(detail.name)).definition_drifted is False
 
     # Destroy keeps the record, redeployable.
     destroy = await admin.destroy_lab(detail.name)
@@ -110,6 +128,10 @@ async def test_deploy_lifecycle(admin: TwinlabClient, make_lab: LabFactory) -> N
     after = await admin.get_lab(detail.name)
     assert after.status == "destroyed"
     assert after.definition is not None  # the record survives with its definition
+    # Delta 19: the snapshot describes a RUNNING environment — destroy clears
+    # it, and with nothing running there is nothing to drift from.
+    assert after.deployed_definition is None
+    assert after.definition_drifted is None
     assert after.nodes == []
 
     # A destroyed (not-running) lab refuses a plain destroy: a SYNCHRONOUS

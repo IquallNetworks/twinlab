@@ -22,6 +22,11 @@ export type AppNode = DeviceFlowNode | LanFlowNode
 
 export const NOT_DEPLOYED = 'not-deployed'
 
+// A manual arrangement: canvas element id -> position. Persisted server-side
+// per lab (delta 19, `GET/PUT /labs/{name}/layout`) and shared across users;
+// the Build tab is the only writer (lab:edit) — other canvases read.
+export type SavedPositions = Record<string, { x: number; y: number }>
+
 // Fixed node geometry: the components render at exactly these sizes, so dagre
 // and React Flow's fitView are deterministic (no measure-then-jitter frame).
 export const DEVICE_W = 156

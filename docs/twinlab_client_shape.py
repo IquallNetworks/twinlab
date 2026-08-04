@@ -143,6 +143,33 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     deploy does not pre-flight it (a separate parked decision). (wire
     today: no catalog surface — `frontend/src/lib/device-catalog.ts`
     hardcodes the list.)
+19. Deployed-definition snapshot + shared topology layout (APPROVED
+    2026-08-03): two small lab-record additions.
+    (a) A successful deploy SNAPSHOTS the definition it deployed.
+    ``LabDetail`` serves it (``deployed_definition``) and both the list row
+    and the detail carry a derived ``definition_drifted`` flag — the stored
+    definition no longer matches what is running. A HINT, never a gate:
+    deploy and configure stay allowed on a drifted lab (configuring from a
+    drifted definition is exactly when the hint matters — surface it, don't
+    block it). The snapshot describes the RUNNING environment, so destroy
+    clears it and a redeploy replaces it; a FAILED deploy leaves the
+    previous snapshot in place (partial wreckage is not describable).
+    Comparison is exact text equality of stored vs snapshot — and since PUT
+    normalizes the stored text (YAML re-dump), cosmetic edits (comments,
+    formatting) do not flag drift, only changes that survive normalization.
+    (wire today: deploy keeps no record of what it deployed — the only
+    drift signal is the canvas's definition-vs-live-containers view, which
+    sees node add/remove but never an edited link or module.)
+    (b) ``GET/PUT /labs/{name}/layout`` stores ONE manual topology
+    arrangement per lab on the record, shared across users and browsers
+    (wire today: per-browser localStorage — `topology/layout-store.ts`,
+    which this retires). Positions are keyed by canvas element id, OPAQUE
+    to the server (node names plus frontend pseudo-nodes like LAN hubs — a
+    presentation artifact; validation is shape-only). PUT is a full
+    REPLACE (house test-suites/netem semantics; ``{}`` clears). Read rides
+    ``lab:read``, write rides ``lab:edit``: arranging the shared layout is
+    AUTHORING — only the Build tab edits topology or arrangement, every
+    other canvas is read/operate-only (maintainer's call 2026-08-03).
 
 Conventions:
 
@@ -510,6 +537,12 @@ class LabSummary:
     config_time_status: (
         ConfigTimeStatus  # APPROVED — wire today: config_time_ok: bool | None
     )
+    # PROPOSAL (delta 19, APPROVED): True when the stored definition differs
+    # from the deployed snapshot (see LabDetail.deployed_definition). None
+    # when status != "deployed" — nothing is running, so there is nothing to
+    # drift from (a mid-redeploy "deploying" lab reads None too; the flag
+    # settles when the job does).
+    definition_drifted: bool | None
     permissions: set[str]
 
 
@@ -521,6 +554,19 @@ class LabDetail:  # No Summary/Detail split for v1.0 (see LabSummary note).
     name: str
     status: LabStatus
     definition: str | None  # None only while status="created" (lifecycle split)
+    # PROPOSAL (delta 19, APPROVED): the definition of the last SUCCESSFUL
+    # deploy, exactly as deployed (post name/subnet pinning) — what the
+    # RUNNING lab was built from. None until first deployed and after
+    # destroy (the snapshot describes a running environment). Served on the
+    # detail — not just the derived flag — so a client can render WHAT
+    # changed since deploy, not merely that something did. Drift is exact
+    # text comparison against `definition` — and because PUT NORMALIZES the
+    # stored text (YAML parse + re-dump with name/subnet re-pinned), a
+    # comment- or formatting-only edit normalizes away and does NOT flag
+    # drift: drift means a change that survives normalization (implementation
+    # finding 2026-08-03, live-verified).
+    deployed_definition: str | None
+    definition_drifted: bool | None  # delta 19 — see LabSummary
     owner: Principal | None  # APPROVED — wire today: bare username string
     created_at: datetime
     updated_at: datetime
@@ -717,6 +763,36 @@ class LabLinks:
 
     links: list[LabLink]
     live: bool
+
+
+# --------------------------------------------------------------------------- #
+# Topology layout shapes (delta 19, APPROVED)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutPosition:
+    """One canvas element's manual position (delta 19)."""
+
+    x: float
+    y: float
+
+
+@dataclass(frozen=True, slots=True)
+class LabLayout:
+    """The lab's ONE shared manual topology arrangement (delta 19).
+
+    Keys are canvas element ids, OPAQUE to the server: node names plus the
+    frontend's pseudo-node ids (LAN hubs, e.g. "link:3"). A presentation
+    artifact, deliberately NOT validated against the definition — stale keys
+    (a renamed node, a reindexed link) are harmless because readers ignore
+    unknown ids and auto-layout covers unplaced elements, and PUT's replace
+    semantics prune naturally (the writer always writes the full current
+    arrangement). Empty = no manual layout saved (auto-layout applies).
+    Server validation is shape-only: bounded key count and length, finite
+    floats — 422 beyond."""
+
+    positions: dict[str, LayoutPosition]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1489,6 +1565,31 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         """PUT /labs/{name}/custom-config — lab:edit. Full replace of the USER
         fileset. 409 if a path shadows a built-in. Applies on the next
         configure/deploy."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Labs — topology layout (delta 19)
+    # ------------------------------------------------------------------ #
+
+    async def get_layout(self, name: str) -> LabLayout:
+        """PROPOSED (delta 19, APPROVED, not served yet) GET
+        /labs/{name}/layout — lab:read.
+        The shared manual arrangement; empty positions when none was ever
+        saved. Deliberately NOT 409-gated on a definition (unlike links/
+        facts): an empty layout is honest, not a lie — the layout is an
+        independent presentational sub-resource."""
+        raise NotImplementedError
+
+    async def put_layout(
+        self, name: str, positions: dict[str, LayoutPosition]
+    ) -> LabLayout:
+        """PROPOSED (delta 19, APPROVED, not served yet) PUT
+        /labs/{name}/layout — lab:edit.
+        Full REPLACE ({} clears; no separate DELETE). lab:edit — not a new
+        permission and not lab:read — because the shared layout is authoring:
+        only the Build tab edits topology or arrangement (maintainer's call
+        2026-08-03), so the read/operate-only canvases never write this. A
+        plain fast 200 — no job."""
         raise NotImplementedError
 
     # stopped here

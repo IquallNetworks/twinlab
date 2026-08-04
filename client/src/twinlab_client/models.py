@@ -338,6 +338,11 @@ class LabSummary:
     nodes: int
     nodes_running: int
     config_time_status: ConfigTimeStatus
+    # Delta 19: True when the stored definition no longer matches the deployed
+    # snapshot. None when nothing is running to drift from (status !=
+    # "deployed") or the snapshot is unknown (deployed before the feature).
+    # A hint, never a gate — deploy/configure stay allowed.
+    definition_drifted: bool | None
     permissions: set[str]
 
 
@@ -349,6 +354,13 @@ class LabDetail:
     name: str
     status: LabStatus
     definition: str | None  # None only while status="created"
+    # Delta 19: the definition of the last SUCCESSFUL deploy, exactly as
+    # deployed — what the running environment was built from, so a client can
+    # render WHAT changed since deploy. None until first deployed and after
+    # destroy. Drift is exact text comparison against `definition`; PUT
+    # normalizes the stored text (YAML re-dump), so cosmetic edits don't flag.
+    deployed_definition: str | None
+    definition_drifted: bool | None  # delta 19 — see LabSummary
     owner: Principal | None
     created_at: datetime
     updated_at: datetime
@@ -517,6 +529,25 @@ class LabLinks:
 
     links: list[LabLink]
     live: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutPosition:
+    """One canvas element's manual position (delta 19)."""
+
+    x: float
+    y: float
+
+
+@dataclass(frozen=True, slots=True)
+class LabLayout:
+    """The lab's ONE shared manual topology arrangement (delta 19), keyed by
+    canvas element id — node names plus frontend pseudo-nodes (LAN hubs),
+    OPAQUE to the server. Never validated against the definition: stale keys
+    are harmless (readers ignore unknown ids; auto-layout covers unplaced
+    elements). Empty = no manual layout saved."""
+
+    positions: dict[str, LayoutPosition]
 
 
 @dataclass(frozen=True, slots=True)

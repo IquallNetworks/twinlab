@@ -62,21 +62,23 @@ it unset until the guard is implemented.
 | `test_groups.py`       | CRUD, membership replace, global-only roles, permission inheritance |
 | `test_catalog.py`      | role catalog shapes, principals directory, device catalog    |
 | `test_labs.py`         | create-record/author/visibility/destroy — the lifecycle split |
-| `test_lab_authoring.py`| test suites + custom-config templates on a record            |
+| `test_lab_authoring.py`| test suites, custom-config templates + topology layout on a record |
 | `test_jobs.py`         | async jobs without deploys: remove-job pollable after delete, hiding, history |
 | `test_ssh_keys.py`     | SSH public-key records: validation, global fingerprint uniqueness, jump coordinates |
 | `test_grants.py`       | delegation, anti-escalation, group grants, ownership transfer |
 | `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, power, terminal, events |
 | `test_ssh_jump.py`     | (`deploy`) real `ssh` probes through the jump host: permitopen scoping, revocation, fail-safe |
 
-The backend implements the full v1.0 contract (eighteen deltas — delta 12 made the four long
+The backend implements the full v1.0 contract (nineteen deltas — delta 12 made the four long
 operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the
 SSH jump host the ssh slices exercise; delta 14 the link table; deltas 15/16 the cross-lab job
 listing and the stream's job events, both covered in the cheap slice; delta 17 reworked test
 suites into the render/execute/parse/assert pipeline — the authoring slice covers the schema,
 facts endpoint and template validation, and the deploy slice runs a fact-templated ping whose
 RENDERED command is asserted against the link table; delta 18 the device catalog, covered in the
-catalog slice), and the suite is
-**entirely green** (112/112 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+catalog slice; delta 19 the deployed-definition snapshot + shared topology layout — the
+authoring slice covers the layout roundtrip/replace/permission gate, and the deploy lifecycle
+asserts the drift flag across deploy → edit → redeploy → destroy), and the suite is
+**entirely green** (114/114 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

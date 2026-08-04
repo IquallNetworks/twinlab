@@ -74,6 +74,16 @@ export const labLinksQueryOptions = (name: string) =>
     staleTime: 15_000,
   })
 
+// The shared manual arrangement (delta 19). Under the ['labs'] root so the
+// SSE invalidation refreshes it like every other lab read; staleTime damps
+// the bursts.
+export const labLayoutQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'layout'],
+    queryFn: () => api.labLayout(name),
+    staleTime: 30_000,
+  })
+
 export const nodeNetemQueryOptions = (name: string, node: string) =>
   queryOptions({
     queryKey: ['labs', name, 'netem', node],

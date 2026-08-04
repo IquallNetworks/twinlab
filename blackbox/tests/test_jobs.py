@@ -43,9 +43,7 @@ _TRIVIAL_SUITES = {
         tests={
             "probe": ValidationTest(
                 nodes=["n1"],
-                run=TestCase(
-                    command="echo bb-probe", expect=TestExpectation(contains="bb-probe")
-                ),
+                run=TestCase(command="echo bb-probe", expect=TestExpectation(contains="bb-probe")),
                 wait=0,
             )
         },

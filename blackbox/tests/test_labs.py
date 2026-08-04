@@ -65,6 +65,10 @@ async def test_update_definition_stores_without_deploying(
     assert detail.definition is not None
     assert "defaults.device: linux" in detail.definition
     assert detail.status == "created"  # authoring never deploys
+    # Delta 19: nothing has been deployed, so there is no snapshot and
+    # nothing to drift from.
+    assert detail.deployed_definition is None
+    assert detail.definition_drifted is None
 
 
 async def test_update_definition_netlab_invalid_is_422(

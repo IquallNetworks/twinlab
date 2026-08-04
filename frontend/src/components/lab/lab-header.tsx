@@ -115,6 +115,14 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
         {lab.config_time_status === 'failed' && (
           <Badge variant="destructive">config-time failed</Badge>
         )}
+        {lab.definition_drifted === true && (
+          <Badge
+            variant="outline"
+            title="The stored definition no longer matches the deployed lab — deploy to apply it"
+          >
+            drifted
+          </Badge>
+        )}
       </div>
 
       <div className="flex items-center gap-2">

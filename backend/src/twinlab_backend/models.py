@@ -359,6 +359,11 @@ class LabSummary(BaseModel):
     # Config-time validation gate from the most recent configure. A skipped
     # gate RETAINS the previous result; "no config-time suites" = "not_run".
     config_time_status: ConfigTimeStatus
+    # Delta 19: True when the stored definition no longer matches the deployed
+    # snapshot. None when nothing is running to drift from (status !=
+    # "deployed") or the snapshot is unknown (a lab deployed before the
+    # feature). A HINT, never a gate — deploy/configure stay allowed.
+    definition_drifted: bool | None
     # The caller's effective permissions on this lab, MASKED to the lab-scoped
     # set (contract delta 10) — global-only perms ride on /auth/me. Lets the
     # list gate per-row actions without assuming a global permission.
@@ -374,12 +379,50 @@ class LabDetail(BaseModel):
     name: str
     status: LabStatus
     definition: str | None
+    # Delta 19: the definition of the last successful deploy, exactly as
+    # deployed — served (not just the derived flag) so a client can render
+    # WHAT changed since deploy. None until first deployed / after destroy.
+    deployed_definition: str | None
+    definition_drifted: bool | None  # delta 19 — see LabSummary
     owner: Principal | None
     created_at: datetime
     updated_at: datetime
     nodes: list[LabNodeState]
     config_time_status: ConfigTimeStatus
     permissions: list[str]
+
+
+class LayoutPosition(BaseModel):
+    """One canvas element's manual position (contract delta 19). Finite floats
+    only — NaN/inf round-trip poorly through JSON and mean a broken writer,
+    not a layout."""
+
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+
+
+# Canvas element ids are OPAQUE presentation data (node names plus frontend
+# pseudo-nodes like LAN hubs), so validation is shape-only. 128 chars sits far
+# above the 64-char node-name cap while bounding the row.
+_LayoutKey = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+
+
+class LabLayoutResponse(BaseModel):
+    """The lab's ONE shared manual topology arrangement (delta 19), keyed by
+    canvas element id. Never validated against the definition: stale keys (a
+    renamed node, a reindexed link) are harmless — readers ignore unknown ids
+    and auto-layout covers unplaced elements. Empty = no manual layout saved."""
+
+    positions: dict[str, LayoutPosition]
+
+
+class PutLayoutRequest(BaseModel):
+    """Full REPLACE of the stored arrangement ({} clears — no separate
+    DELETE)."""
+
+    # 512 elements bounds the row far above any real canvas (labs are tens of
+    # nodes, not hundreds).
+    positions: dict[_LayoutKey, LayoutPosition] = Field(max_length=512)
 
 
 class LabActionResponse(BaseModel):

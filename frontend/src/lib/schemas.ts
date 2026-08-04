@@ -88,6 +88,9 @@ export const labSummarySchema = z.object({
   nodes: z.number(), // containers present
   nodes_running: z.number(), // containers actually running
   config_time_status: configTimeStatusSchema,
+  // Delta 19: true = the stored definition no longer matches the deployed
+  // snapshot; null = nothing running to drift from (or snapshot unknown).
+  definition_drifted: z.boolean().nullable(),
   permissions: z.array(z.string()), // the caller's effective permissions on this lab
 })
 export type LabSummary = z.infer<typeof labSummarySchema>
@@ -97,6 +100,10 @@ export const labDetailSchema = z.object({
   name: z.string(),
   status: z.string(),
   definition: z.string().nullable(), // null until authored (status "created")
+  // Delta 19: the definition of the last successful deploy — what the running
+  // lab was built from; null until first deployed / after destroy.
+  deployed_definition: z.string().nullable(),
+  definition_drifted: z.boolean().nullable(),
   owner: principalSchema.nullable(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -105,6 +112,15 @@ export const labDetailSchema = z.object({
   permissions: z.array(z.string()), // the caller's effective permissions on this lab
 })
 export type LabDetail = z.infer<typeof labDetailSchema>
+
+// --- Topology layout (delta 19): ONE shared manual arrangement per lab,
+// keyed by canvas element id (node names + pseudo-nodes like LAN hubs) —
+// opaque to the server, replace-on-PUT. ---
+export const layoutPositionSchema = z.object({ x: z.number(), y: z.number() })
+export const labLayoutSchema = z.object({
+  positions: z.record(z.string(), layoutPositionSchema),
+})
+export type LabLayout = z.infer<typeof labLayoutSchema>
 
 // Ownership transfer response: the lab plus its new owner.
 export const labOwnerSchema = z.object({

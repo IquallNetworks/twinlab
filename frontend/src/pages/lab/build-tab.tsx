@@ -13,7 +13,7 @@ import { BuilderCanvas } from '@/components/lab/build/builder-canvas'
 import { DefinitionEditor } from '@/components/lab/build/definition-editor'
 import { Inspector } from '@/components/lab/build/inspector'
 import { TopologyCanvas } from '@/components/lab/topology/topology-canvas'
-import { loadLayout, savePositions, type SavedPositions } from '@/components/lab/topology/layout-store'
+import type { SavedPositions } from '@/components/lab/topology/flow-types'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,7 +31,7 @@ import { api, ApiError } from '@/lib/api'
 import { emitBuildDoc, emptyBuildDoc, parseBuildDoc } from '@/lib/build-doc'
 import { toastError } from '@/lib/error-toast'
 import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
-import { labQueryOptions, labsQueryOptions } from '@/lib/queries'
+import { labLayoutQueryOptions, labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import type { LabDetail } from '@/lib/schemas'
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { parseTopology } from '@/lib/topology'
@@ -48,7 +48,11 @@ export function BuildTab({ name }: { name: string }) {
   // Waited for (settled, not necessarily live) so the parse gate and the
   // palette agree on ONE device list for the life of the mount.
   const catalog = useDeviceCatalog()
-  if (!lab || !catalog.ready) return null
+  // The shared arrangement (delta 19), waited for like the catalog so the
+  // canvas seeds from it once instead of jumping when it resolves. An error
+  // degrades to an empty arrangement — layout is presentational.
+  const layoutQuery = useQuery(labLayoutQueryOptions(name))
+  if (!lab || !catalog.ready || layoutQuery.isPending) return null
   if (!lab.permissions.includes(PERM_LAB_EDIT)) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -56,10 +60,24 @@ export function BuildTab({ name }: { name: string }) {
       </p>
     )
   }
-  return <BuildTabInner lab={lab} knownDevices={catalog.devices.map((d) => d.device)} />
+  return (
+    <BuildTabInner
+      lab={lab}
+      knownDevices={catalog.devices.map((d) => d.device)}
+      initialPositions={layoutQuery.data?.positions ?? {}}
+    />
+  )
 }
 
-function BuildTabInner({ lab, knownDevices }: { lab: LabDetail; knownDevices: string[] }) {
+function BuildTabInner({
+  lab,
+  knownDevices,
+  initialPositions,
+}: {
+  lab: LabDetail
+  knownDevices: string[]
+  initialPositions: SavedPositions
+}) {
   const name = lab.name
   const queryClient = useQueryClient()
 
@@ -83,13 +101,24 @@ function BuildTabInner({ lab, knownDevices }: { lab: LabDetail; knownDevices: st
   const [textDirty, setTextDirty] = useState(false)
   const dirty = mode === 'visual' ? state.dirty : textDirty
 
-  // Manual layout, shared with Overview's topology view via the per-lab store.
-  const [positions, setPositionsState] = useState<SavedPositions>(() => loadLayout(name) ?? {})
+  // The shared manual layout (delta 19): seeded from the server once (the
+  // outer component waits for the query), saved back on every persisting
+  // change. PUT is full-replace and the builder always hands over the
+  // complete map, so stale ids prune naturally. Failures surface but never
+  // block editing — layout is presentational.
+  const [positions, setPositionsState] = useState<SavedPositions>(initialPositions)
   const positionsRef = useRef(positions)
   positionsRef.current = positions
+  const saveLayout = useMutation({
+    mutationFn: (next: SavedPositions) => api.putLabLayout(name, next),
+    onSuccess: (stored) => {
+      queryClient.setQueryData(labLayoutQueryOptions(name).queryKey, stored)
+    },
+    onError: (err) => toastError(err, 'Layout save failed'),
+  })
   const onPositions = (next: SavedPositions, persist: boolean) => {
     setPositionsState(next)
-    if (persist) savePositions(name, next)
+    if (persist) saveLayout.mutate(next)
   }
 
   // Renames migrate the saved position to the new node id before the reducer

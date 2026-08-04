@@ -168,6 +168,14 @@ class Lab(Base):
     # "created" (record only) | "deploying" (in-flight mutex) | "deployed" |
     # "destroyed" (torn down, redeployable).
     status: Mapped[str] = mapped_column(String(16))
+    # The definition of the last SUCCESSFUL deploy, exactly as deployed
+    # (contract delta 19) — what the RUNNING environment was built from, kept
+    # so an edited `definition` can be flagged as drift. Written by the deploy
+    # job from the text it actually deployed (not re-read at mark time — a PUT
+    # landing mid-deploy must not leak into the snapshot); cleared on destroy
+    # (the snapshot describes a running lab; a destroyed one runs nothing).
+    # NULL: never deployed, destroyed, or a row predating the feature.
+    deployed_definition: Mapped[str | None] = mapped_column(Text(), default=None)
     # The management /24 assigned to this lab (e.g. "10.77.3.0/24"), baked into
     # the stored definition. Kept per-record so allocation avoids it for the
     # lab's whole lifetime. Nullable: rows predating the feature, and labs never
@@ -199,6 +207,11 @@ class Lab(Base):
     # decision. Same lifecycle as `links`: a regenerable cache written by the
     # PUT dry-run, refreshed on deploy, lazily backfilled by GET .../facts.
     node_facts: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # The shared manual topology arrangement (contract delta 19): a
+    # {canvas-id: {x, y}} map written by PUT /labs/{name}/layout. OPAQUE
+    # presentation data — ids are never validated against the definition.
+    # NULL = never saved (renders as an empty layout; auto-layout applies).
+    layout: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
     # User-authored netlab custom-config templates: a {relpath: content} fileset
     # (e.g. {"nat/ios.j2": "..."}), shipped to the runner alongside the built-in
     # library on every configure. Built-ins live in code, not here. Never sent to

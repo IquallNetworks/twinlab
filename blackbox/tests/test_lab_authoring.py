@@ -6,6 +6,7 @@ configure, which never happens here.
 
 import pytest
 from twinlab_client import (
+    LayoutPosition,
     TestCase,
     TestExpectation,
     TestSuite,
@@ -14,7 +15,7 @@ from twinlab_client import (
     ValidationTest,
 )
 
-from _config import LINUX_LAB_DEFINITION, LabFactory
+from _config import LINUX_LAB_DEFINITION, LabFactory, UserClientFactory
 
 _SUITES = {
     "smoke": TestSuite(
@@ -83,9 +84,7 @@ async def test_expectation_requires_exactly_one_matcher(
             tests={
                 "t": ValidationTest(
                     nodes=["n1"],
-                    run=TestCase(
-                        command="true", expect=TestExpectation(contains="a", matches="b")
-                    ),
+                    run=TestCase(command="true", expect=TestExpectation(contains="a", matches="b")),
                 )
             }
         )
@@ -241,6 +240,47 @@ async def test_links_before_definition_is_409(admin: TwinlabClient, make_lab: La
         _ = await admin.links(lab.name)
     assert excinfo.value.status_code == 409
     assert excinfo.value.code == "no_definition"
+
+
+async def test_layout_roundtrip_replace_and_clear(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    # Delta 19: one shared arrangement per lab, opaque canvas-id keys. Unlike
+    # links/facts the read is NOT definition-gated — an empty layout on a bare
+    # record is honest, not a lie.
+    lab = await make_lab(None)
+    initial = await admin.get_layout(lab.name)
+    assert initial.positions == {}
+
+    stored = await admin.put_layout(
+        lab.name,
+        {"n1": LayoutPosition(x=10.5, y=-3.0), "link:1": LayoutPosition(x=0.0, y=42.0)},
+    )
+    assert stored.positions["link:1"].y == 42.0
+    fetched = await admin.get_layout(lab.name)
+    assert fetched == stored
+
+    # Full REPLACE: a PUT drops every key it doesn't name; {} clears.
+    replaced = await admin.put_layout(lab.name, {"n2": LayoutPosition(x=1.0, y=1.0)})
+    assert set(replaced.positions) == {"n2"}
+    cleared = await admin.put_layout(lab.name, {})
+    assert cleared.positions == {}
+
+
+async def test_layout_write_needs_lab_edit(
+    admin: TwinlabClient, make_lab: LabFactory, make_user_client: UserClientFactory
+) -> None:
+    # Arranging the shared layout is authoring: lab:read may look, only
+    # lab:edit may write (the Build tab's permission).
+    lab = await make_lab(None)
+    summary, viewer = await make_user_client(None)
+    _ = await admin.create_grant(lab.name, "user", summary.id, "lab_viewer")
+
+    layout = await viewer.get_layout(lab.name)
+    assert layout.positions == {}
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await viewer.put_layout(lab.name, {"n1": LayoutPosition(x=0.0, y=0.0)})
+    assert excinfo.value.status_code == 403
 
 
 async def test_links_table_from_authored_record(admin: TwinlabClient, make_lab: LabFactory) -> None:

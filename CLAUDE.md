@@ -132,16 +132,30 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   Topology tab was a second surface over the same artifact; `/labs/{name}/topology` now redirects
   to overview so old links land. Phase 4 (guided builder): a **Build tab**
   (`lab:edit`) owns definition editing in two modes — Visual is an editable canvas + inspector
-  over `lib/build-doc.ts`, a STRICT typed subset of netlab (nodes, p2p/LAN links, the proven
-  ospf/bgp/mpls/vrf set, curated `lib/device-catalog.ts` with the module-support matrix, plus
-  the server-injected name/addressing keys): `parseBuildDoc` collects every reason a definition
-  can't be represented (the tab then shows an explicit "edit as text" notice — content is never
-  silently dropped), `emitBuildDoc` is canonical with the round-trip invariant
-  parse(emit(doc)) == doc, and emit problems (device-less node, 2-member LAN) BLOCK Save
-  loudly; the reducer (`build/build-state.ts`) owns the doc, the canvas derives from it
+  over `lib/build-doc.ts`, a **typed core + lossless extras passthrough** (reworked 2026-08-03
+  from the original strict-subset gate, maintainer-directed): the typed core is nodes, p2p/LAN
+  links, **groups** (first-class 2026-08-03 — members + `config` template attachment; anything
+  else a group broadcasts rides its extras), the proven ospf/bgp/mpls/vrf set, curated
+  `lib/device-catalog.ts` with the module-support matrix, plus the server-injected
+  name/addressing keys — and every key OUTSIDE it (unknown top-level keys, unknown node
+  attributes, overflow forms like `bgp: {as, router_id}` or a vrf with `rd:`) lands VERBATIM in
+  `extras` at the lab/node/group level, edited as YAML in the inspector's "Advanced properties"
+  sections (`build/extras-editor.tsx`). ONE shape classifier decides typed-vs-extras for both
+  the parser and the editors, so a key never lives in both places (typed controls whose key the
+  extras own disable with a pointer; an edge-path same-key collision is an emit-time save
+  blocker). `parseBuildDoc` now gates only on STRUCTURE — invalid YAML, exotic link forms
+  (dict/interfaces/link-groups: the agreed FOLLOW-UP), hyphenated names, undeclared link
+  endpoints — plus the unknown-device POLICY gate (the NOS-sweep boundary, deliberately not
+  passthrough); `emitBuildDoc` stays canonical with the round-trip invariant
+  parse(emit(doc)) == doc (extras key order ignored), and emit problems (device-less node,
+  2-member LAN, undeclared group member — waived when the group sets `_auto_create`) BLOCK
+  Save loudly; the reducer (`build/build-state.ts`) owns the doc (group
+  add/rename/delete/patch; node rename/delete keeps memberships consistent), the canvas
+  derives from it
   (drag-to-connect via `validateConnect`, palette adds, index-safe deletions), and the
-  inspector greys out device×module combinations the catalog says can't run. Text mode is the
-  full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
+  inspector greys out device×module combinations the catalog says can't run. The
+  mpls-l3vpn.iol example — `groups:` block included — is fully buildable visually. Text mode
+  is the full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
   `netlab_invalid` renders as a panel with the envelope's `extras.stderr` (`ApiError` carries
   extras). Unsaved changes get a router blocker + beforeunload guard. Phase 5 (editor +
   polish): a shared **`CodeEditor`** (`components/code-editor.tsx`, hand-rolled CodeMirror 6

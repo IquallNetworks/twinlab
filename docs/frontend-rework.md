@@ -315,6 +315,29 @@ Frontend-driven wants that surfaced in this roadmap:
   the layout query to settle so the shared arrangement applies on first paint, and re-seeds when
   another user's save changes it (structural sharing keeps identity stable otherwise). The
   canvas's auto-layout button became view-only — it no longer touches the saved arrangement.
+- **Builder extras passthrough + first-class groups** — **DONE 2026-08-03** (frontend-only;
+  maintainer-directed after the IOL example's `groups:` block hit the strict-subset gate). The
+  builder's philosophy changed from "strict subset, gate on everything else" to **typed core +
+  lossless extras**: every key lives in exactly ONE of the typed model or a verbatim `extras`
+  blob (lab, node, and group level), and ONE shape classifier
+  (`labExtrasKeyError`/`nodeExtrasKeyError`/`groupExtrasKeyError` in `lib/build-doc.ts`) is
+  shared by the parser and the inspector's new "Advanced properties" YAML editors
+  (`build/extras-editor.tsx`) so a key can never end up in both places — typed controls whose
+  key the extras own (e.g. a module list carrying `isis`, vrfs with `rd:`) disable with a
+  pointer, and the emit guard turns any edge-path same-key collision into a save blocker.
+  Groups are first-class: `{name, members, config?, extras?}` with a lab-inspector section
+  (member checkboxes, `config` picker fed by the custom-config query — builtins + user
+  templates — unknown entries kept as removable chips) and per-node membership toggles; node
+  rename/delete keeps memberships consistent; an undeclared member is an emit problem, waived
+  for `_auto_create` groups. The structural gate remains for exotic link forms (dict/
+  interfaces/link-groups — **the agreed follow-up, parked below**), hyphenated names, and the
+  unknown-device POLICY gate. Verified by a 27-check round-trip harness (esbuild bundle under
+  node): both MPLS examples + the LIVE stored IOL definition round-trip doc-equal, overflow
+  fixtures ride extras, campus-lan gates ONLY on its link forms.
+- **Builder link attribute forms** (parked follow-up, agreed 2026-08-03): extend the
+  passthrough pattern to netlab's dict-form links (node names and attributes as sibling keys —
+  discriminate via the declared-node set), `interfaces:` lists, and per-endpoint attributes,
+  so campus-lan.yml becomes fully buildable visually.
 - **Self password change on the Account page** — **DONE 2026-07-30** (frontend-only; no contract
   change). A Password card heads the Account page with a TanStack Form dialog over
   `PUT /auth/password` (`api.changePassword`): current + new + confirm, zod-validated with the

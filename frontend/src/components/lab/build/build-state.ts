@@ -1,4 +1,4 @@
-import type { BuildDoc, BuildLink, BuildNode } from '@/lib/build-doc'
+import type { BuildDoc, BuildGroup, BuildLink, BuildNode } from '@/lib/build-doc'
 
 // The builder's editing state: the BuildDoc is the single source of truth
 // (canvas nodes/edges and the inspector are pure derivations of it), plus a
@@ -29,9 +29,16 @@ export type BuilderAction =
   | { type: 'remove-member'; linkIndex: number; node: string }
   | { type: 'rename-node'; from: string; to: string }
   | { type: 'patch-node'; name: string; patch: Partial<Omit<BuildNode, 'name'>> }
-  | { type: 'patch-lab'; patch: Partial<Pick<BuildDoc, 'defaultDevice' | 'modules' | 'bgpAs' | 'mplsLdp'>> }
+  | {
+      type: 'patch-lab'
+      patch: Partial<Pick<BuildDoc, 'defaultDevice' | 'modules' | 'bgpAs' | 'mplsLdp' | 'extras'>>
+    }
   | { type: 'add-vrf'; name: string }
   | { type: 'remove-vrf'; name: string }
+  | { type: 'add-group'; name: string }
+  | { type: 'delete-group'; name: string }
+  | { type: 'rename-group'; from: string; to: string }
+  | { type: 'patch-group'; name: string; patch: Partial<Omit<BuildGroup, 'name'>> }
   | { type: 'select'; selection: Selection }
 
 export function initialBuilderState(doc: BuildDoc): BuilderState {
@@ -109,7 +116,18 @@ function deleteNode(doc: BuildDoc, name: string): BuildDoc {
       if (members.length > 0) links.push({ ...link, members })
     }
   }
-  return { ...doc, nodes: doc.nodes.filter((node) => node.name !== name), links }
+  return {
+    ...doc,
+    nodes: doc.nodes.filter((node) => node.name !== name),
+    links,
+    // Group memberships follow the node out — an emptied group stays (it may
+    // still carry config/extras worth keeping).
+    groups: doc.groups.map((group) =>
+      group.members.includes(name)
+        ? { ...group, members: group.members.filter((member) => member !== name) }
+        : group,
+    ),
+  }
 }
 
 function renameInLinks(links: readonly BuildLink[], from: string, to: string): BuildLink[] {
@@ -209,6 +227,16 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
           node.name === action.from ? { ...node, name: action.to } : node,
         ),
         links: renameInLinks(state.doc.links, action.from, action.to),
+        groups: state.doc.groups.map((group) =>
+          group.members.includes(action.from)
+            ? {
+                ...group,
+                members: group.members.map((member) =>
+                  member === action.from ? action.to : member,
+                ),
+              }
+            : group,
+        ),
       }
       const selection: Selection =
         state.selection.kind === 'node' && state.selection.name === action.from
@@ -247,6 +275,43 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
             ? { ...node, vrfs }
             : { ...applyPatch(node, { vrfs: undefined }) }
         }),
+      }
+      return { ...state, doc, dirty: true }
+    }
+    case 'add-group': {
+      if (state.doc.groups.some((group) => group.name === action.name)) return state
+      const doc = {
+        ...state.doc,
+        groups: [...state.doc.groups, { name: action.name, members: [] }],
+      }
+      return { ...state, doc, dirty: true }
+    }
+    case 'delete-group': {
+      const doc = {
+        ...state.doc,
+        groups: state.doc.groups.filter((group) => group.name !== action.name),
+      }
+      return { ...state, doc, dirty: true }
+    }
+    case 'rename-group': {
+      if (action.from === action.to) return state
+      if (state.doc.groups.some((group) => group.name === action.to)) return state
+      const doc = {
+        ...state.doc,
+        groups: state.doc.groups.map((group) =>
+          group.name === action.from ? { ...group, name: action.to } : group,
+        ),
+      }
+      return { ...state, doc, dirty: true }
+    }
+    case 'patch-group': {
+      const doc = {
+        ...state.doc,
+        groups: state.doc.groups.map((group) =>
+          group.name === action.name
+            ? { ...applyPatch(group, action.patch), name: group.name }
+            : group,
+        ),
       }
       return { ...state, doc, dirty: true }
     }

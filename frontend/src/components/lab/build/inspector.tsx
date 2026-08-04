@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { Trash2, Unlink, X } from 'lucide-react'
 import { useState, type Dispatch } from 'react'
 
@@ -28,14 +29,22 @@ import {
   BUILDER_MODULES,
   NODE_NAME_MAX,
   NODE_NAME_RE,
+  declaredVrfs,
+  extrasOwn,
+  groupExtrasKeyError,
+  labExtrasKeyError,
+  nodeExtrasKeyError,
   type BuildDoc,
+  type BuildGroup,
   type BuildNode,
   type BuilderModule,
 } from '@/lib/build-doc'
 import { catalogDevice, deviceSupports } from '@/lib/device-catalog'
+import { customConfigQueryOptions } from '@/lib/queries'
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
 
 import type { BuilderAction, BuilderState } from './build-state'
+import { ExtrasEditor } from './extras-editor'
 
 // The builder's right-hand inspector: renders the form for whatever is
 // selected (nothing → lab settings). Inputs are controlled directly against
@@ -108,12 +117,259 @@ function toggled(list: readonly BuilderModule[], module: BuilderModule, checked:
   return checked ? [...new Set([...list, module])] : list.filter((entry) => entry !== module)
 }
 
-function LabInspector({ doc, dispatch }: { doc: BuildDoc; dispatch: Dispatch<BuilderAction> }) {
+const groupNameError = (draft: string, doc: BuildDoc, current?: string): string | null => {
+  if (draft === current) return null
+  if (draft.length === 0) return 'a name is required'
+  if (draft.length > NODE_NAME_MAX) return `at most ${NODE_NAME_MAX} characters`
+  if (!NODE_NAME_RE.test(draft)) return 'lowercase letters, digits and underscores'
+  if (doc.groups.some((group) => group.name === draft)) return `"${draft}" already exists`
+  return null
+}
+
+function GroupBlock({
+  doc,
+  group,
+  knownTemplates,
+  dispatch,
+}: {
+  doc: BuildDoc
+  group: BuildGroup
+  knownTemplates: readonly string[]
+  dispatch: Dispatch<BuilderAction>
+}) {
+  const [nameDraft, setNameDraft] = useState(group.name)
+  const draftError = groupNameError(nameDraft, doc, group.name)
+  const commitName = () => {
+    if (nameDraft !== group.name && draftError === null) {
+      dispatch({ type: 'rename-group', from: group.name, to: nameDraft })
+    }
+  }
+  const setConfig = (next: string[]) =>
+    dispatch({
+      type: 'patch-group',
+      name: group.name,
+      patch: { config: next.length > 0 ? next : undefined },
+    })
+  const config = group.config ?? []
+  // A stored group may reference templates this lab doesn't carry — keep them
+  // visible and removable rather than dropping them from the picker.
+  const unknownConfig = config.filter((entry) => !knownTemplates.includes(entry))
+
+  return (
+    <div className="flex flex-col gap-2 rounded-[2px] border p-2">
+      <div className="flex items-start gap-1.5">
+        <div className="flex-1">
+          <Input
+            className="h-8 font-mono"
+            aria-label={`Group ${group.name} name`}
+            value={nameDraft}
+            aria-invalid={draftError !== null}
+            onChange={(event) => setNameDraft(event.target.value)}
+            onBlur={commitName}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commitName()
+            }}
+          />
+          {draftError !== null && <p className="mt-1 text-xs text-destructive">{draftError}</p>}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          title={`Delete group ${group.name}`}
+          onClick={() => dispatch({ type: 'delete-group', name: group.name })}
+        >
+          <Trash2 className="size-3" />
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">Members</span>
+        {doc.nodes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No nodes yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {doc.nodes.map((node) => {
+              const id = `build-group-${group.name}-member-${node.name}`
+              const member = group.members.includes(node.name)
+              return (
+                <div key={node.name} className="flex items-center gap-1.5">
+                  <Checkbox
+                    id={id}
+                    checked={member}
+                    onCheckedChange={(checked) =>
+                      dispatch({
+                        type: 'patch-group',
+                        name: group.name,
+                        patch: {
+                          members:
+                            checked === true
+                              ? [...group.members, node.name]
+                              : group.members.filter((entry) => entry !== node.name),
+                        },
+                      })
+                    }
+                  />
+                  <Label htmlFor={id} className="font-mono text-xs font-normal">
+                    {node.name}
+                  </Label>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">Config templates</span>
+        {knownTemplates.length === 0 && unknownConfig.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No templates available.</p>
+        ) : (
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {knownTemplates.map((template) => {
+              const id = `build-group-${group.name}-config-${template}`
+              return (
+                <div key={template} className="flex items-center gap-1.5">
+                  <Checkbox
+                    id={id}
+                    checked={config.includes(template)}
+                    onCheckedChange={(checked) =>
+                      setConfig(
+                        checked === true
+                          ? [...config, template]
+                          : config.filter((entry) => entry !== template),
+                      )
+                    }
+                  />
+                  <Label htmlFor={id} className="font-mono text-xs font-normal">
+                    {template}
+                  </Label>
+                </div>
+              )
+            })}
+            {unknownConfig.map((entry) => (
+              <span
+                key={entry}
+                className="flex items-center gap-1 rounded-[2px] border px-1.5 py-0.5 font-mono text-xs"
+                title="Not among this lab's templates — kept as stored"
+              >
+                {entry}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title={`Remove ${entry}`}
+                  onClick={() => setConfig(config.filter((item) => item !== entry))}
+                >
+                  <X className="size-3" />
+                </Button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <ExtrasEditor
+        key={JSON.stringify(group.extras ?? {})}
+        idPrefix={`build-group-${group.name}`}
+        value={group.extras}
+        keyError={groupExtrasKeyError}
+        onApply={(extras) =>
+          dispatch({ type: 'patch-group', name: group.name, patch: { extras } })
+        }
+      />
+    </div>
+  )
+}
+
+function GroupsSection({
+  doc,
+  labName,
+  dispatch,
+}: {
+  doc: BuildDoc
+  labName: string
+  dispatch: Dispatch<BuilderAction>
+}) {
+  const templates = useQuery(customConfigQueryOptions(labName))
+  const knownTemplates = [
+    ...(templates.data?.builtin.map((template) => template.name) ?? []),
+    ...Object.keys(templates.data?.custom_config ?? {}).map((path) => path.replace(/\.j2$/, '')),
+  ]
+  const [draft, setDraft] = useState('')
+  const draftError = draft === '' ? null : groupNameError(draft, doc)
+  const add = () => {
+    if (draft !== '' && draftError === null) {
+      dispatch({ type: 'add-group', name: draft })
+      setDraft('')
+    }
+  }
+
+  if (extrasOwn(doc.extras, 'groups')) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <Label>Groups</Label>
+        <p className="text-xs text-muted-foreground">
+          The groups block uses a form the controls can&apos;t edit — managed in Advanced
+          properties.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>Groups</Label>
+      {doc.groups.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          None yet — a group broadcasts config templates and other properties to its members.
+        </p>
+      )}
+      {doc.groups.map((group) => (
+        <GroupBlock
+          key={group.name}
+          doc={doc}
+          group={group}
+          knownTemplates={knownTemplates}
+          dispatch={dispatch}
+        />
+      ))}
+      <div className="flex items-start gap-1.5">
+        <div className="flex-1">
+          <Input
+            className="h-8 font-mono"
+            placeholder="group name"
+            value={draft}
+            aria-invalid={draftError !== null}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') add()
+            }}
+          />
+          {draftError !== null && <p className="mt-1 text-xs text-destructive">{draftError}</p>}
+        </div>
+        <Button variant="outline" size="sm" disabled={draft === '' || draftError !== null} onClick={add}>
+          Add
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function LabInspector({
+  doc,
+  labName,
+  dispatch,
+}: {
+  doc: BuildDoc
+  labName: string
+  dispatch: Dispatch<BuilderAction>
+}) {
   const { devices } = useDeviceCatalog()
   const [vrfDraft, setVrfDraft] = useState('')
   const vrfError = vrfNameError(vrfDraft, doc)
   const memberCount = (vrf: string) =>
     doc.nodes.filter((node) => node.vrfs !== undefined && vrf in node.vrfs).length
+  const modulesOwned = extrasOwn(doc.extras, 'module')
+  const vrfsOwned = extrasOwn(doc.extras, 'vrfs')
 
   return (
     <div className="flex flex-col gap-4">
@@ -143,16 +399,25 @@ function LabInspector({ doc, dispatch }: { doc: BuildDoc; dispatch: Dispatch<Bui
 
       <div className="flex flex-col gap-1.5">
         <Label>Global modules</Label>
-        <ModuleCheckboxes
-          idPrefix="build-lab-mod"
-          selected={doc.modules}
-          onToggle={(module, checked) =>
-            dispatch({ type: 'patch-lab', patch: { modules: toggled(doc.modules, module, checked) } })
-          }
-        />
-        <p className="text-xs text-muted-foreground">
-          Nodes inherit these unless overridden per node.
-        </p>
+        {modulesOwned ? (
+          <p className="text-xs text-muted-foreground">
+            The module list carries entries outside the builder&apos;s set — managed in Advanced
+            properties.
+          </p>
+        ) : (
+          <>
+            <ModuleCheckboxes
+              idPrefix="build-lab-mod"
+              selected={doc.modules}
+              onToggle={(module, checked) =>
+                dispatch({ type: 'patch-lab', patch: { modules: toggled(doc.modules, module, checked) } })
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              Nodes inherit these unless overridden per node.
+            </p>
+          </>
+        )}
       </div>
 
       {doc.modules.includes('bgp') && (
@@ -190,7 +455,16 @@ function LabInspector({ doc, dispatch }: { doc: BuildDoc; dispatch: Dispatch<Bui
         </div>
       )}
 
-      {doc.modules.includes('vrf') && (
+      {vrfsOwned && (
+        <div className="flex flex-col gap-1.5">
+          <Label>VRFs</Label>
+          <p className="text-xs text-muted-foreground">
+            The vrfs carry attributes (rd, rt, …) the controls can&apos;t edit — managed in
+            Advanced properties.
+          </p>
+        </div>
+      )}
+      {!vrfsOwned && doc.modules.includes('vrf') && (
         <div className="flex flex-col gap-1.5">
           <Label>VRFs</Label>
           {doc.vrfs.length === 0 && (
@@ -267,6 +541,16 @@ function LabInspector({ doc, dispatch }: { doc: BuildDoc; dispatch: Dispatch<Bui
           </div>
         </div>
       )}
+
+      <GroupsSection doc={doc} labName={labName} dispatch={dispatch} />
+
+      <ExtrasEditor
+        key={JSON.stringify(doc.extras)}
+        idPrefix="build-lab"
+        value={doc.extras}
+        keyError={labExtrasKeyError}
+        onApply={(extras) => dispatch({ type: 'patch-lab', patch: { extras: extras ?? {} } })}
+      />
     </div>
   )
 }
@@ -294,6 +578,9 @@ function NodeInspector({
   const overridden = node.modules !== undefined
   const effectiveModules = node.modules ?? doc.modules
   const mplsVpnReady = (['mpls', 'bgp', 'vrf'] as const).every((m) => effectiveModules.includes(m))
+  const modulesOwned = extrasOwn(node.extras, 'module')
+  const vrfsOwned = extrasOwn(node.extras, 'vrfs')
+  const vrfNames = declaredVrfs(doc)
 
   return (
     <div className="flex flex-col gap-4">
@@ -354,6 +641,15 @@ function NodeInspector({
         )}
       </div>
 
+      {modulesOwned ? (
+        <div className="flex flex-col gap-1.5">
+          <Label>Modules</Label>
+          <p className="text-xs text-muted-foreground">
+            The module list carries entries outside the builder&apos;s set — managed in Advanced
+            properties.
+          </p>
+        </div>
+      ) : (
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
           <Label>Modules</Label>
@@ -407,6 +703,7 @@ function NodeInspector({
           </p>
         )}
       </div>
+      )}
 
       {effectiveModules.includes('bgp') && (
         <div className="flex flex-col gap-1.5">
@@ -450,10 +747,19 @@ function NodeInspector({
         </Label>
       </div>
 
-      {doc.vrfs.length > 0 && (
+      {vrfsOwned && (
         <div className="flex flex-col gap-1.5">
           <Label>VRF membership</Label>
-          {doc.vrfs.map((vrf) => {
+          <p className="text-xs text-muted-foreground">
+            This node&apos;s vrfs use a form the controls can&apos;t edit — managed in Advanced
+            properties.
+          </p>
+        </div>
+      )}
+      {!vrfsOwned && vrfNames.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <Label>VRF membership</Label>
+          {vrfNames.map((vrf) => {
             const membership = node.vrfs?.[vrf]
             const member = membership !== undefined
             const id = `build-node-vrf-${vrf}`
@@ -503,23 +809,69 @@ function NodeInspector({
         </div>
       )}
 
+      {doc.groups.length > 0 && !extrasOwn(doc.extras, 'groups') && (
+        <div className="flex flex-col gap-1.5">
+          <Label>Groups</Label>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {doc.groups.map((group) => {
+              const id = `build-node-group-${group.name}`
+              const member = group.members.includes(node.name)
+              return (
+                <div key={group.name} className="flex items-center gap-1.5">
+                  <Checkbox
+                    id={id}
+                    checked={member}
+                    onCheckedChange={(checked) =>
+                      dispatch({
+                        type: 'patch-group',
+                        name: group.name,
+                        patch: {
+                          members:
+                            checked === true
+                              ? [...group.members, node.name]
+                              : group.members.filter((entry) => entry !== node.name),
+                        },
+                      })
+                    }
+                  />
+                  <Label htmlFor={id} className="font-mono text-xs font-normal">
+                    {group.name}
+                  </Label>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       <details>
         <summary className="cursor-pointer text-xs text-muted-foreground select-none">Advanced</summary>
-        <div className="mt-2 flex flex-col gap-1.5">
-          <Label htmlFor="build-node-image">Image override</Label>
-          <Input
-            id="build-node-image"
-            className="h-8 font-mono"
-            placeholder="netlab default for the device"
-            value={node.image ?? ''}
-            onChange={(event) => {
-              const raw = event.target.value
-              dispatch({
-                type: 'patch-node',
-                name: node.name,
-                patch: { image: raw === '' ? undefined : raw },
-              })
-            }}
+        <div className="mt-2 flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="build-node-image">Image override</Label>
+            <Input
+              id="build-node-image"
+              className="h-8 font-mono"
+              placeholder="netlab default for the device"
+              value={node.image ?? ''}
+              onChange={(event) => {
+                const raw = event.target.value
+                dispatch({
+                  type: 'patch-node',
+                  name: node.name,
+                  patch: { image: raw === '' ? undefined : raw },
+                })
+              }}
+            />
+          </div>
+          <ExtrasEditor
+            key={JSON.stringify(node.extras ?? {})}
+            idPrefix={`build-node-${node.name}`}
+            value={node.extras}
+            keyError={nodeExtrasKeyError}
+            onApply={(extras) =>
+              dispatch({ type: 'patch-node', name: node.name, patch: { extras } })
+            }
           />
         </div>
       </details>
@@ -538,28 +890,32 @@ function NodeInspector({
   )
 }
 
-/** The builder's right-hand inspector, dispatching on the selection. */
+/** The builder's right-hand inspector, dispatching on the selection.
+ * `labName` feeds the groups section's template picker (custom-config query). */
 export function Inspector({
   state,
+  labName,
   dispatch,
 }: {
   state: BuilderState
+  labName: string
   dispatch: Dispatch<BuilderAction>
 }) {
   const { doc, selection } = state
+  const lab = <LabInspector doc={doc} labName={labName} dispatch={dispatch} />
 
   switch (selection.kind) {
     case 'lab':
-      return <LabInspector doc={doc} dispatch={dispatch} />
+      return lab
     case 'node': {
       const node = doc.nodes.find((entry) => entry.name === selection.name)
-      if (node === undefined) return <LabInspector doc={doc} dispatch={dispatch} />
+      if (node === undefined) return lab
       // Keyed remount resets the name draft when the selection moves.
       return <NodeInspector key={node.name} doc={doc} node={node} dispatch={dispatch} />
     }
     case 'link': {
       const link = doc.links[selection.linkIndex]
-      if (link === undefined || link.kind !== 'p2p') return <LabInspector doc={doc} dispatch={dispatch} />
+      if (link === undefined || link.kind !== 'p2p') return lab
       return (
         <div className="flex flex-col gap-4">
           <SectionTitle>link</SectionTitle>
@@ -580,7 +936,7 @@ export function Inspector({
     }
     case 'lan': {
       const link = doc.links[selection.linkIndex]
-      if (link === undefined || link.kind !== 'lan') return <LabInspector doc={doc} dispatch={dispatch} />
+      if (link === undefined || link.kind !== 'lan') return lab
       return (
         <div className="flex flex-col gap-4">
           <SectionTitle>lan segment</SectionTitle>
@@ -624,7 +980,7 @@ export function Inspector({
     }
     case 'member': {
       const link = doc.links[selection.linkIndex]
-      if (link === undefined || link.kind !== 'lan') return <LabInspector doc={doc} dispatch={dispatch} />
+      if (link === undefined || link.kind !== 'lan') return lab
       return (
         <div className="flex flex-col gap-4">
           <SectionTitle>lan membership</SectionTitle>

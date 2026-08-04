@@ -2,23 +2,29 @@ import { parse, stringify } from 'yaml'
 
 import { BUILDER_MODULES, FALLBACK_DEVICE_CATALOG, type BuilderModule } from './device-catalog'
 
-// The builder's document model: a STRICT, typed subset of netlab syntax the
-// visual builder can faithfully edit and re-emit. parseBuildDoc is a gate,
-// not a best-effort reader (that is lib/topology.ts): any content outside the
-// subset yields human-readable reasons and the Build tab falls back to text
-// editing — definition content is never silently dropped.
+// The builder's document model: a typed core the visual controls edit, plus
+// LOSSLESS `extras` passthrough at the lab, node and group level. Every key of
+// a definition lives in exactly ONE of the two — the typed model when it has
+// the exact shape a control can edit, `extras` (preserved verbatim, edited as
+// YAML in the inspector's advanced sections) otherwise. parseBuildDoc gates
+// only on STRUCTURE the canvas can't represent (exotic link forms, invalid
+// names, unknown devices — a policy gate, not a data one); unknown or
+// overflow DATA never gates and is never dropped.
 //
-// The subset: nodes + p2p/LAN links, the proven module set (ospf/bgp/mpls/vrf)
-// with bgp.as, mpls.ldp, mpls.vpn and vrf membership, the curated device
-// catalog, and the keys the backend itself injects on save (name,
-// addressing.mgmt). Emission is canonical; the round-trip invariant is:
-// for any doc emitBuildDoc accepts, parseBuildDoc(emit(doc)) equals doc
-// (up to LAN ids, which are session metadata).
+// Typed core: nodes + p2p/LAN links, groups (members + config templates), the
+// proven module set (ospf/bgp/mpls/vrf) with bgp.as, mpls.ldp, mpls.vpn and
+// vrf membership, the curated device catalog, and the keys the backend itself
+// injects on save (name, addressing.mgmt). Emission is canonical; the
+// round-trip invariant is: for any doc emitBuildDoc accepts,
+// parseBuildDoc(emit(doc)) equals doc (up to LAN ids, which are session
+// metadata).
 //
 // Pure module (no React, no `@/` alias imports) so a plain node script can
 // exercise the round-trip.
 
 export { BUILDER_MODULES, type BuilderModule } from './device-catalog'
+
+export type Extras = Record<string, unknown>
 
 export interface BuildNodeVrf {
   loopback?: boolean
@@ -33,6 +39,17 @@ export interface BuildNode {
   bgpAs?: number
   mplsVpn?: boolean
   vrfs?: Record<string, BuildNodeVrf>
+  // Attributes outside the typed set, preserved verbatim.
+  extras?: Extras
+}
+
+export interface BuildGroup {
+  name: string
+  members: string[]
+  // Custom-config templates attached to the members (netlab `config: [...]`).
+  config?: string[]
+  // Everything else a group broadcasts (module, bgp.as, _auto_create, …).
+  extras?: Extras
 }
 
 export type BuildLink =
@@ -57,9 +74,12 @@ export interface BuildDoc {
   bgpAs?: number
   mplsLdp?: boolean
   vrfs: string[]
+  groups: BuildGroup[]
   // Injected by the backend on save (the lab's allocated mgmt subnet);
   // preserved verbatim.
   addressing?: MgmtAddressing
+  // Top-level keys outside the typed core, preserved verbatim.
+  extras: Extras
   nodes: BuildNode[]
   links: BuildLink[]
 }
@@ -89,23 +109,179 @@ function describe(value: unknown): string {
   return String(value)
 }
 
-function parseModuleList(value: unknown, where: string, reasons: string[]): BuilderModule[] {
-  if (!Array.isArray(value)) {
-    reasons.push(`${where} must be a list of modules`)
-    return []
-  }
+// --------------------------------------------------------------------------
+// Shape classifiers — ONE source of truth for "does this key/value have the
+// exact shape a typed control edits?". parseBuildDoc uses them to split typed
+// vs extras; the advanced editors use them to refuse keys the controls own.
+// --------------------------------------------------------------------------
+
+function modulesShape(value: unknown): BuilderModule[] | null {
+  if (!Array.isArray(value)) return null
   const modules: BuilderModule[] = []
   for (const entry of value) {
-    if (typeof entry === 'string' && (BUILDER_MODULES as readonly string[]).includes(entry)) {
-      modules.push(entry as BuilderModule)
-    } else {
-      reasons.push(
-        `${where} includes ${describe(entry)}, outside the builder's module set (${BUILDER_MODULES.join(', ')})`,
-      )
+    if (typeof entry !== 'string' || !(BUILDER_MODULES as readonly string[]).includes(entry)) {
+      return null
     }
+    modules.push(entry as BuilderModule)
   }
   return modules
 }
+
+function bgpShape(value: unknown): number | null {
+  return isRecord(value) && Object.keys(value).length === 1 && typeof value['as'] === 'number'
+    ? value['as']
+    : null
+}
+
+function mplsBoolShape(value: unknown, key: 'ldp' | 'vpn'): boolean | null {
+  return isRecord(value) && Object.keys(value).length === 1 && typeof value[key] === 'boolean'
+    ? value[key]
+    : null
+}
+
+/** Top-level vrfs in the typed shape: a mapping of bare declarations (every
+ * vrf empty). Any vrf carrying attributes (rd, rt, …) → the whole key is
+ * extras territory. */
+function vrfListShape(value: unknown): string[] | null {
+  if (!isRecord(value)) return null
+  const names: string[] = []
+  for (const [name, attrs] of Object.entries(value)) {
+    if (!EXISTING_NAME_RE.test(name) || name.length > NODE_NAME_MAX) return null
+    if (attrs !== null && !(isRecord(attrs) && Object.keys(attrs).length === 0)) return null
+    names.push(name)
+  }
+  return names
+}
+
+/** Node vrf membership in the typed shape: each entry empty or exactly
+ * `{loopback: bool}`. Declaration against the top-level vrfs is checked at
+ * emit (a save blocker), not here — shape and reference are different rules. */
+function nodeVrfsShape(value: unknown): Record<string, BuildNodeVrf> | null {
+  if (!isRecord(value)) return null
+  const vrfs: Record<string, BuildNodeVrf> = {}
+  for (const [vrfName, attrs] of Object.entries(value)) {
+    if (attrs === null) {
+      vrfs[vrfName] = {}
+      continue
+    }
+    if (!isRecord(attrs)) return null
+    const entry: BuildNodeVrf = {}
+    for (const [key, attr] of Object.entries(attrs)) {
+      if (key !== 'loopback' || typeof attr !== 'boolean') return null
+      entry.loopback = attr
+    }
+    vrfs[vrfName] = entry
+  }
+  return vrfs
+}
+
+function mgmtAddressingShape(value: unknown): MgmtAddressing | null {
+  if (!isRecord(value) || Object.keys(value).length !== 1) return null
+  const mgmt = value['mgmt']
+  if (!isRecord(mgmt)) return null
+  const ipv4 = mgmt['ipv4']
+  const network = mgmt['_network']
+  if (typeof ipv4 !== 'string') return null
+  for (const key of Object.keys(mgmt)) {
+    if (key !== 'ipv4' && key !== '_network') return null
+  }
+  if (network !== undefined && typeof network !== 'string') return null
+  return { mgmt: network === undefined ? { ipv4 } : { ipv4, _network: network } }
+}
+
+function stringListShape(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  return value.every((entry): entry is string => typeof entry === 'string')
+    ? (value as string[])
+    : null
+}
+
+/** Advanced-editor validation, lab level: null = fine as an extra; a message
+ * = the builder's controls own this key in this shape. */
+export function labExtrasKeyError(key: string, value: unknown): string | null {
+  switch (key) {
+    case 'name':
+    case 'provider':
+    case 'nodes':
+    case 'links':
+    case 'groups':
+      return `"${key}" is managed by the builder`
+    case 'defaults.device':
+      return 'set the default device with its control'
+    case 'defaults':
+      return isRecord(value) && Object.keys(value).length === 1 && 'device' in value
+        ? 'set the default device with its control'
+        : null
+    case 'module':
+      return modulesShape(value) !== null ? 'use the Global modules control' : null
+    case 'bgp.as':
+      return typeof value === 'number' ? 'use the BGP AS control' : null
+    case 'bgp':
+      return bgpShape(value) !== null ? 'use the BGP AS control' : null
+    case 'mpls.ldp':
+      return typeof value === 'boolean' ? 'use the LDP transport control' : null
+    case 'mpls':
+      return mplsBoolShape(value, 'ldp') !== null ? 'use the LDP transport control' : null
+    case 'vrfs':
+      return vrfListShape(value) !== null ? 'use the VRFs control' : null
+    case 'addressing':
+      return mgmtAddressingShape(value) !== null
+        ? 'the management addressing is backend-managed'
+        : null
+    default:
+      return null
+  }
+}
+
+/** Advanced-editor validation, node level. */
+export function nodeExtrasKeyError(key: string, value: unknown): string | null {
+  switch (key) {
+    case 'device':
+      return typeof value === 'string' ? 'use the Device control' : null
+    case 'image':
+      return typeof value === 'string' ? 'use the Image override control' : null
+    case 'module':
+      return modulesShape(value) !== null ? 'use the Modules control' : null
+    case 'bgp.as':
+      return typeof value === 'number' ? 'use the BGP AS control' : null
+    case 'bgp':
+      return bgpShape(value) !== null ? 'use the BGP AS control' : null
+    case 'mpls.vpn':
+      return typeof value === 'boolean' ? 'use the MPLS VPN edge control' : null
+    case 'mpls':
+      return mplsBoolShape(value, 'vpn') !== null ? 'use the MPLS VPN edge control' : null
+    case 'vrfs':
+      return nodeVrfsShape(value) !== null ? 'use the VRF membership controls' : null
+    default:
+      return null
+  }
+}
+
+/** Advanced-editor validation, group level. */
+export function groupExtrasKeyError(key: string, value: unknown): string | null {
+  if (key === 'members' && stringListShape(value) !== null) return 'use the member checkboxes'
+  if (key === 'config' && stringListShape(value) !== null) return 'use the template picker'
+  return null
+}
+
+/** The vrf names a node may reference: the typed list plus — when a vrf
+ * carries attributes and the whole `vrfs` key rode into extras — the names
+ * declared there. */
+export function declaredVrfs(doc: BuildDoc): string[] {
+  const fromExtras = doc.extras['vrfs']
+  return [...doc.vrfs, ...(isRecord(fromExtras) ? Object.keys(fromExtras) : [])]
+}
+
+/** True when the advanced properties own this key — the matching typed
+ * control should disable itself and point at the advanced editor, because
+ * setting both would emit the same key twice. */
+export function extrasOwn(extras: Extras | undefined, key: string): boolean {
+  return extras !== undefined && key in extras
+}
+
+// --------------------------------------------------------------------------
+// Parse
+// --------------------------------------------------------------------------
 
 function parseDevice(
   value: unknown,
@@ -113,10 +289,10 @@ function parseDevice(
   reasons: string[],
   knownDevices: readonly string[],
 ): string | undefined {
-  if (typeof value !== 'string') {
-    reasons.push(`${where} must be a device name, got ${describe(value)}`)
-    return undefined
-  }
+  // The device gate is POLICY, not shape: an uncataloged device is the
+  // accepted-but-unpromised case (CLAUDE.md), edited as text until the NOS
+  // sweep widens the set — extras passthrough deliberately does not apply.
+  if (typeof value !== 'string') return undefined
   if (!knownDevices.includes(value)) {
     reasons.push(`${where} device "${value}" is not in the builder's catalog`)
     return undefined
@@ -124,70 +300,9 @@ function parseDevice(
   return value
 }
 
-function parseAddressing(value: unknown, reasons: string[]): MgmtAddressing | undefined {
-  const bad = (): undefined => {
-    reasons.push(
-      '"addressing" carries more than the backend-injected management subnet (addressing.mgmt.ipv4)',
-    )
-    return undefined
-  }
-  if (!isRecord(value)) return bad()
-  const keys = Object.keys(value)
-  const mgmt = value['mgmt']
-  if (keys.length !== 1 || !isRecord(mgmt)) return bad()
-  const ipv4 = mgmt['ipv4']
-  const network = mgmt['_network']
-  if (typeof ipv4 !== 'string') return bad()
-  for (const key of Object.keys(mgmt)) {
-    if (key !== 'ipv4' && key !== '_network') return bad()
-  }
-  if (network !== undefined && typeof network !== 'string') return bad()
-  return { mgmt: network === undefined ? { ipv4 } : { ipv4, _network: network } }
-}
-
-function parseNodeVrfs(
-  value: unknown,
-  nodeName: string,
-  globalVrfs: readonly string[],
-  reasons: string[],
-): Record<string, BuildNodeVrf> | undefined {
-  if (!isRecord(value)) {
-    reasons.push(`node "${nodeName}": "vrfs" must be a mapping`)
-    return undefined
-  }
-  const vrfs: Record<string, BuildNodeVrf> = {}
-  for (const [vrfName, attrs] of Object.entries(value)) {
-    if (!globalVrfs.includes(vrfName)) {
-      reasons.push(`node "${nodeName}": vrf "${vrfName}" is not declared under the top-level vrfs`)
-      continue
-    }
-    if (attrs === null) {
-      vrfs[vrfName] = {}
-      continue
-    }
-    if (!isRecord(attrs)) {
-      reasons.push(`node "${nodeName}": vrf "${vrfName}" must be empty or a mapping`)
-      continue
-    }
-    const entry: BuildNodeVrf = {}
-    for (const [key, attr] of Object.entries(attrs)) {
-      if (key === 'loopback' && typeof attr === 'boolean') {
-        entry.loopback = attr
-      } else {
-        reasons.push(
-          `node "${nodeName}": vrf "${vrfName}" attribute "${key}" is not supported by the builder`,
-        )
-      }
-    }
-    vrfs[vrfName] = entry
-  }
-  return vrfs
-}
-
 function parseNode(
   name: string,
   attrs: unknown,
-  globalVrfs: readonly string[],
   reasons: string[],
   knownDevices: readonly string[],
 ): BuildNode {
@@ -202,52 +317,91 @@ function parseNode(
     reasons.push(`node "${name}" must be empty or a mapping of attributes`)
     return node
   }
+  const extras: Extras = {}
   for (const [key, value] of Object.entries(attrs)) {
     switch (key) {
-      case 'device':
-        node.device = parseDevice(value, `node "${name}":`, reasons, knownDevices)
+      case 'device': {
+        const device = parseDevice(value, `node "${name}":`, reasons, knownDevices)
+        if (device !== undefined) node.device = device
+        else if (typeof value !== 'string') extras[key] = value
         break
+      }
       case 'image':
         if (typeof value === 'string') node.image = value
-        else reasons.push(`node "${name}": "image" must be a string`)
+        else extras[key] = value
         break
-      case 'module':
-        node.modules = parseModuleList(value, `node "${name}": module`, reasons)
+      case 'module': {
+        const modules = modulesShape(value)
+        if (modules !== null) node.modules = modules
+        else extras[key] = value
         break
+      }
       case 'bgp.as':
         if (typeof value === 'number') node.bgpAs = value
-        else reasons.push(`node "${name}": "bgp.as" must be a number`)
+        else extras[key] = value
         break
-      case 'bgp':
-        if (isRecord(value) && Object.keys(value).length === 1 && typeof value['as'] === 'number') {
-          node.bgpAs = value['as']
-        } else {
-          reasons.push(`node "${name}": "bgp" carries more than "as", or a non-numeric "as"`)
-        }
+      case 'bgp': {
+        const as = bgpShape(value)
+        if (as !== null) node.bgpAs = as
+        else extras[key] = value
         break
+      }
       case 'mpls.vpn':
         if (typeof value === 'boolean') node.mplsVpn = value
-        else reasons.push(`node "${name}": "mpls.vpn" must be a boolean`)
+        else extras[key] = value
         break
-      case 'mpls':
-        if (
-          isRecord(value) &&
-          Object.keys(value).length === 1 &&
-          typeof value['vpn'] === 'boolean'
-        ) {
-          node.mplsVpn = value['vpn']
-        } else {
-          reasons.push(`node "${name}": "mpls" carries more than a boolean "vpn"`)
-        }
+      case 'mpls': {
+        const vpn = mplsBoolShape(value, 'vpn')
+        if (vpn !== null) node.mplsVpn = vpn
+        else extras[key] = value
         break
-      case 'vrfs':
-        node.vrfs = parseNodeVrfs(value, name, globalVrfs, reasons)
+      }
+      case 'vrfs': {
+        const vrfs = nodeVrfsShape(value)
+        if (vrfs !== null) node.vrfs = vrfs
+        else extras[key] = value
         break
+      }
       default:
-        reasons.push(`node "${name}": attribute "${key}" is not supported by the builder`)
+        extras[key] = value
     }
   }
+  if (Object.keys(extras).length > 0) node.extras = extras
   return node
+}
+
+/** Groups parse per-group: members/config in their exact shapes are typed,
+ * every other key rides that group's extras. A groups mapping whose VALUES
+ * are not all mappings (e.g. a `_auto_create: true` toggle at the groups
+ * level) is preserved whole in the doc extras instead. */
+function parseGroups(value: unknown, docExtras: Extras): BuildGroup[] {
+  if (!isRecord(value) || Object.values(value).some((attrs) => attrs !== null && !isRecord(attrs))) {
+    docExtras['groups'] = value
+    return []
+  }
+  const groups: BuildGroup[] = []
+  for (const [name, attrs] of Object.entries(value)) {
+    const group: BuildGroup = { name, members: [] }
+    const extras: Extras = {}
+    if (attrs !== null && isRecord(attrs)) {
+      for (const [key, entry] of Object.entries(attrs)) {
+        if (key === 'members') {
+          const members = stringListShape(entry)
+          if (members !== null) group.members = members
+          else extras[key] = entry
+        } else if (key === 'config') {
+          const config = stringListShape(entry)
+          if (config !== null) group.config = config
+          else extras[key] = entry
+        } else {
+          extras[key] = entry
+        }
+      }
+    }
+    if (Object.keys(extras).length > 0) group.extras = extras
+    groups.push(group)
+  }
+  return groups
 }
 
 function parseLinkEndpoints(entry: unknown, index: number, reasons: string[]): string[] | null {
@@ -308,9 +462,10 @@ function parseLinks(
   return links
 }
 
-/** The strict gate: parse a stored definition into the builder's model,
+/** The structural gate: parse a stored definition into the builder's model,
  * collecting EVERY reason it can't be represented (never fail-fast — the
- * notice lists them all). */
+ * notice lists them all). Data outside the typed core does not gate — it
+ * lands verbatim in the extras. */
 export function parseBuildDoc(
   definition: string,
   // The device slugs the builder may represent — the server catalog's set
@@ -330,85 +485,89 @@ export function parseBuildDoc(
   if (!isRecord(raw)) return { ok: false, reasons: ['the definition is not a YAML mapping'] }
 
   const reasons: string[] = []
-  const doc: BuildDoc = { modules: [], vrfs: [], nodes: [], links: [] }
+  const doc: BuildDoc = { modules: [], vrfs: [], groups: [], extras: {}, nodes: [], links: [] }
 
   for (const [key, value] of Object.entries(raw)) {
     switch (key) {
       case 'name':
         if (typeof value === 'string') doc.name = value
-        else reasons.push('top-level "name" must be a string')
+        else doc.extras[key] = value
         break
       case 'provider':
         if (typeof value === 'string') doc.provider = value
-        else reasons.push('top-level "provider" must be a string')
+        else doc.extras[key] = value
         break
       case 'defaults.device':
         doc.defaultDevice = parseDevice(value, 'default', reasons, knownDevices)
+        if (doc.defaultDevice === undefined && typeof value !== 'string') doc.extras[key] = value
         break
       case 'defaults':
         if (isRecord(value)) {
+          // Split: the device (typed, policy-gated) from the rest (extras).
+          // Emit writes the typed half as dotted `defaults.device`, which
+          // netlab merges back into the mapping — the split round-trips.
+          const rest: Extras = {}
           for (const [defKey, defValue] of Object.entries(value)) {
-            if (defKey === 'device') doc.defaultDevice = parseDevice(defValue, 'default', reasons, knownDevices)
-            else reasons.push(`defaults key "${defKey}" is not supported by the builder`)
-          }
-        } else {
-          reasons.push('"defaults" must be a mapping')
-        }
-        break
-      case 'module':
-        doc.modules = parseModuleList(value, 'module', reasons)
-        break
-      case 'bgp.as':
-        if (typeof value === 'number') doc.bgpAs = value
-        else reasons.push('"bgp.as" must be a number')
-        break
-      case 'bgp':
-        if (isRecord(value) && Object.keys(value).length === 1 && typeof value['as'] === 'number') {
-          doc.bgpAs = value['as']
-        } else {
-          reasons.push('"bgp" carries more than "as", or a non-numeric "as"')
-        }
-        break
-      case 'mpls.ldp':
-        if (typeof value === 'boolean') doc.mplsLdp = value
-        else reasons.push('"mpls.ldp" must be a boolean')
-        break
-      case 'mpls':
-        if (
-          isRecord(value) &&
-          Object.keys(value).length === 1 &&
-          typeof value['ldp'] === 'boolean'
-        ) {
-          doc.mplsLdp = value['ldp']
-        } else {
-          reasons.push('"mpls" carries more than a boolean "ldp"')
-        }
-        break
-      case 'vrfs':
-        if (isRecord(value)) {
-          for (const [vrfName, attrs] of Object.entries(value)) {
-            if (!EXISTING_NAME_RE.test(vrfName) || vrfName.length > NODE_NAME_MAX) {
-              reasons.push(`vrf name "${vrfName}" is outside the builder's rules`)
-            } else if (attrs === null || (isRecord(attrs) && Object.keys(attrs).length === 0)) {
-              doc.vrfs.push(vrfName)
+            if (defKey === 'device') {
+              doc.defaultDevice = parseDevice(defValue, 'default', reasons, knownDevices)
+              if (doc.defaultDevice === undefined && typeof defValue !== 'string') {
+                rest[defKey] = defValue
+              }
             } else {
-              reasons.push(
-                `vrf "${vrfName}" carries attributes the builder can't represent (rd, rt, import/export, …)`,
-              )
+              rest[defKey] = defValue
             }
           }
+          if (Object.keys(rest).length > 0) doc.extras[key] = rest
         } else {
-          reasons.push('"vrfs" must be a mapping of vrf names')
+          doc.extras[key] = value
         }
         break
-      case 'addressing':
-        doc.addressing = parseAddressing(value, reasons)
+      case 'module': {
+        const modules = modulesShape(value)
+        if (modules !== null) doc.modules = modules
+        else doc.extras[key] = value
         break
+      }
+      case 'bgp.as':
+        if (typeof value === 'number') doc.bgpAs = value
+        else doc.extras[key] = value
+        break
+      case 'bgp': {
+        const as = bgpShape(value)
+        if (as !== null) doc.bgpAs = as
+        else doc.extras[key] = value
+        break
+      }
+      case 'mpls.ldp':
+        if (typeof value === 'boolean') doc.mplsLdp = value
+        else doc.extras[key] = value
+        break
+      case 'mpls': {
+        const ldp = mplsBoolShape(value, 'ldp')
+        if (ldp !== null) doc.mplsLdp = ldp
+        else doc.extras[key] = value
+        break
+      }
+      case 'vrfs': {
+        const vrfs = vrfListShape(value)
+        if (vrfs !== null) doc.vrfs = vrfs
+        else doc.extras[key] = value
+        break
+      }
+      case 'groups':
+        doc.groups = parseGroups(value, doc.extras)
+        break
+      case 'addressing': {
+        const addressing = mgmtAddressingShape(value)
+        if (addressing !== null) doc.addressing = addressing
+        else doc.extras[key] = value
+        break
+      }
       case 'nodes':
       case 'links':
         break // handled below, in order (links need the declared node names)
       default:
-        reasons.push(`top-level key "${key}" is not supported by the builder`)
+        doc.extras[key] = value
     }
   }
 
@@ -417,13 +576,12 @@ export function parseBuildDoc(
     // A bare document (fresh lab) is representable; emit blocks an empty save.
   } else if (Array.isArray(rawNodes)) {
     for (const entry of rawNodes) {
-      if (typeof entry === 'string')
-        doc.nodes.push(parseNode(entry, null, doc.vrfs, reasons, knownDevices))
+      if (typeof entry === 'string') doc.nodes.push(parseNode(entry, null, reasons, knownDevices))
       else reasons.push(`node list entry ${describe(entry)} is not a plain name`)
     }
   } else if (isRecord(rawNodes)) {
     for (const [name, attrs] of Object.entries(rawNodes)) {
-      doc.nodes.push(parseNode(name, attrs, doc.vrfs, reasons, knownDevices))
+      doc.nodes.push(parseNode(name, attrs, reasons, knownDevices))
     }
   } else {
     reasons.push('"nodes" must be a mapping or a list of names')
@@ -435,6 +593,10 @@ export function parseBuildDoc(
   if (reasons.length > 0) return { ok: false, reasons }
   return { ok: true, doc }
 }
+
+// --------------------------------------------------------------------------
+// Emit
+// --------------------------------------------------------------------------
 
 function nodeYaml(node: BuildNode): Record<string, unknown> | null {
   const out: Record<string, unknown> = {}
@@ -451,18 +613,54 @@ function nodeYaml(node: BuildNode): Record<string, unknown> | null {
       ]),
     )
   }
+  for (const [key, value] of Object.entries(node.extras ?? {})) out[key] = value
   return Object.keys(out).length > 0 ? out : null
+}
+
+function groupYaml(group: BuildGroup): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {}
+  if (group.members.length > 0) out['members'] = [...group.members]
+  if (group.config !== undefined) out['config'] = [...group.config]
+  for (const [key, value] of Object.entries(group.extras ?? {})) out[key] = value
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** The advanced editors refuse builder-owned keys, so a same-key collision
+ * between an extras entry and a typed field can only arise through edge
+ * paths — this guard turns any such state into a loud save blocker instead
+ * of an emitted document with a duplicate key. */
+function extrasCollisions(
+  extras: Extras | undefined,
+  written: ReadonlySet<string>,
+  where: string,
+  problems: string[],
+): void {
+  for (const key of Object.keys(extras ?? {})) {
+    if (written.has(key)) {
+      problems.push(
+        `${where}: advanced property "${key}" duplicates a builder-managed key — remove one of them`,
+      )
+    }
+  }
 }
 
 /** Canonical emission. Problems are SAVE BLOCKERS shown to the user — the
  * emitter never silently fixes a doc (a 2-member "LAN" is a p2p link, a
- * device is intentful and never defaulted). */
+ * device is intentful and never defaulted, an undeclared group member would
+ * be rejected by netlab anyway). */
 export function emitBuildDoc(doc: BuildDoc): EmitResult {
   const problems: string[] = []
   if (doc.nodes.length === 0) problems.push('the lab has no nodes yet')
+  const nodeNames = new Set(doc.nodes.map((node) => node.name))
+  const vrfNames = new Set(declaredVrfs(doc))
   for (const node of doc.nodes) {
     if (node.device === undefined && doc.defaultDevice === undefined) {
       problems.push(`node "${node.name}" has no device and the lab has no default device`)
+    }
+    for (const vrf of Object.keys(node.vrfs ?? {})) {
+      if (!vrfNames.has(vrf)) {
+        problems.push(`node "${node.name}": vrf "${vrf}" is not declared under the top-level vrfs`)
+      }
     }
   }
   for (const link of doc.links) {
@@ -473,6 +671,44 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
           : `LAN segment "${link.id}" has two members, which is a point-to-point link — connect a third member or use a direct link`,
       )
     }
+  }
+  for (const group of doc.groups) {
+    // `_auto_create: true` asks netlab to create the members itself, so the
+    // declared-node rule doesn't apply to that group.
+    if (group.extras?.['_auto_create'] === true) continue
+    for (const member of group.members) {
+      if (!nodeNames.has(member)) {
+        problems.push(`group "${group.name}": member "${member}" is not a declared node`)
+      }
+    }
+  }
+
+  const written = new Set<string>(['nodes', 'links'])
+  if (doc.name !== undefined) written.add('name')
+  if (doc.provider !== undefined) written.add('provider')
+  if (doc.defaultDevice !== undefined) written.add('defaults.device')
+  if (doc.modules.length > 0) written.add('module')
+  if (doc.bgpAs !== undefined) written.add('bgp.as')
+  if (doc.mplsLdp !== undefined) written.add('mpls.ldp')
+  if (doc.vrfs.length > 0) written.add('vrfs')
+  if (doc.groups.length > 0) written.add('groups')
+  if (doc.addressing !== undefined) written.add('addressing')
+  extrasCollisions(doc.extras, written, 'lab', problems)
+  for (const node of doc.nodes) {
+    const nodeWritten = new Set<string>()
+    if (node.device !== undefined) nodeWritten.add('device')
+    if (node.image !== undefined) nodeWritten.add('image')
+    if (node.modules !== undefined) nodeWritten.add('module')
+    if (node.bgpAs !== undefined) nodeWritten.add('bgp.as')
+    if (node.mplsVpn !== undefined) nodeWritten.add('mpls.vpn')
+    if (node.vrfs !== undefined && Object.keys(node.vrfs).length > 0) nodeWritten.add('vrfs')
+    extrasCollisions(node.extras, nodeWritten, `node "${node.name}"`, problems)
+  }
+  for (const group of doc.groups) {
+    const groupWritten = new Set<string>()
+    if (group.members.length > 0) groupWritten.add('members')
+    if (group.config !== undefined) groupWritten.add('config')
+    extrasCollisions(group.extras, groupWritten, `group "${group.name}"`, problems)
   }
   if (problems.length > 0) return { ok: false, problems }
 
@@ -486,9 +722,13 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
   if (doc.vrfs.length > 0) {
     out['vrfs'] = Object.fromEntries(doc.vrfs.map((name) => [name, null]))
   }
+  if (doc.groups.length > 0) {
+    out['groups'] = Object.fromEntries(doc.groups.map((group) => [group.name, groupYaml(group)]))
+  }
   if (doc.addressing !== undefined) {
     out['addressing'] = { mgmt: { ...doc.addressing.mgmt } }
   }
+  for (const [key, value] of Object.entries(doc.extras)) out[key] = value
   out['nodes'] = Object.fromEntries(doc.nodes.map((node) => [node.name, nodeYaml(node)]))
   out['links'] = doc.links.map((link) =>
     link.kind === 'p2p' ? `${link.a}-${link.b}` : [...link.members],
@@ -498,7 +738,7 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
 
 export function emptyBuildDoc(): BuildDoc {
   // provider clab: the only provider this deployment deploys through.
-  return { provider: 'clab', modules: [], vrfs: [], nodes: [], links: [] }
+  return { provider: 'clab', modules: [], vrfs: [], groups: [], extras: {}, nodes: [], links: [] }
 }
 
 /** First free auto-name for a palette-added node: vyos1, vyos2, … */
@@ -521,6 +761,24 @@ export function nextLanId(doc: BuildDoc): string {
   return `lan:${max + 1}`
 }
 
+/** Deep key-sort for extras comparison: YAML mappings that differ only in key
+ * order are the same document. */
+function sortedDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortedDeep)
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, sortedDeep(value[key])]),
+    )
+  }
+  return value
+}
+
+function canonicalExtras(extras: Extras | undefined): unknown {
+  return extras !== undefined && Object.keys(extras).length > 0 ? sortedDeep(extras) : null
+}
+
 function canonical(doc: BuildDoc): unknown {
   return {
     name: doc.name ?? null,
@@ -530,7 +788,14 @@ function canonical(doc: BuildDoc): unknown {
     bgpAs: doc.bgpAs ?? null,
     mplsLdp: doc.mplsLdp ?? null,
     vrfs: [...doc.vrfs].sort(),
+    groups: doc.groups.map((group) => ({
+      name: group.name,
+      members: group.members,
+      config: group.config ?? null,
+      extras: canonicalExtras(group.extras),
+    })),
     addressing: doc.addressing ?? null,
+    extras: canonicalExtras(doc.extras),
     nodes: doc.nodes.map((node) => ({
       name: node.name,
       device: node.device ?? null,
@@ -544,6 +809,7 @@ function canonical(doc: BuildDoc): unknown {
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([name, attrs]) => ({ name, loopback: attrs.loopback ?? null }))
           : null,
+      extras: canonicalExtras(node.extras),
     })),
     links: doc.links.map((link) =>
       link.kind === 'p2p'
@@ -554,7 +820,8 @@ function canonical(doc: BuildDoc): unknown {
 }
 
 /** Round-trip equality, ignoring LAN ids (session metadata reassigned on
- * every parse) and empty-vs-absent vrf membership records. */
+ * every parse), empty-vs-absent vrf membership records, and extras key
+ * order. */
 export function buildDocEquals(a: BuildDoc, b: BuildDoc): boolean {
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
 }

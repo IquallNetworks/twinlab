@@ -334,7 +334,7 @@ function BuildTabInner({
             </CardContent>
           </Card>
           <aside className="w-80 shrink-0 overflow-y-auto rounded-[2px] border bg-card p-4">
-            <Inspector state={state} dispatch={dispatch} />
+            <Inspector state={state} labName={name} dispatch={dispatch} />
           </aside>
         </div>
       ) : (

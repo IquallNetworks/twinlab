@@ -58,6 +58,7 @@ from twinlab_backend.models import (
     LabNodeState,
     LabStatus,
     LabSummary,
+    LayoutGroupStyle,
     LayoutPosition,
     LinkEndpoint,
     LinkOperState,
@@ -1355,8 +1356,13 @@ def _layout_response(lab: Lab) -> LabLayoutResponse:
     # Stored JSON was shape-validated on write, so a parse failure here is a
     # corrupt row (a real error), not a caller mistake — same rule as suites.
     raw = lab.layout or {}
+    positions_raw = raw.get("positions")
+    groups_raw = raw.get("groups")
+    positions = cast("dict[str, object]", positions_raw) if isinstance(positions_raw, dict) else {}
+    groups = cast("dict[str, object]", groups_raw) if isinstance(groups_raw, dict) else {}
     return LabLayoutResponse(
-        positions={key: LayoutPosition.model_validate(pos) for key, pos in raw.items()}
+        positions={key: LayoutPosition.model_validate(pos) for key, pos in positions.items()},
+        groups={key: LayoutGroupStyle.model_validate(style) for key, style in groups.items()},
     )
 
 
@@ -1378,7 +1384,8 @@ async def put_layout(
     # Full REPLACE ({} clears): the writer always sends the complete current
     # arrangement, so replace semantics prune stale ids naturally.
     serialized: dict[str, object] = {
-        key: pos.model_dump() for key, pos in request.positions.items()
+        "positions": {key: pos.model_dump() for key, pos in request.positions.items()},
+        "groups": {key: style.model_dump() for key, style in request.groups.items()},
     }
     updated = await lab_store.set_layout(db, lab_name, serialized)
     if isinstance(updated, lab_store.LabStoreError):

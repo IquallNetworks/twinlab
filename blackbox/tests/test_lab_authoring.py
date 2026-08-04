@@ -6,6 +6,7 @@ configure, which never happens here.
 
 import pytest
 from twinlab_client import (
+    LayoutGroupStyle,
     LayoutPosition,
     TestCase,
     TestExpectation,
@@ -251,20 +252,31 @@ async def test_layout_roundtrip_replace_and_clear(
     lab = await make_lab(None)
     initial = await admin.get_layout(lab.name)
     assert initial.positions == {}
+    assert initial.groups == {}
 
     stored = await admin.put_layout(
         lab.name,
         {"n1": LayoutPosition(x=10.5, y=-3.0), "link:1": LayoutPosition(x=0.0, y=42.0)},
+        groups={"pe": LayoutGroupStyle(color="#f59e0b")},
     )
     assert stored.positions["link:1"].y == 42.0
+    assert stored.groups["pe"].color == "#f59e0b"
     fetched = await admin.get_layout(lab.name)
     assert fetched == stored
 
-    # Full REPLACE: a PUT drops every key it doesn't name; {} clears.
+    # Full REPLACE of the WHOLE resource: a PUT drops every key it doesn't
+    # name — omitting `groups` clears the styles too; {} clears everything.
     replaced = await admin.put_layout(lab.name, {"n2": LayoutPosition(x=1.0, y=1.0)})
     assert set(replaced.positions) == {"n2"}
+    assert replaced.groups == {}
     cleared = await admin.put_layout(lab.name, {})
     assert cleared.positions == {}
+
+    # Delta 20: color is pinned to #rrggbb — anything else is a 422, so a
+    # style can't smuggle arbitrary CSS.
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.put_layout(lab.name, {}, groups={"g": LayoutGroupStyle(color="red")})
+    assert excinfo.value.status_code == 422
 
 
 async def test_layout_write_needs_lab_edit(

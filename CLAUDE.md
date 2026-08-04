@@ -36,11 +36,12 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (nineteen deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (twenty deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
-2026-08-03, delta 18 the device/image catalog, and delta 19 the deployed-definition snapshot +
-shared topology layout, both approved same day). Two non-compose
+2026-08-03, delta 18 the device/image catalog, delta 19 the deployed-definition snapshot +
+shared topology layout — both approved same day — and delta 20 group canvas styling on the
+layout resource, approved 2026-08-04). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 114 tests
 exercising a live stack through the client only; all green, README documents env config and the
@@ -80,7 +81,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   tab is the ONLY layout writer (auto-PUT on drag end, full-replace) and the Overview canvas is
   **read/operate-only** — `nodesDraggable={false}`, it renders the shared arrangement and waits
   for the layout query to settle so the saved positions apply on first paint); still
-  parked, order agreed 2026-08-03 (ROADMAP item 16): definition input methods → scenarios;
+  parked, order agreed 2026-08-03, link forms slotted 2026-08-04 (ROADMAP item 16): builder
+  link attribute forms → definition input methods → scenarios;
   after that batch comes the **NOS platform
   sweep** (ROADMAP item 17), then a
   comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
@@ -251,7 +253,9 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   **`GET/PUT /labs/{name}/layout`** (delta 19: ONE shared manual topology arrangement per lab —
   `{canvas-id: {x, y}}`, ids OPAQUE presentation data never validated against the definition;
   GET `lab:read` and never 409s (an empty layout is honest), PUT `lab:edit` full-replace with
-  shape-only bounds — ≤512 keys, ≤128 chars, finite floats). **Test suites v2** (contract delta 17, shipped
+  shape-only bounds — ≤512 keys, ≤128 chars, finite floats; **delta 20**: the resource also
+  carries `groups` — per-group styling keyed by group name, `color` pinned to `#rrggbb` —
+  because presentation belongs on the layout, not in the definition netlab validates). **Test suites v2** (contract delta 17, shipped
   2026-08-03 — Twinlab's own validation, not `netlab validate`, see ROADMAP item 15): declarative
   assertions stored on the lab record (never sent to `netlab create`), each test a **render →
   execute → parse → assert pipeline**, all data, no user code. A test's `run` is one `TestCase`

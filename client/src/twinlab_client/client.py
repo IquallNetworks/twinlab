@@ -44,6 +44,7 @@ from twinlab_client.models import (
     LabOwner,
     LabPowerAction,
     LabSummary,
+    LayoutGroupStyle,
     LayoutPosition,
     Liveness,
     NetemImpairment,
@@ -609,16 +610,24 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         payload = await self._send_json("GET", f"/labs/{name}/layout")
         return _wire.parse_lab_layout(payload)
 
-    async def put_layout(self, name: str, positions: dict[str, LayoutPosition]) -> LabLayout:
-        """PUT /labs/{name}/layout — lab:edit. Full REPLACE ({} clears; no
-        separate DELETE). lab:edit because the shared layout is authoring:
-        only the Build tab edits topology or arrangement, read/operate-only
-        canvases never write this."""
+    async def put_layout(
+        self,
+        name: str,
+        positions: dict[str, LayoutPosition],
+        groups: dict[str, LayoutGroupStyle] | None = None,
+    ) -> LabLayout:
+        """PUT /labs/{name}/layout — lab:edit. Full REPLACE of the whole
+        layout resource — positions AND group styles (delta 20); {} clears,
+        no separate DELETE, and omitting `groups` clears any stored styles.
+        lab:edit because the shared layout is authoring: only the Build tab
+        edits topology or arrangement, read/operate-only canvases never
+        write this. Colors are server-pinned to "#rrggbb" (422 otherwise)."""
         payload = await self._send_json(
             "PUT",
             f"/labs/{name}/layout",
             json_body={
-                "positions": {key: {"x": pos.x, "y": pos.y} for key, pos in positions.items()}
+                "positions": {key: {"x": pos.x, "y": pos.y} for key, pos in positions.items()},
+                "groups": {key: {"color": style.color} for key, style in (groups or {}).items()},
             },
         )
         return _wire.parse_lab_layout(payload)

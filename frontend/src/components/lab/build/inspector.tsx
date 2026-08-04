@@ -40,8 +40,10 @@ import {
   type BuilderModule,
 } from '@/lib/build-doc'
 import { catalogDevice, deviceSupports } from '@/lib/device-catalog'
+import { GROUP_PALETTE, groupColor, type GroupStyles } from '@/lib/group-colors'
 import { customConfigQueryOptions } from '@/lib/queries'
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
+import { cn } from '@/lib/utils'
 
 import type { BuilderAction, BuilderState } from './build-state'
 import { ExtrasEditor } from './extras-editor'
@@ -130,13 +132,18 @@ function GroupBlock({
   doc,
   group,
   knownTemplates,
+  groupStyles,
+  onGroupColor,
   dispatch,
 }: {
   doc: BuildDoc
   group: BuildGroup
   knownTemplates: readonly string[]
+  groupStyles: GroupStyles
+  onGroupColor: (group: string, color: string) => void
   dispatch: Dispatch<BuilderAction>
 }) {
+  const color = groupColor(groupStyles, group.name)
   const [nameDraft, setNameDraft] = useState(group.name)
   const draftError = groupNameError(nameDraft, doc, group.name)
   const commitName = () => {
@@ -158,6 +165,11 @@ function GroupBlock({
   return (
     <div className="flex flex-col gap-2 rounded-[2px] border p-2">
       <div className="flex items-start gap-1.5">
+        <span
+          aria-hidden="true"
+          className="mt-2.5 size-2.5 shrink-0 rounded-full border border-background"
+          style={{ backgroundColor: color }}
+        />
         <div className="flex-1">
           <Input
             className="h-8 font-mono"
@@ -267,6 +279,34 @@ function GroupBlock({
         )}
       </div>
 
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">Color</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {GROUP_PALETTE.map((swatch) => (
+            <button
+              key={swatch}
+              type="button"
+              title={swatch}
+              aria-label={`Color ${swatch}`}
+              onClick={() => onGroupColor(group.name, swatch)}
+              className={cn(
+                'size-4 rounded-full border border-background',
+                color.toLowerCase() === swatch && 'ring-2 ring-primary',
+              )}
+              style={{ backgroundColor: swatch }}
+            />
+          ))}
+          <input
+            type="color"
+            aria-label={`Custom color for group ${group.name}`}
+            title="Custom color"
+            value={color}
+            onChange={(event) => onGroupColor(group.name, event.target.value)}
+            className="size-5 cursor-pointer rounded-[2px] border bg-transparent p-0"
+          />
+        </div>
+      </div>
+
       <ExtrasEditor
         key={JSON.stringify(group.extras ?? {})}
         idPrefix={`build-group-${group.name}`}
@@ -283,10 +323,14 @@ function GroupBlock({
 function GroupsSection({
   doc,
   labName,
+  groupStyles,
+  onGroupColor,
   dispatch,
 }: {
   doc: BuildDoc
   labName: string
+  groupStyles: GroupStyles
+  onGroupColor: (group: string, color: string) => void
   dispatch: Dispatch<BuilderAction>
 }) {
   const templates = useQuery(customConfigQueryOptions(labName))
@@ -329,6 +373,8 @@ function GroupsSection({
           doc={doc}
           group={group}
           knownTemplates={knownTemplates}
+          groupStyles={groupStyles}
+          onGroupColor={onGroupColor}
           dispatch={dispatch}
         />
       ))}
@@ -357,10 +403,14 @@ function GroupsSection({
 function LabInspector({
   doc,
   labName,
+  groupStyles,
+  onGroupColor,
   dispatch,
 }: {
   doc: BuildDoc
   labName: string
+  groupStyles: GroupStyles
+  onGroupColor: (group: string, color: string) => void
   dispatch: Dispatch<BuilderAction>
 }) {
   const { devices } = useDeviceCatalog()
@@ -542,7 +592,13 @@ function LabInspector({
         </div>
       )}
 
-      <GroupsSection doc={doc} labName={labName} dispatch={dispatch} />
+      <GroupsSection
+        doc={doc}
+        labName={labName}
+        groupStyles={groupStyles}
+        onGroupColor={onGroupColor}
+        dispatch={dispatch}
+      />
 
       <ExtrasEditor
         key={JSON.stringify(doc.extras)}
@@ -891,18 +947,32 @@ function NodeInspector({
 }
 
 /** The builder's right-hand inspector, dispatching on the selection.
- * `labName` feeds the groups section's template picker (custom-config query). */
+ * `labName` feeds the groups section's template picker (custom-config query);
+ * `groupStyles`/`onGroupColor` are the shared group colors (delta 20), owned
+ * by the Build tab beside the positions. */
 export function Inspector({
   state,
   labName,
+  groupStyles,
+  onGroupColor,
   dispatch,
 }: {
   state: BuilderState
   labName: string
+  groupStyles: GroupStyles
+  onGroupColor: (group: string, color: string) => void
   dispatch: Dispatch<BuilderAction>
 }) {
   const { doc, selection } = state
-  const lab = <LabInspector doc={doc} labName={labName} dispatch={dispatch} />
+  const lab = (
+    <LabInspector
+      doc={doc}
+      labName={labName}
+      groupStyles={groupStyles}
+      onGroupColor={onGroupColor}
+      dispatch={dispatch}
+    />
+  )
 
   switch (selection.kind) {
     case 'lab':

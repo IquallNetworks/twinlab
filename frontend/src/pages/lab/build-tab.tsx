@@ -30,6 +30,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, ApiError } from '@/lib/api'
 import { emitBuildDoc, emptyBuildDoc, parseBuildDoc } from '@/lib/build-doc'
 import { toastError } from '@/lib/error-toast'
+import type { GroupStyles } from '@/lib/group-colors'
 import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
 import { labLayoutQueryOptions, labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import type { LabDetail } from '@/lib/schemas'
@@ -65,6 +66,7 @@ export function BuildTab({ name }: { name: string }) {
       lab={lab}
       knownDevices={catalog.devices.map((d) => d.device)}
       initialPositions={layoutQuery.data?.positions ?? {}}
+      initialGroupStyles={layoutQuery.data?.groups ?? {}}
     />
   )
 }
@@ -73,10 +75,12 @@ function BuildTabInner({
   lab,
   knownDevices,
   initialPositions,
+  initialGroupStyles,
 }: {
   lab: LabDetail
   knownDevices: string[]
   initialPositions: SavedPositions
+  initialGroupStyles: GroupStyles
 }) {
   const name = lab.name
   const queryClient = useQueryClient()
@@ -101,28 +105,50 @@ function BuildTabInner({
   const [textDirty, setTextDirty] = useState(false)
   const dirty = mode === 'visual' ? state.dirty : textDirty
 
-  // The shared manual layout (delta 19): seeded from the server once (the
-  // outer component waits for the query), saved back on every persisting
-  // change. PUT is full-replace and the builder always hands over the
-  // complete map, so stale ids prune naturally. Failures surface but never
-  // block editing — layout is presentational.
+  // The shared manual layout (delta 19) + group styles (delta 20): seeded
+  // from the server once (the outer component waits for the query), saved
+  // back on every persisting change. PUT replaces the WHOLE resource and the
+  // builder always hands over the complete maps, so stale ids prune
+  // naturally. Failures surface but never block editing — presentational.
   const [positions, setPositionsState] = useState<SavedPositions>(initialPositions)
   const positionsRef = useRef(positions)
   positionsRef.current = positions
+  const [groupStyles, setGroupStylesState] = useState<GroupStyles>(initialGroupStyles)
+  const groupStylesRef = useRef(groupStyles)
+  groupStylesRef.current = groupStyles
   const saveLayout = useMutation({
-    mutationFn: (next: SavedPositions) => api.putLabLayout(name, next),
+    mutationFn: (payload: { positions: SavedPositions; groups: GroupStyles }) =>
+      api.putLabLayout(name, payload.positions, payload.groups),
     onSuccess: (stored) => {
       queryClient.setQueryData(labLayoutQueryOptions(name).queryKey, stored)
     },
     onError: (err) => toastError(err, 'Layout save failed'),
   })
+  const persistLayout = () =>
+    saveLayout.mutate({ positions: positionsRef.current, groups: groupStylesRef.current })
   const onPositions = (next: SavedPositions, persist: boolean) => {
     setPositionsState(next)
-    if (persist) saveLayout.mutate(next)
+    positionsRef.current = next
+    if (persist) persistLayout()
+  }
+  // The native color input fires continuously while the picker drags —
+  // update the canvas immediately, debounce the PUT.
+  const styleSaveTimer = useRef<number | null>(null)
+  const onGroupColor = (group: string, color: string) => {
+    const next = { ...groupStylesRef.current, [group]: { color } }
+    setGroupStylesState(next)
+    groupStylesRef.current = next
+    if (styleSaveTimer.current !== null) window.clearTimeout(styleSaveTimer.current)
+    styleSaveTimer.current = window.setTimeout(() => {
+      styleSaveTimer.current = null
+      persistLayout()
+    }, 400)
   }
 
-  // Renames migrate the saved position to the new node id before the reducer
-  // rewrites the doc — otherwise the renamed node would jump to a dagre spot.
+  // Renames migrate the saved position/style to the new id before the
+  // reducer rewrites the doc — otherwise the renamed node would jump to a
+  // dagre spot (and a renamed group would lose its color); deletes drop the
+  // group's style so the stored map doesn't accumulate stale names.
   const dispatch = (action: BuilderAction) => {
     if (action.type === 'rename-node') {
       const current = positionsRef.current[action.from]
@@ -131,6 +157,23 @@ function BuildTabInner({
         delete next[action.from]
         onPositions(next, true)
       }
+    }
+    if (action.type === 'rename-group') {
+      const style = groupStylesRef.current[action.from]
+      if (style !== undefined) {
+        const next = { ...groupStylesRef.current, [action.to]: style }
+        delete next[action.from]
+        setGroupStylesState(next)
+        groupStylesRef.current = next
+        persistLayout()
+      }
+    }
+    if (action.type === 'delete-group' && groupStylesRef.current[action.name] !== undefined) {
+      const next = { ...groupStylesRef.current }
+      delete next[action.name]
+      setGroupStylesState(next)
+      groupStylesRef.current = next
+      persistLayout()
     }
     rawDispatch(action)
   }
@@ -329,12 +372,19 @@ function BuildTabInner({
                   dispatch={dispatch}
                   positions={positions}
                   onPositions={onPositions}
+                  groupStyles={groupStyles}
                 />
               </div>
             </CardContent>
           </Card>
           <aside className="w-80 shrink-0 overflow-y-auto rounded-[2px] border bg-card p-4">
-            <Inspector state={state} labName={name} dispatch={dispatch} />
+            <Inspector
+              state={state}
+              labName={name}
+              dispatch={dispatch}
+              groupStyles={groupStyles}
+              onGroupColor={onGroupColor}
+            />
           </aside>
         </div>
       ) : (

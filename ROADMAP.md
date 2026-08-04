@@ -470,13 +470,16 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     `backend_shutdown`) and unwedge `deploying` labs (closing the Phase 1.1
     reconciler TODO). Single-process assumption (bare uvicorn, 1 worker).
 
-    **Deferred: SSE job events.** Completion is discovered by POLLING only.
-    Job-status transitions on the `/events` SSE stream (named events + an
-    in-process broker feeding the per-connection queues; the client's SSE
-    parser learns to discriminate `event:` names) would give the frontend live
-    updates without polling — configure/suite-run jobs emit no container
-    events, so today the stream cannot signal their completion. Layer it on
-    post-v1.0 without breaking the current contract.
+    **~~Deferred: SSE job events.~~ CLOSED by contract delta 16 (2026-07-30).**
+    The `/events` stream now carries two **named** events — `lab` (the container
+    relay) and `job` (`{lab, job_id, kind, status, timestamp}`, emitted at
+    submit and at the terminal state) — exactly the deferred design: an
+    in-process broker feeds each connection's bounded queue (lossy by choice,
+    drop rather than stall the job runner), and the client's SSE parser
+    discriminates `event:` names, skipping ones it has no parser for. The event
+    is a poke, never the result; there is NO replay on reconnect, so the
+    frontend's jobs poll slowed to a 15s fallback rather than being deleted.
+    Shipped alongside delta 15 (`GET /jobs`, the cross-lab job listing).
 
 ### External SSH access — jump service (contract delta 13) · **done**
 
@@ -507,8 +510,8 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
 
 14. **A comprehensive end-to-end test suite driving the real frontend with
     Playwright (Apache-2.0), verifying the UX** — decided 2026-07-31. Sequencing
-    is locked: it lands after the parked backend batch (definition input
-    methods, scenarios, catalog endpoint, …) and the NOS platform sweep
+    is locked: it lands after the parked backend batch (builder link forms,
+    definition input methods, scenarios) and the NOS platform sweep
     (item 17) so the surfaces it pins down are final, and before the v1.0
     release train, which must not ship without it. The black-box suite already proves the API contract through the
     client; this suite covers what that cannot — the browser layer: login/auth
@@ -622,10 +625,25 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        Changes diff view on the Definition card, the Build tab as the only
        layout writer, and the Overview canvas read/operate-only
        (maintainer's call 2026-08-03); localStorage layouts retired.
-    3. **Definition input methods** — full-network templates, single-node
+       **Extended 2026-08-04 (contract delta 20):** the layout resource also
+       carries per-group canvas styling (`groups: {name: {color}}`, hex-pinned
+       `#rrggbb`, migration 0018 wrapped the stored shape to
+       `{positions, groups}`) — presentation belongs on the layout, never in
+       the definition netlab validates. Builder nodes wear membership dots;
+       the inspector's group blocks pick the color; unstyled groups get a
+       deterministic name-hashed default client-side, so the server stores
+       explicit choices only.
+    3. **Builder link attribute forms** (slotted here 2026-08-04; frontend-
+       only, no contract change) — extend the builder's extras-passthrough
+       pattern to netlab's dict-form links (node names and attributes as
+       sibling keys — discriminate via the declared-node set), `interfaces:`
+       lists, and per-endpoint attributes, so `examples/campus-lan.yml`
+       becomes fully buildable visually. The follow-up agreed 2026-08-03 when
+       the extras/groups rework shipped (detail in `docs/frontend-rework.md`).
+    4. **Definition input methods** — full-network templates, single-node
        templates, definitions built from real config files. Starts with a
        design discussion, not a sketch.
-    4. **Scenario definition** — traffic between nodes/attached clients,
+    5. **Scenario definition** — traffic between nodes/attached clients,
        impairment schedules. The least-specified item; also starts with a
        design discussion.
     Each contract-touching item goes through the review gate

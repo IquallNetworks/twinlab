@@ -170,6 +170,18 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     ``lab:read``, write rides ``lab:edit``: arranging the shared layout is
     AUTHORING — only the Build tab edits topology or arrangement, every
     other canvas is read/operate-only (maintainer's call 2026-08-03).
+20. Group canvas styling (APPROVED 2026-08-04): the layout resource
+    gains a ``groups`` map — per-group presentation styling (today one field:
+    ``color``, pinned to "#rrggbb"), keyed by group name, shared across users
+    like the positions and carried by the SAME ``GET/PUT /labs/{name}/layout``
+    full-replace pair (lab:read / lab:edit unchanged). Lives on the layout,
+    NOT the definition: netlab's attribute validation rejects unknown group
+    keys (and would broadcast them as node data if it didn't), and the
+    definition is the deployable source of truth — presentation does not
+    belong in it. Additive and wire-compatible: pre-existing rows serve
+    ``groups: {}``. Groups without an entry render with a deterministic
+    client-side default (name-hashed palette); the map records explicit
+    choices only. (wire today: layout is positions-only, delta 19.)
 
 Conventions:
 
@@ -779,6 +791,21 @@ class LayoutPosition:
 
 
 @dataclass(frozen=True, slots=True)
+class LayoutGroupStyle:
+    """PROPOSAL (delta 20, APPROVED): one group's canvas styling.
+
+    Lives on the LAYOUT resource, not the definition: netlab's attribute
+    validation would reject a `color:` group key (and broadcast it as node
+    data if it didn't), and the definition is the deployable source of truth
+    — a stylesheet does not belong in it. Shared across users like the
+    positions."""
+
+    # "#rrggbb" (lowercase or upper accepted, served as sent) — pinned to hex
+    # so the value is portable and can't smuggle arbitrary CSS; 422 otherwise.
+    color: str
+
+
+@dataclass(frozen=True, slots=True)
 class LabLayout:
     """The lab's ONE shared manual topology arrangement (delta 19).
 
@@ -793,6 +820,14 @@ class LabLayout:
     floats — 422 beyond."""
 
     positions: dict[str, LayoutPosition]
+    # PROPOSAL (delta 20, APPROVED): per-group canvas styling, keyed by GROUP
+    # NAME (the definition's `groups:` keys — same opaque-key rule as
+    # positions: a renamed/deleted group leaves a harmless stale entry that
+    # the next full-replace PUT prunes). Groups without an entry get a
+    # deterministic default color client-side (name-hashed palette), so this
+    # map only carries explicit choices. Absent on pre-delta-20 rows — GET
+    # serves {} (additive change, wire-compatible).
+    groups: dict[str, LayoutGroupStyle]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1581,11 +1616,18 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         raise NotImplementedError
 
     async def put_layout(
-        self, name: str, positions: dict[str, LayoutPosition]
+        self,
+        name: str,
+        positions: dict[str, LayoutPosition],
+        # PROPOSAL (delta 20, APPROVED): None = {} for wire-compat ergonomics,
+        # but the PUT replaces the WHOLE resource — a caller updating only
+        # positions must resend the styles it wants kept.
+        groups: dict[str, LayoutGroupStyle] | None = None,
     ) -> LabLayout:
         """PROPOSED (delta 19, APPROVED, not served yet) PUT
         /labs/{name}/layout — lab:edit.
-        Full REPLACE ({} clears; no separate DELETE). lab:edit — not a new
+        Full REPLACE of the whole layout resource — positions AND group
+        styles ({} clears; no separate DELETE). lab:edit — not a new
         permission and not lab:read — because the shared layout is authoring:
         only the Build tab edits topology or arrangement (maintainer's call
         2026-08-03), so the read/operate-only canvases never write this. A

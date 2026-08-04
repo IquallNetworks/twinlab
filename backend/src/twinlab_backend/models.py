@@ -407,22 +407,40 @@ class LayoutPosition(BaseModel):
 _LayoutKey = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 
 
+class LayoutGroupStyle(BaseModel):
+    """One group's canvas styling (contract delta 20). On the layout resource,
+    not the definition — netlab's attribute validation rejects unknown group
+    keys, and the definition is the deployable source of truth, not a
+    stylesheet."""
+
+    # Pinned to hex so the value is portable and can't smuggle arbitrary CSS
+    # into whatever inline style a consumer builds from it.
+    color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+
+
 class LabLayoutResponse(BaseModel):
     """The lab's ONE shared manual topology arrangement (delta 19), keyed by
-    canvas element id. Never validated against the definition: stale keys (a
-    renamed node, a reindexed link) are harmless — readers ignore unknown ids
-    and auto-layout covers unplaced elements. Empty = no manual layout saved."""
+    canvas element id, plus per-group styling keyed by group name (delta 20).
+    Never validated against the definition: stale keys (a renamed node, a
+    reindexed link, a deleted group) are harmless — readers ignore unknown
+    ids and auto-layout/default palette cover the rest. Empty = nothing
+    saved."""
 
     positions: dict[str, LayoutPosition]
+    groups: dict[str, LayoutGroupStyle]
 
 
 class PutLayoutRequest(BaseModel):
-    """Full REPLACE of the stored arrangement ({} clears — no separate
-    DELETE)."""
+    """Full REPLACE of the stored layout resource — positions AND group
+    styles ({} clears — no separate DELETE)."""
 
     # 512 elements bounds the row far above any real canvas (labs are tens of
     # nodes, not hundreds).
     positions: dict[_LayoutKey, LayoutPosition] = Field(max_length=512)
+    # Delta 20: explicit styling choices only (unstyled groups render a
+    # client-side default). Defaults empty for delta-19 callers — the PUT
+    # still replaces the WHOLE resource, so such a caller clears any styles.
+    groups: dict[_LayoutKey, LayoutGroupStyle] = Field(default_factory=dict, max_length=512)
 
 
 class LabActionResponse(BaseModel):

@@ -334,7 +334,19 @@ Frontend-driven wants that surfaced in this roadmap:
   unknown-device POLICY gate. Verified by a 27-check round-trip harness (esbuild bundle under
   node): both MPLS examples + the LIVE stored IOL definition round-trip doc-equal, overflow
   fixtures ride extras, campus-lan gates ONLY on its link forms.
-- **Builder link attribute forms** (parked follow-up, agreed 2026-08-03): extend the
+- **Group canvas colors** — **DONE 2026-08-04 (contract delta 20)**. Per-group styling
+  (`color`, server-pinned to `#rrggbb`) rides the layout resource — NOT the definition, which
+  netlab validates and which stays presentation-free — under the same `GET/PUT
+  /labs/{name}/layout` full-replace pair (migration 0018 wrapped the stored shape to
+  `{positions, groups}`). Unstyled groups get a deterministic name-hashed pick from the 8-color
+  `lib/group-colors.ts` palette, so the server map records explicit choices only. Builder
+  canvas: device nodes wear membership dots (one per group, title = name — dots beat a tinted
+  border because nodes can be in several groups); inspector group blocks grew a color swatch
+  beside the name, a palette row, and a native custom-color input (canvas updates immediately,
+  the PUT debounces 400ms since color pickers fire continuously). The Build tab owns the styles
+  beside the positions: group rename migrates the entry, delete drops it.
+- **Builder link attribute forms** (agreed 2026-08-03; slotted NEXT — batch item 16.3 —
+  2026-08-04): extend the
   passthrough pattern to netlab's dict-form links (node names and attributes as sibling keys —
   discriminate via the declared-node set), `interfaces:` lists, and per-endpoint attributes,
   so campus-lan.yml becomes fully buildable visually.

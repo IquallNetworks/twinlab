@@ -284,12 +284,17 @@ export const api = {
     request(`/labs/${encodeURIComponent(name)}/links`, labLinksSchema),
   labLayout: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/layout`, labLayoutSchema),
-  // Full REPLACE ({} clears): the caller always sends the complete current
-  // arrangement. lab:edit — the Build tab is the only writer.
-  putLabLayout: (name: string, positions: Record<string, { x: number; y: number }>) =>
+  // Full REPLACE of the whole resource ({} clears): the caller always sends
+  // the complete current arrangement AND group styles (delta 20). lab:edit —
+  // the Build tab is the only writer.
+  putLabLayout: (
+    name: string,
+    positions: Record<string, { x: number; y: number }>,
+    groups: Record<string, { color: string }>,
+  ) =>
     request(`/labs/${encodeURIComponent(name)}/layout`, labLayoutSchema, {
       method: 'PUT',
-      body: JSON.stringify({ positions }),
+      body: JSON.stringify({ positions, groups }),
     }),
 
   // Netem link impairment, keyed by node + interface (the backend resolves the

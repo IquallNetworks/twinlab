@@ -75,6 +75,19 @@ export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFl
           running ? 'bg-primary' : notDeployed ? 'border border-muted-foreground' : 'bg-muted-foreground',
         )}
       />
+      {data.groups !== undefined && data.groups.length > 0 && (
+        <span className="absolute -top-1 left-2 flex gap-1">
+          {data.groups.map((group) => (
+            <span
+              key={group.name}
+              title={`group: ${group.name}`}
+              aria-label={`group: ${group.name}`}
+              style={{ backgroundColor: group.color }}
+              className="size-2 rounded-full border border-background"
+            />
+          ))}
+        </span>
+      )}
       {data.impairedIfaces > 0 && (
         <span
           title={`${data.impairedIfaces} impaired interface(s)`}

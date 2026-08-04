@@ -56,6 +56,7 @@ from twinlab_client.models import (
     LabNodeState,
     LabOwner,
     LabSummary,
+    LayoutGroupStyle,
     LayoutPosition,
     LinkEndpoint,
     Liveness,
@@ -650,7 +651,13 @@ def parse_lab_layout(value: object) -> LabLayout:
             x=_get_float(pos, "x", entry_where),
             y=_get_float(pos, "y", entry_where),
         )
-    return LabLayout(positions=positions)
+    styles = as_object(_req(obj, "groups", where), where)
+    groups: dict[str, LayoutGroupStyle] = {}
+    for key, entry in styles.items():
+        entry_where = f"{where}.groups[{key!r}]"
+        style = as_object(entry, entry_where)
+        groups[key] = LayoutGroupStyle(color=_get_str(style, "color", entry_where))
+    return LabLayout(positions=positions, groups=groups)
 
 
 def parse_lab_event(value: object) -> LabEvent:

@@ -139,6 +139,20 @@ def test_layout_request_accepts_opaque_ids_and_clears_empty() -> None:
     assert PutLayoutRequest.model_validate({"positions": {}}).positions == {}
 
 
+def test_layout_group_styles_hex_pinned() -> None:
+    # Delta 20: group styling rides the layout; color is pinned to #rrggbb so
+    # the value can't smuggle arbitrary CSS.
+    request = PutLayoutRequest.model_validate(
+        {"positions": {}, "groups": {"pe": {"color": "#F59E0B"}, "core": {"color": "#38bdf8"}}}
+    )
+    assert request.groups["pe"].color == "#F59E0B"
+    # Delta-19 callers omit the map entirely — still a full-resource replace.
+    assert PutLayoutRequest.model_validate({"positions": {}}).groups == {}
+    for bad in ("red", "#f00", "#12345g", "url(x)"):
+        with pytest.raises(pydantic.ValidationError):
+            PutLayoutRequest.model_validate({"positions": {}, "groups": {"g": {"color": bad}}})
+
+
 def test_layout_request_shape_bounds() -> None:
     # Shape-only validation: bounded key count/length, finite floats.
     with pytest.raises(pydantic.ValidationError):

@@ -17,6 +17,7 @@ from twinlab_client import (
     LabEvent,
     LabLayout,
     LabNodeState,
+    LayoutGroupStyle,
     LayoutPosition,
     Principal,
     SshAccess,
@@ -259,7 +260,10 @@ async def test_get_layout_parses_positions(make_client: ClientFactory) -> None:
         assert request.url.path == "/api/v1/labs/lab1/layout"
         return httpx.Response(
             200,
-            json={"positions": {"r1": {"x": 10.5, "y": -3}, "link:3": {"x": 0, "y": 0}}},
+            json={
+                "positions": {"r1": {"x": 10.5, "y": -3}, "link:3": {"x": 0, "y": 0}},
+                "groups": {"pe": {"color": "#f59e0b"}},
+            },
         )
 
     async with make_client(handler) as client:
@@ -268,7 +272,8 @@ async def test_get_layout_parses_positions(make_client: ClientFactory) -> None:
         positions={
             "r1": LayoutPosition(x=10.5, y=-3.0),
             "link:3": LayoutPosition(x=0.0, y=0.0),
-        }
+        },
+        groups={"pe": LayoutGroupStyle(color="#f59e0b")},
     )
 
 
@@ -277,22 +282,32 @@ async def test_put_layout_sends_full_replace(make_client: ClientFactory) -> None
         assert request.method == "PUT"
         assert request.url.path == "/api/v1/labs/lab1/layout"
         body = _json_body(request)
-        assert body == {"positions": {"r1": {"x": 1.0, "y": 2.0}}}
+        assert body == {
+            "positions": {"r1": {"x": 1.0, "y": 2.0}},
+            "groups": {"pe": {"color": "#38bdf8"}},
+        }
         return httpx.Response(200, json=body)
 
     async with make_client(handler) as client:
-        layout = await client.put_layout("lab1", {"r1": LayoutPosition(x=1.0, y=2.0)})
+        layout = await client.put_layout(
+            "lab1",
+            {"r1": LayoutPosition(x=1.0, y=2.0)},
+            groups={"pe": LayoutGroupStyle(color="#38bdf8")},
+        )
     assert layout.positions["r1"] == LayoutPosition(x=1.0, y=2.0)
+    assert layout.groups["pe"].color == "#38bdf8"
 
 
 async def test_put_layout_empty_clears(make_client: ClientFactory) -> None:
+    # Omitting `groups` still replaces the WHOLE resource — styles cleared.
     def handler(request: httpx.Request) -> httpx.Response:
-        assert _json_body(request) == {"positions": {}}
-        return httpx.Response(200, json={"positions": {}})
+        assert _json_body(request) == {"positions": {}, "groups": {}}
+        return httpx.Response(200, json={"positions": {}, "groups": {}})
 
     async with make_client(handler) as client:
         layout = await client.put_layout("lab1", {})
     assert layout.positions == {}
+    assert layout.groups == {}
 
 
 async def test_get_layout_malformed_position_is_protocol_error(

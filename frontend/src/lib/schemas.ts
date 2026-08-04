@@ -117,8 +117,12 @@ export type LabDetail = z.infer<typeof labDetailSchema>
 // keyed by canvas element id (node names + pseudo-nodes like LAN hubs) —
 // opaque to the server, replace-on-PUT. ---
 export const layoutPositionSchema = z.object({ x: z.number(), y: z.number() })
+// Delta 20: per-group canvas styling, keyed by group name (color is
+// server-pinned to #rrggbb).
+export const layoutGroupStyleSchema = z.object({ color: z.string() })
 export const labLayoutSchema = z.object({
   positions: z.record(z.string(), layoutPositionSchema),
+  groups: z.record(z.string(), layoutGroupStyleSchema),
 })
 export type LabLayout = z.infer<typeof labLayoutSchema>
 

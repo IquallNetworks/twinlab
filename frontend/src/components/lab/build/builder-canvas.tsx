@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { nextLanId, nextNodeName, type BuildDoc } from '@/lib/build-doc'
 import type { CatalogDevice } from '@/lib/device-catalog'
+import { groupColor, type GroupStyles } from '@/lib/group-colors'
 
 import { DeviceNode } from '../topology/device-node'
 import {
@@ -59,6 +60,8 @@ interface BuilderCanvasProps {
   // persist=true writes through to the per-lab layout store (drag end,
   // palette add, auto-layout); transient bookkeeping passes false.
   onPositions: (next: SavedPositions, persist: boolean) => void
+  // Shared per-group styling (delta 20) — read-only here; the inspector edits.
+  groupStyles: GroupStyles
 }
 
 function sameSelection(a: Selection, b: Selection): boolean {
@@ -68,7 +71,7 @@ function sameSelection(a: Selection, b: Selection): boolean {
 /** The doc rendered as React Flow structure — positions and selection are
  * deliberately NOT here: React Flow owns them (applyNodeChanges), the sync
  * effect below carries them across doc changes. */
-function graphFromDoc(doc: BuildDoc): { nodes: AppNode[]; edges: Edge[] } {
+function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode[]; edges: Edge[] } {
   const nodes: AppNode[] = doc.nodes.map((node) => ({
     id: node.name,
     type: 'device',
@@ -80,6 +83,11 @@ function graphFromDoc(doc: BuildDoc): { nodes: AppNode[]; edges: Edge[] } {
       device: node.device ?? doc.defaultDevice,
       state: NOT_DEPLOYED,
       impairedIfaces: 0,
+      // Membership dots (delta 20): document order, colored by the shared
+      // styles with the name-hashed default as fallback.
+      groups: doc.groups
+        .filter((group) => group.members.includes(node.name))
+        .map((group) => ({ name: group.name, color: groupColor(groupStyles, group.name) })),
     },
   }))
 
@@ -119,7 +127,7 @@ function graphFromDoc(doc: BuildDoc): { nodes: AppNode[]; edges: Edge[] } {
   return { nodes, edges }
 }
 
-function CanvasInner({ state, dispatch, positions, onPositions }: BuilderCanvasProps) {
+function CanvasInner({ state, dispatch, positions, onPositions, groupStyles }: BuilderCanvasProps) {
   const { resolvedTheme } = useTheme()
   const { fitView, screenToFlowPosition } = useReactFlow()
   const [rankdir, setRankdir] = useState<RankDir>('LR')
@@ -127,7 +135,7 @@ function CanvasInner({ state, dispatch, positions, onPositions }: BuilderCanvasP
   const wrapperRef = useRef<HTMLDivElement>(null)
   const doc = state.doc
 
-  const graph = useMemo(() => graphFromDoc(doc), [doc])
+  const graph = useMemo(() => graphFromDoc(doc, groupStyles), [doc, groupStyles])
 
   // React Flow owns the interactive node state (positions, selection,
   // measurements) through the hooks' built-in applyNodeChanges — a fully

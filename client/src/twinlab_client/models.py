@@ -540,14 +540,24 @@ class LayoutPosition:
 
 
 @dataclass(frozen=True, slots=True)
+class LayoutGroupStyle:
+    """One group's canvas styling (delta 20). Lives on the layout resource,
+    not the definition — presentation, shared across users like positions."""
+
+    color: str  # "#rrggbb" (server-enforced)
+
+
+@dataclass(frozen=True, slots=True)
 class LabLayout:
     """The lab's ONE shared manual topology arrangement (delta 19), keyed by
     canvas element id — node names plus frontend pseudo-nodes (LAN hubs),
-    OPAQUE to the server. Never validated against the definition: stale keys
-    are harmless (readers ignore unknown ids; auto-layout covers unplaced
-    elements). Empty = no manual layout saved."""
+    OPAQUE to the server — plus per-group styling keyed by group name
+    (delta 20). Never validated against the definition: stale keys are
+    harmless (readers ignore unknown ids; auto-layout and the client-side
+    default palette cover the rest). Empty = nothing saved."""
 
     positions: dict[str, LayoutPosition]
+    groups: dict[str, LayoutGroupStyle]
 
 
 @dataclass(frozen=True, slots=True)

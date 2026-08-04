@@ -13,6 +13,9 @@ export interface DeviceNodeData {
   // Live container that is NOT in the definition (definition edited after
   // deploy) — rendered unlinked rather than silently dropped.
   drifted?: boolean
+  // Group memberships as colored dots (delta 20; the builder canvas sets
+  // this — a node can be in several groups, so dots beat a tinted border).
+  groups?: { name: string; color: string }[]
   [key: string]: unknown
 }
 

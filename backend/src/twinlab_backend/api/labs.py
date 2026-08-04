@@ -13,8 +13,10 @@ maps typed errors to status codes.
 """
 
 import re
+import shutil
 import uuid
 from http import HTTPStatus
+from pathlib import Path as FsPath
 from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Path, Request
@@ -100,13 +102,17 @@ from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfac
 from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
 from twinlab_backend.services.configimport import diff as configimport_diff
 from twinlab_backend.services.custom_config import BuiltinLibrary
+from twinlab_backend.services.device_catalog import LOCAL_ONLY_DEVICES, image_reference
 from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
 from twinlab_backend.services.netlab import (
     ClabArtifacts,
     TopologyLink,
     create_clab_topology,
+    find_unsupported_directives,
+    read_message,
     read_mgmt_subnet,
+    rewrite_generated_binds,
     serialize_links,
     set_lab_name,
     set_mgmt_subnet,
@@ -288,6 +294,7 @@ def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str]) ->
         config_time_status=_config_time_status(lab.config_time_ok),
         permissions=_lab_scoped(permissions),
         template_published=lab.template_published,
+        message=read_message(lab.definition) if lab.definition is not None else None,
     )
 
 
@@ -666,14 +673,18 @@ async def _live_detail(lab: Lab, clab: ClabApiClient, permissions: list[str]) ->
 
 
 async def _generate_topology(
-    definition: str, templates: dict[str, str]
+    definition: str, templates: dict[str, str], node_files_target: FsPath | None = None
 ) -> Result[ClabArtifacts, ApiError]:
     """Run `netlab create` (off the event loop — blocking subprocess work) and
     map a failure onto the error envelope. `templates` is the custom-config
     fileset the definition may reference — `netlab create` validates those
-    exist. Returns the ApiError as a value so the caller can restore lab state
-    before re-raising, rather than unwinding through an exception."""
-    artifacts = await run_in_threadpool(create_clab_topology, definition, templates)
+    exist. `node_files_target` (deploy only) materializes the generated
+    `node_files/` tree for the bind rewrite. Returns the ApiError as a value so
+    the caller can restore lab state before re-raising, rather than unwinding
+    through an exception."""
+    artifacts = await run_in_threadpool(
+        create_clab_topology, definition, templates, node_files_target
+    )
     if isinstance(artifacts, Err):
         return Err(_netlab_failed(artifacts.error.message, artifacts.error.stderr))
     return Ok(artifacts.value)
@@ -808,6 +819,57 @@ async def _release_host_bridges(
     _ = await lab_store.set_host_bridges(db, lab_name, None)
 
 
+def image_preflight_report(
+    artifacts: ClabArtifacts, present: frozenset[str]
+) -> tuple[list[str], list[str]]:
+    """The deploy image pre-flight's findings as `(fatal, warnings)` — pure so
+    it unit-tests without a runner. Fatal = a missing image whose device the
+    catalog marks local-only (never pullable, the deploy is IMPOSSIBLE);
+    warning = missing but pullable (docker pulls at deploy). Devices outside
+    the catalog count as pullable — unknown is not a reason to block."""
+    fatal: list[str] = []
+    warnings: list[str] = []
+    inner = artifacts.topology.get("topology")
+    nodes = cast("dict[str, object]", inner).get("nodes") if isinstance(inner, dict) else None
+    if not isinstance(nodes, dict):
+        return ([], [])
+    for name, node in cast("dict[str, object]", nodes).items():
+        image = cast("dict[str, object]", node).get("image") if isinstance(node, dict) else None
+        if not isinstance(image, str) or image_reference(image) in present:
+            continue
+        facts = artifacts.node_facts.get(name)
+        device = facts.get("device") if facts is not None else None
+        if isinstance(device, str) and device in LOCAL_ONLY_DEVICES:
+            fatal.append(f"node '{name}' needs image {image} (device {device})")
+        else:
+            warnings.append(
+                f"image {image} for node '{name}' is not on the host; "
+                "the deploy will try to pull it"
+            )
+    return (fatal, warnings)
+
+
+async def _image_preflight(runner: RunnerClient, artifacts: ClabArtifacts) -> ApiError | list[str]:
+    """Deploy's first job step (up-parity gap 3, decision 2026-08-04): reject
+    only an impossible deploy. Missing + local-only device → fail fast with a
+    friendly error instead of clab-api's late opaque 502; missing + pullable →
+    proceed, the warning rides the deploy result; runner unreachable → proceed
+    (the check must never add a failure mode of its own)."""
+    listed = await runner.list_images()
+    if isinstance(listed, Err):
+        return ["image pre-flight skipped: netlab-runner unreachable"]
+    fatal, warnings = image_preflight_report(artifacts, listed.value)
+    if fatal:
+        return ApiError(
+            409,
+            "image_missing",
+            "image(s) not on the host and not publicly pullable: "
+            + "; ".join(fatal)
+            + " — load them on the host, then redeploy",
+        )
+    return warnings
+
+
 async def _finish_deploy(
     deployed: DeployedLab,
     definition: str,
@@ -818,11 +880,13 @@ async def _finish_deploy(
     *,
     configure: bool,
     skip_config_time: bool,
+    warnings: list[str],
 ) -> DeployResponse:
     """Shared tail of deploy and redeploy: optionally push config, then run the
     config-time suites and build the response. Raises on a config-push failure; a
     config-time validation failure is reported (status `validation_failed`), not
-    raised — the lab stays deployed."""
+    raised — the lab stays deployed. `warnings` are the image pre-flight's
+    non-fatal findings, carried onto every outcome."""
     nodes = [n.node_name for n in deployed.nodes]
     # Always wait for the devices to actually be ready (NOS booted, accepting
     # SSH/console) before reporting the deploy done — even without a config push.
@@ -833,7 +897,9 @@ async def _finish_deploy(
     if isinstance(ready, Err):
         raise _ready_failed(ready.error)
     if not configure:
-        return DeployResponse(status="deployed", lab_name=deployed.name, nodes=nodes)
+        return DeployResponse(
+            status="deployed", lab_name=deployed.name, nodes=nodes, warnings=warnings
+        )
     pushed = await _push_config(runner, definition, templates)
     if isinstance(pushed, Err):
         raise pushed.error
@@ -848,6 +914,7 @@ async def _finish_deploy(
             nodes=nodes,
             configuration=configuration,
             validation=None,
+            warnings=warnings,
         )
     status, validation = await _run_config_time(
         runner, db, lab, definition, library, skip=skip_config_time
@@ -858,6 +925,7 @@ async def _finish_deploy(
         nodes=nodes,
         configuration=configuration,
         validation=validation,
+        warnings=warnings,
     )
 
 
@@ -909,6 +977,19 @@ async def update_lab_definition(
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+
+    # Legal netlab keys Twinlab decided to reject rather than silently ignore
+    # (up-parity decisions, docs/nos-sweep/): the dry create below would accept
+    # them and the deploy would quietly not honor them.
+    unsupported = find_unsupported_directives(request.definition)
+    if unsupported:
+        raise ApiError(
+            422,
+            "unsupported_directive",
+            "the definition uses netlab features Twinlab does not honor: "
+            + ", ".join(directive.key for directive in unsupported),
+            {"directives": [{"key": d.key, "reason": d.reason} for d in unsupported]},
+        )
 
     definition = _named_definition(request.definition, lab_name)
     definition, mgmt_subnet = await _resolve_mgmt_subnet(
@@ -978,6 +1059,7 @@ async def _deploy_job(
     library: BuiltinLibrary,
     lab_name: str,
     *,
+    lab_files_dir: str,
     previous_status: str,
     configure: bool,
     skip_config_time: bool,
@@ -995,20 +1077,35 @@ async def _deploy_job(
             raise ApiError(409, "no_definition", f"lab '{lab_name}' lost its definition")
         definition = lab.definition
         previous_bridges = list(lab.host_bridges or [])
-        generated = await _generate_topology(definition, _config_fileset(library, lab))
+        lab_dir = FsPath(lab_files_dir) / lab_name if lab_files_dir else None
+        generated = await _generate_topology(
+            definition,
+            _config_fileset(library, lab),
+            node_files_target=lab_dir / "node_files" if lab_dir is not None else None,
+        )
         if isinstance(generated, Err):
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise generated.error
         artifacts = generated.value
+        preflight = await _image_preflight(runner, artifacts)
+        if isinstance(preflight, ApiError):
+            _ = await lab_store.set_status(db, lab_name, previous_status)
+            raise preflight
+        image_warnings = preflight
         prep_failed = await _prepare_host(db, hostprep, lab_name, artifacts)
         if prep_failed is not None:
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise prep_failed
-        # We deploy inline (topologyContent) and ship no files, so drop binds
-        # netlab points at its generated node_files/* (e.g. cisco_iol's ifstate)
-        # — the clab kind regenerates them, and clab-api would otherwise reject
-        # the bind path.
-        shippable = strip_generated_binds(artifacts.topology)
+        # We deploy inline (topologyContent). With a lab-files directory the
+        # node_files/ tree was just materialized there, so point the generated
+        # binds at it — absolute, the same path dockerd mounts from and clab-api
+        # pre-flights in. Without one, fall back to dropping them (kinds that
+        # regenerate their files tolerate it; bind-dependent config doesn't).
+        shippable = (
+            rewrite_generated_binds(artifacts.topology, str(lab_dir))
+            if lab_dir is not None
+            else strip_generated_binds(artifacts.topology)
+        )
         deployed = await clab.deploy(shippable, reconfigure=True)
         if isinstance(deployed, Err):
             # Bridges created above are left in place (harmless when idle, and
@@ -1032,6 +1129,7 @@ async def _deploy_job(
             library,
             configure=configure,
             skip_config_time=skip_config_time,
+            warnings=image_warnings,
         )
 
 
@@ -1046,6 +1144,7 @@ async def deploy_lab(
     hostprep: HostPrepDep,
     db: SessionDep,
     library: BuiltinLibraryDep,
+    settings: SettingsDep,
     user: CurrentUserDep,
     request: DeployLabRequest | None = None,
 ) -> JobOut:
@@ -1086,6 +1185,7 @@ async def deploy_lab(
             hostprep,
             library,
             lab_name,
+            lab_files_dir=settings.lab_files_dir,
             previous_status=previous_status,
             configure=body.configure,
             skip_config_time=body.skip_config_time_checks,
@@ -1543,6 +1643,7 @@ async def _destroy_job(
     hostprep: HostPrepClient | None,
     lab_name: str,
     *,
+    lab_files_dir: str,
     remove: bool,
 ) -> DestroyResponse:
     """The destroy operation, inside a job task. The submit pre-check already
@@ -1564,6 +1665,14 @@ async def _destroy_job(
             teardown_detail = "lab was not running"
         else:
             teardown_detail = result.value
+
+        if lab_files_dir:
+            # The materialized node_files tree is a regenerable cache the next
+            # deploy fully replaces — best-effort removal, no claim semantics
+            # to protect (unlike host bridges).
+            await run_in_threadpool(
+                shutil.rmtree, FsPath(lab_files_dir) / lab_name, ignore_errors=True
+            )
 
         if remove:
             deleted = await lab_store.soft_delete(db, lab_name)
@@ -1588,6 +1697,7 @@ async def destroy_lab(
     clab: ClabClientDep,
     hostprep: HostPrepDep,
     db: SessionDep,
+    settings: SettingsDep,
     user: CurrentUserDep,
     remove: bool = False,
 ) -> JobOut:
@@ -1619,7 +1729,14 @@ async def destroy_lab(
     session_factory: SessionFactory = http_request.app.state.session_factory
 
     async def work() -> DestroyResponse:
-        return await _destroy_job(session_factory, clab, hostprep, lab_name, remove=remove)
+        return await _destroy_job(
+            session_factory,
+            clab,
+            hostprep,
+            lab_name,
+            lab_files_dir=settings.lab_files_dir,
+            remove=remove,
+        )
 
     spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)

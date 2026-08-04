@@ -564,6 +564,9 @@ class LabDetail:
     # set_lab_template toggle). Detail-only — the library view is
     # list_network_templates.
     template_published: bool
+    # The definition's top-level `message:` — the author's "how to use this
+    # lab" note (surfaced instead of silently dropped; up-parity gap 7).
+    message: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,6 +598,10 @@ class DeployResponse:
     nodes: list[str]  # short node names
     configuration: list[NodeConfigResult] | None
     validation: list["SuiteReport"] | None
+    # Non-fatal image pre-flight findings (a missing-but-pullable image, or
+    # the check skipped because the runner was unreachable). A missing image
+    # of a local-only device fails the job (`image_missing`) instead.
+    warnings: list[str]
 
 
 @dataclass(frozen=True, slots=True)

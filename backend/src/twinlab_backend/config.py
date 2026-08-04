@@ -42,6 +42,7 @@ _OPTIONAL_ENV_KEYS = {
     "ssh_jump_address": "SSH_JUMP_ADDRESS",
     "hostprep_url": "HOSTPREP_URL",
     "hostprep_token": "HOSTPREP_TOKEN",
+    "lab_files_dir": "LAB_FILES_DIR",
 }
 
 
@@ -85,6 +86,17 @@ class Settings(BaseModel):
     ssh_jump_token: SecretStr | None = None
     ssh_jump_address: str = ""
 
+    # Host-shared lab-files directory: where deploy materializes netlab's
+    # generated `node_files/` so the topology's binds can be rewritten to
+    # absolute paths instead of stripped (frr's daemons file, the shared
+    # /etc/hosts, sh-mode config scripts all ride binds). SAME-PATH INVARIANT:
+    # this must be the directory's path on the host AND its mount point in both
+    # the backend and clab-api containers — dockerd resolves bind sources on the
+    # host, clab-api pre-flights them in its own fs (see compose). Optional in
+    # code — unset keeps the strip behavior — while the compose stack always
+    # sets it.
+    lab_files_dir: str = ""
+
     # Host-preparation sidecar (lab bridges + kernel modules). Optional in code
     # — the backend runs without it and only a deploy that NEEDS host prep
     # fails, with a clear job error — while the compose stack requires the
@@ -99,6 +111,15 @@ class Settings(BaseModel):
         if bool(self.hostprep_url) != (self.hostprep_token is not None):
             raise ValueError("HOSTPREP_URL and HOSTPREP_TOKEN must be set together")
         return self
+
+    @field_validator("lab_files_dir")
+    @classmethod
+    def _lab_files_dir_is_absolute(cls, value: str) -> str:
+        # The path goes verbatim into bind specs dockerd resolves on the host —
+        # a relative one would silently resolve against dockerd's cwd.
+        if value and not value.startswith("/"):
+            raise ValueError("LAB_FILES_DIR must be an absolute path")
+        return value
 
     @field_validator("ssh_jump_address")
     @classmethod

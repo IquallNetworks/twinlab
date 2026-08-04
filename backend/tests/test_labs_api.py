@@ -7,6 +7,7 @@ import pytest
 
 from twinlab_backend.api.labs import (
     apply_runtime_actions,
+    image_preflight_report,
     lab_detail,
     lab_summary,
     link_oper_state,
@@ -28,7 +29,7 @@ from twinlab_backend.models import (
 )
 from twinlab_backend.result import Err, Ok, Result
 from twinlab_backend.services.clab_api import ClabApiClient, ClabApiError, NodeInfo
-from twinlab_backend.services.netlab import TopologyLink, TopologyLinkEndpoint
+from twinlab_backend.services.netlab import ClabArtifacts, TopologyLink, TopologyLinkEndpoint
 
 _TS = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
 
@@ -140,6 +141,56 @@ def test_detail_drift_comparison_is_exact_text() -> None:
     lab = _lab("tmp1", "deployed", None)
     lab.deployed_definition = "name: x\n\n"
     assert lab_detail(lab, (), []).definition_drifted is True
+
+
+def _artifacts(nodes: dict[str, str], devices: dict[str, str]) -> ClabArtifacts:
+    return ClabArtifacts(
+        topology={"topology": {"nodes": {name: {"image": image} for name, image in nodes.items()}}},
+        links=[],
+        node_facts={name: {"device": device} for name, device in devices.items()},
+        host_bridges=(),
+        kernel_modules=(),
+    )
+
+
+def testimage_preflight_report_missing_local_only_is_fatal() -> None:
+    # iol is catalog-marked local-only: a missing image means the deploy is
+    # impossible — fatal. The present image raises nothing.
+    artifacts = _artifacts(
+        {"r1": "vrnetlab/cisco_iol:17.16.01a", "r2": "vrnetlab/cisco_iol:missing"},
+        {"r1": "iol", "r2": "iol"},
+    )
+    fatal, warnings = image_preflight_report(artifacts, frozenset({"vrnetlab/cisco_iol:17.16.01a"}))
+    assert warnings == []
+    assert fatal == ["node 'r2' needs image vrnetlab/cisco_iol:missing (device iol)"]
+
+
+def testimage_preflight_report_missing_pullable_is_warning() -> None:
+    # linux is pullable, and a device OUTSIDE the catalog (frr) counts as
+    # pullable too — unknown is not a reason to block. Untagged names
+    # normalize to :latest for the presence match.
+    artifacts = _artifacts(
+        {"n1": "python:3.13-alpine", "f1": "quay.io/frrouting/frr:10.6.1"},
+        {"n1": "linux", "f1": "frr"},
+    )
+    fatal, warnings = image_preflight_report(artifacts, frozenset({"python:3.13-alpine"}))
+    assert fatal == []
+    assert warnings == [
+        "image quay.io/frrouting/frr:10.6.1 for node 'f1' is not on the host; "
+        "the deploy will try to pull it"
+    ]
+    all_present = frozenset({"python:3.13-alpine", "quay.io/frrouting/frr:10.6.1"})
+    assert image_preflight_report(artifacts, all_present) == ([], [])
+
+
+def test_detail_surfaces_topology_message() -> None:
+    # Up-parity gap 7: the definition's `message:` (the note `netlab up` would
+    # print) rides the detail instead of being silently dropped.
+    lab = _lab("tmp1", "created", None)
+    lab.definition = "name: tmp1\nmessage: Use ssh to reach r1.\n"
+    assert lab_detail(lab, (), []).message == "Use ssh to reach r1."
+    lab.definition = None
+    assert lab_detail(lab, (), []).message is None
 
 
 def test_layout_request_accepts_opaque_ids_and_clears_empty() -> None:

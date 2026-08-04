@@ -96,6 +96,70 @@ async def test_update_definition_not_yaml_is_422(
     assert excinfo.value.status_code == 422
 
 
+async def test_deploy_missing_local_only_image_fails_fast(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Image pre-flight (up-parity gap 3): a missing image for a local-only
+    device (iol — never publicly pullable) fails the deploy job up front with
+    a friendly `image_missing` error instead of clab-api's late opaque 502.
+    Nothing touches the host, so this stays in the cheap slice."""
+    lab = await make_lab(None)
+    definition = (
+        "provider: clab\n"
+        "defaults.device: iol\n"
+        "nodes:\n"
+        "  r1:\n"
+        "    image: vrnetlab/cisco_iol:never-pulled\n"
+    )
+    _ = await admin.update_definition(lab.name, definition)
+    job = await admin.deploy_lab(lab.name)
+    done = await admin.wait_job(lab.name, job.id, timeout=120)
+    assert done.status == "failed"
+    assert done.error is not None and done.error.code == "image_missing"
+    assert "vrnetlab/cisco_iol:never-pulled" in done.error.message
+    # The failure restored the pre-deploy status.
+    assert (await admin.get_lab(lab.name)).status == "created"
+
+
+async def test_definition_message_is_surfaced(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    """Up-parity gap 7: the definition's `message:` (the author's how-to note
+    `netlab up` would print) rides LabDetail instead of being dropped."""
+    lab = await make_lab(None)
+    assert (await admin.get_lab(lab.name)).message is None
+    detail = await admin.update_definition(
+        lab.name, LINUX_LAB_DEFINITION + "message: Ping n2 from n1.\n"
+    )
+    assert detail.message == "Ping n2 from n1."
+
+
+async def test_update_definition_rejects_unsupported_directives(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Legal netlab keys Twinlab decided to reject rather than silently ignore
+    (up-parity decisions): tools:, up/down shell hooks, OVS bridge type. The
+    definition would pass netlab's own validation — the 422 names each key."""
+    lab = await make_lab(None)
+    definition = LINUX_LAB_DEFINITION + (
+        "tools:\n  graphite:\n"
+        "defaults.netlab.up.pre_transform: echo hi\n"
+        "defaults.providers.clab.bridge_type: ovs-bridge\n"
+    )
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.update_definition(lab.name, definition)
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "unsupported_directive"
+    directives = excinfo.value.extras["directives"]
+    assert isinstance(directives, list)
+    assert {d["key"] for d in directives} == {
+        "tools",
+        "defaults.netlab.up",
+        "defaults.providers.clab.bridge_type",
+    }
+    # Nothing was stored — the record still has no definition.
+    detail = await admin.get_lab(lab.name)
+    assert detail.definition is None
+
+
 async def test_deploy_without_definition_is_409(admin: TwinlabClient, make_lab: LabFactory) -> None:
     lab = await make_lab(None)
     with pytest.raises(TwinlabApiError) as excinfo:

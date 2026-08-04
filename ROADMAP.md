@@ -753,7 +753,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     the raw netlab node dict is provisional; `GET /labs/{name}/facts` is the
     insulation layer).
 
-### NOS platform sweep — and the two reviews it informs · **planned** (after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
+### NOS platform sweep — and the two reviews it informs · **in progress** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
 
 17. **One work item with three strands, run in parallel.** The sweep is the
     driver; the two reviews were previously carried as unsequenced items 18 and
@@ -761,6 +761,18 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     *informed by what the sweep finds* — the platform matrix decides what an
     image pre-flight must cover and where the builder's typed core actually
     falls short. They run alongside the sweep, not after it.
+
+    **Opened 2026-08-04 with three parallel analyses, recorded in
+    `docs/nos-sweep/`** (acquisition matrix, full up-parity audit, builder
+    coverage inventory — the README there carries the decision log). The
+    strand texts below predate those analyses; where they disagree, the docs
+    are authoritative. Corrections so far: netlab's `tc:` has SEVEN knobs to
+    our netem API's five (`duplicate`/`reorder` are not expressible over
+    clab-api netem), the up-parity gap list is seven items, not three (the
+    inline-deploy bind loss is device-wide — it breaks `/etc/hosts` on the
+    supported `linux` device and blocks FRR/XRd/cRPD/cSRX/cumulus/daemons
+    config entirely — plus up/down shell hooks, OVS bridge type, and topology
+    `message`), and `netlab down` adds no gap beyond tools + hooks.
 
     **17.1 — Research, obtain, and test as many NOSes as possible.**
     containerlab's kinds list is the starting inventory, netlab's device list
@@ -785,26 +797,53 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     definition content or a late opaque error; "never silent" is the agreed
     principle, and **each needs a maintainer decision before implementation**:
     - **`tc:` link/interface attributes are silently dropped.** First-class netlab
-      schema (the same seven knobs as our netem API), applied by `netlab up` after
+      schema (SEVEN knobs — delay, jitter, loss, corrupt, duplicate, reorder,
+      rate — vs the netem API's five: `duplicate`/`reorder` don't exist on the
+      clab-api netem path), applied by `netlab up` after
       start via `execute_tc_commands`. A definition carrying `tc:` validates and
       deploys with no impairment — violating definition-is-source-of-truth.
-      Options: reject/warn at PUT, or honor it post-deploy through the existing
-      clab-api netem path (attractive: impairment reproducible-by-definition;
-      wrinkle: baseline-vs-runtime-override semantics against the netem API).
+      DECIDED 2026-08-04: honor it with ONE unified application method for
+      baseline and runtime — the existing clab-api netem path (no second
+      raw-`tc` channel; a baseline is a batch the deploy job submits through
+      the delta-24 executor); consequence: `tc.duplicate`/`tc.reorder` reject
+      loudly at PUT. Contract **delta 25 SKETCHED 2026-08-04, then DEFERRED to
+      the END of item 17** — the maintainer wants to re-analyze before it
+      proceeds; the sketch (deploy applies after readiness and fails loudly;
+      power verbs reapply after restart; runtime sets override; clear reverts
+      to baseline) is a starting point, not an approved design.
       *Interacts with 16.5* — impairment schedules are the scenario item's other
       half, so settle the baseline-vs-runtime question once, for both.
     - **`tools:` is silently dropped** (graphite, suzieq, nuts, nso, edgeshark —
-      side containers `up`/`down` would start). Standing recommendation: declare
-      out of scope *explicitly* (reject or strip-with-warning), not build it.
+      side containers `up`/`down` would start). DECIDED 2026-08-04: reject at
+      PUT; reconsider later. **SHIPPED same day** (422 `unsupported_directive`).
     - **No pre-flight image check** — deploy fails late with an opaque 502 from
       clab-api when an image is missing, where `netlab up`'s `validate_images`
       gives friendly pull/build hints first. *Landscape changed since the audit:*
       contract delta 18 gave the runner `GET /images` and the backend the matching
       policy (the catalog's best-effort presence), so the visibility problem is
-      solved — the remaining decision is deploy-time semantics: hard-block vs
-      warn, and what a degraded check (runner unreachable) does. **This is why
+      solved — DECIDED 2026-08-04: reject only when the deploy is impossible
+      (absent + catalog-marked local-only → fail fast with a friendly
+      `image_missing`; absent + pullable → proceed with a warning; runner
+      unreachable → proceed). **SHIPPED same day** (`DeployResponse.warnings`,
+      `CatalogDeviceSpec.local_only`). **This is why
       the strand runs with the sweep**: 17.1 multiplies the image set and is the
       first consumer of a friendly missing-image error.
+    - **Four more gaps found by the fresh audit (2026-08-04, detail in
+      `docs/nos-sweep/netlab-up-gaps.md`; decisions in the README there):** the
+      inline-deploy bind loss (gap 4 — DECIDED and **SHIPPED 2026-08-04**:
+      host-shared `LAB_FILES_DIR` + bind REWRITE, same-path invariant across
+      backend and clab-api; fixes the linux `/etc/hosts` regression —
+      blackbox ping-by-name, 137 green — and FRR is proven live end-to-end,
+      OSPF Full, pending formal admission by the sweep), up/down shell +
+      plugin CLI hooks
+      never run (gap 5 — DECIDED: reject the keys and document the security
+      rationale), OVS bridge type silently gets Linux bridges (gap 6 —
+      DECIDED: reject at PUT, REVISIT if the sweep's L2 testing needs it), and
+      topology `message` dropped (gap 7 — DECIDED: surface it). **Gaps 2, 5,
+      6, 7 ALL SHIPPED 2026-08-04** (the `unsupported_directive` PUT batch +
+      `LabDetail.message`); with gaps 3 and 4 shipped the same day, gap 1
+      (delta 25) is the strand's only open item, DEFERRED to the end of
+      item 17 for re-analysis — blackbox 140/140.
 
     **17.3 — Review extending the builder's supported configuration surface.**
     The Build tab's Visual mode covers a deliberate typed core (nodes, p2p/LAN/
@@ -822,6 +861,15 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     in 17.1 — **that shared boundary is the second reason these run together**:
     the promotion decisions land against the supported set the sweep settles,
     and the catalog is the one surface both strands write to.
+    **Scoped 2026-08-04** off the full inventory
+    (`docs/nos-sweep/builder-coverage-gaps.md`): the Tier A structural-gate
+    batch is AGREED — hyphenated names, nodes-as-dict-list, list-form dict
+    members, dict-of-lists links (typed listName, lossless), link groups
+    (expand-on-parse with notice), self-links (SUPPORT), components minimum
+    step, hierarchical group members, the 16-char name cap. Tier B
+    extras→typed promotions (module presence ×14, subkey splits, field
+    promotions, vlans, …) are DEFERRED to their own review after the sweep
+    work, before v1.0.
 
 ### i18n · **deferred**
 

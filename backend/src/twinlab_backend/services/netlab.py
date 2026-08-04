@@ -16,6 +16,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -39,8 +40,10 @@ _TEMPLATE_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*\.j2$")
 type ClabTopology = dict[str, object]
 
 # netlab writes per-node bind sources under this relative dir (e.g.
-# `node_files/pe1/ifstate` for cisco_iol). Twinlab deploys the topology inline
-# and ships no working-directory files, so binds pointing here can't be honored.
+# `node_files/pe1/ifstate` for cisco_iol). Twinlab deploys the topology inline,
+# so relative binds only work when the tree is materialized on the host-shared
+# lab-files directory and rewritten absolute (`rewrite_generated_binds`); with
+# no such directory configured they are stripped instead.
 _GENERATED_BIND_PREFIX = "node_files/"
 
 # `netlab create` writes the containerlab topology under this fixed name in its
@@ -338,6 +341,22 @@ def read_lab_name(definition: str) -> str | None:
     return None
 
 
+def read_message(definition: str) -> str | None:
+    """The definition's top-level `message:` — the author's "how to use this
+    lab" note `netlab up` would print after configuring (up-parity gap 7:
+    surfaced on LabDetail instead of silently dropped). None if
+    absent/unparseable/not a string."""
+    try:
+        parsed: Any = yaml.safe_load(definition)
+    except yaml.YAMLError:
+        return None
+    if isinstance(parsed, dict):
+        message = cast("dict[str, object]", parsed).get("message")
+        if isinstance(message, str):
+            return message
+    return None
+
+
 def set_lab_name(definition: str, name: str) -> Result[str, NetlabError]:
     """Return the definition with its top-level `name:` set to `name`, so a lab's
     identity is stable across create/deploy/configure."""
@@ -415,7 +434,9 @@ def _write_templates(workdir: Path, templates: dict[str, str]) -> NetlabError | 
 
 
 def create_clab_topology(
-    definition: str, templates: dict[str, str] | None = None
+    definition: str,
+    templates: dict[str, str] | None = None,
+    node_files_target: Path | None = None,
 ) -> Result[ClabArtifacts, NetlabError]:
     """Run `netlab create` on a netlab definition and return the generated
     containerlab topology plus the logical link table. The definition must state
@@ -423,7 +444,10 @@ def create_clab_topology(
     `templates` is the custom-config fileset the definition may reference
     (built-in + user); netlab validates their existence at create time, so they
     are written into the workdir first. Omit it for a definition with no custom
-    config."""
+    config. `node_files_target` (the deploy path only) materializes the
+    generated `node_files/` tree there — full replace, permissions preserved —
+    so `rewrite_generated_binds` can point the topology's binds at it instead
+    of stripping them."""
     with tempfile.TemporaryDirectory() as workdir:
         source = Path(workdir) / "topology.yml"
         _ = source.write_text(definition)
@@ -473,6 +497,11 @@ def create_clab_topology(
         except OSError as exc:
             return Err(NetlabError(f"netlab create output missing: {exc}", proc.stderr))
 
+        if node_files_target is not None:
+            materialized = _materialize_node_files(Path(workdir) / "node_files", node_files_target)
+            if materialized is not None:
+                return Err(materialized)
+
     try:
         parsed: Any = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
@@ -504,16 +533,127 @@ def create_clab_topology(
     )
 
 
-def strip_generated_binds(topology: ClabTopology) -> ClabTopology:
-    """Drop per-node binds whose source is a netlab-generated `node_files/*` path.
+@dataclass(frozen=True, slots=True)
+class UnsupportedDirective:
+    key: str
+    reason: str
 
-    Twinlab deploys the topology inline (clab-api `topologyContent`) and ships no
-    working-directory files, so such a bind can't be satisfied on the clab-api
-    host — clab-api rejects the deploy with "failed to verify bind path". The
-    containerlab kind regenerates what it needs from the topology itself (e.g.
-    cisco_iol's `ifstate`), so dropping these binds is safe. A node left with no
-    binds loses the now-empty `binds` key. Returns a new topology; the input is
-    not mutated."""
+
+def _flatten_paths(
+    mapping: dict[object, object], prefix: tuple[str, ...]
+) -> list[tuple[tuple[str, ...], object]]:
+    """Every (path, value) in a definition mapping, with dotted keys split —
+    netlab treats `defaults.netlab.up:` and nested `defaults: {netlab: {up:`
+    identically, so the checks below must too."""
+    entries: list[tuple[tuple[str, ...], object]] = []
+    for key, value in mapping.items():
+        if not isinstance(key, str):
+            continue
+        path = prefix + tuple(key.split("."))
+        entries.append((path, value))
+        if isinstance(value, dict):
+            entries.extend(_flatten_paths(cast("dict[object, object]", value), path))
+    return entries
+
+
+def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
+    """Definition keys that are legal netlab schema but that Twinlab REJECTS
+    rather than silently ignores (up-parity decisions, docs/nos-sweep/):
+    `tools:` side containers never start here, `defaults.netlab.up/down` shell
+    hooks never run (arbitrary shell from a stored definition on a multi-user
+    server is off the table — only the silence was the bug), and an OVS
+    `bridge_type` would silently get Linux bridges from hostprep. An
+    unparseable or non-mapping definition returns [] — the dry `netlab create`
+    stays the syntax authority."""
+    try:
+        parsed: Any = yaml.safe_load(definition)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    found: dict[str, UnsupportedDirective] = {}
+    for path, value in _flatten_paths(cast("dict[object, object]", parsed), ()):
+        if path[0] == "tools":
+            found["tools"] = UnsupportedDirective(
+                "tools", "netlab's side-container tools are not started by Twinlab"
+            )
+        elif path[:3] in (("defaults", "netlab", "up"), ("defaults", "netlab", "down")):
+            key = ".".join(path[:3])
+            found[key] = UnsupportedDirective(
+                key, "up/down shell hooks never run on a multi-user server"
+            )
+        elif path == ("defaults", "providers", "clab", "bridge_type") and value == "ovs-bridge":
+            found["defaults.providers.clab.bridge_type"] = UnsupportedDirective(
+                "defaults.providers.clab.bridge_type",
+                "OVS bridges are not supported — hostprep creates Linux bridges",
+            )
+    return sorted(found.values(), key=lambda directive: directive.key)
+
+
+def _materialize_node_files(source: Path, target: Path) -> NetlabError | None:
+    """Replace `target` with the workdir's freshly generated `node_files/` tree
+    (permissions preserved — sh-mode config scripts carry their exec bit). A
+    topology that generated no files removes any stale tree, so a previous
+    deploy's files can never leak into this one. Filesystem I/O is the boundary;
+    failures come back typed."""
+    try:
+        if target.exists():
+            shutil.rmtree(target)
+        if source.is_dir():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _ = shutil.copytree(source, target)
+    except OSError as exc:
+        return NetlabError(f"could not materialize lab files at {target}: {exc}", "")
+    return None
+
+
+def rewrite_generated_binds(topology: ClabTopology, node_files_parent: str) -> ClabTopology:
+    """Point per-node binds at the materialized `node_files/` tree: every bind
+    whose source is a relative netlab-generated path gets `node_files_parent`
+    (an absolute directory, same path on the host and in the clab-api container
+    — see compose) prepended, so dockerd can mount it and clab-api's bind
+    pre-flight can see it. A relative `startup-config` is rewritten the same way
+    — inline deploy would otherwise ship it unsatisfiable. Everything else is
+    untouched; returns a new topology, the input is not mutated."""
+    prefix = node_files_parent.rstrip("/")
+    result = copy.deepcopy(topology)
+    inner = result.get("topology")
+    if not isinstance(inner, dict):
+        return result
+    nodes = cast("dict[str, object]", inner).get("nodes")
+    if not isinstance(nodes, dict):
+        return result
+    for node in cast("dict[str, object]", nodes).values():
+        if not isinstance(node, dict):
+            continue
+        node_map = cast("dict[str, object]", node)
+        binds = node_map.get("binds")
+        if isinstance(binds, list):
+            node_map["binds"] = [
+                f"{prefix}/{bind}"
+                if isinstance(bind, str) and bind.startswith(_GENERATED_BIND_PREFIX)
+                else bind
+                for bind in cast("list[object]", binds)
+            ]
+        startup = node_map.get("startup-config")
+        if isinstance(startup, str) and startup.startswith(_GENERATED_BIND_PREFIX):
+            node_map["startup-config"] = f"{prefix}/{startup}"
+    return result
+
+
+def strip_generated_binds(topology: ClabTopology) -> ClabTopology:
+    """Drop per-node binds whose source is a netlab-generated `node_files/*` path
+    — the fallback when no lab-files directory is configured (LAB_FILES_DIR
+    unset; the compose stack always sets it, so this covers hand-rolled setups).
+
+    Twinlab deploys the topology inline (clab-api `topologyContent`); with no
+    materialized tree such a bind can't be satisfied on the clab-api host —
+    clab-api rejects the deploy with "failed to verify bind path". Dropping is
+    tolerable for kinds that regenerate what they need from the topology itself
+    (e.g. cisco_iol's `ifstate`) and silently degrades the rest (frr's daemons
+    file, the shared /etc/hosts) — which is why the rewrite path above is the
+    real fix. A node left with no binds loses the now-empty `binds` key. Returns
+    a new topology; the input is not mutated."""
     result = copy.deepcopy(topology)
     inner = result.get("topology")
     if not isinstance(inner, dict):

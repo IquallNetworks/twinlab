@@ -24,6 +24,11 @@ class CatalogDeviceSpec:
     # e.g. linux dhcp, libvirt-only — does not count).
     modules: tuple[str, ...]
     image: str  # netlab's default clab image (untagged means ":latest")
+    # True when the device's images can never be pulled from a public registry
+    # (proprietary, loaded on the host manually). The deploy image pre-flight
+    # (up-parity gap 3) fails fast on a missing local-only image, where a
+    # missing pullable one is only a warning — docker pulls at deploy.
+    local_only: bool
 
 
 SUPPORTED_DEVICES: tuple[CatalogDeviceSpec, ...] = (
@@ -47,6 +52,7 @@ SUPPORTED_DEVICES: tuple[CatalogDeviceSpec, ...] = (
             "vxlan",
         ),
         image="ghcr.io/sysoleg/vyos-container",
+        local_only=False,
     ),
     CatalogDeviceSpec(
         device="iol",
@@ -71,6 +77,7 @@ SUPPORTED_DEVICES: tuple[CatalogDeviceSpec, ...] = (
             "vxlan",
         ),
         image="vrnetlab/cisco_iol:17.16.01a",
+        local_only=True,
     ),
     CatalogDeviceSpec(
         device="linux",
@@ -78,7 +85,13 @@ SUPPORTED_DEVICES: tuple[CatalogDeviceSpec, ...] = (
         role="host",
         modules=("lag", "routing", "vlan"),
         image="python:3.13-alpine",
+        local_only=False,
     ),
+)
+
+# The pre-flight's fatal set, derived so it can never drift from the catalog.
+LOCAL_ONLY_DEVICES: frozenset[str] = frozenset(
+    spec.device for spec in SUPPORTED_DEVICES if spec.local_only
 )
 
 

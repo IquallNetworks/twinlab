@@ -59,8 +59,18 @@ services:
       # network like clab-api — reached through the same host gateway.
       HOSTPREP_URL: http://host.docker.internal:8091
       HOSTPREP_TOKEN: ${HOSTPREP_TOKEN:?set HOSTPREP_TOKEN in .env (openssl rand -hex 32)}
+      # Host-shared lab files: deploy materializes netlab's generated
+      # node_files/ here and rewrites the topology's binds to absolute paths
+      # (frr's daemons file, the shared /etc/hosts, sh-mode config scripts all
+      # ride binds). SAME-PATH INVARIANT: the value is one absolute path used
+      # verbatim on the host, in this container, and in clab-api's mount —
+      # dockerd resolves bind sources on the host, clab-api pre-flights them
+      # in its own fs. Required so the stack can't silently strip binds.
+      LAB_FILES_DIR: ${LAB_FILES_DIR:?set LAB_FILES_DIR in .env (absolute path, e.g. /var/lib/twinlab/lab-files)}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ${LAB_FILES_DIR:?}:${LAB_FILES_DIR:?}
     # No host port: the backend is reached only through the frontend's /api/v1
     # proxy (over the compose network), keeping a single same-origin ingress. It
     # still listens on 8000 inside the network for the proxy and health checks.
@@ -239,6 +249,10 @@ services:
       # actual mount happens on the host daemon. vyos nodes bind /lib/modules,
       # so it must exist here (same path) as well as on the host.
       - /lib/modules:/lib/modules:ro
+      # The backend's materialized lab files (node_files/ per lab), same-path
+      # so the pre-flight sees exactly what dockerd will mount. Read-only:
+      # only the backend writes here.
+      - ${LAB_FILES_DIR:?set LAB_FILES_DIR in .env}:${LAB_FILES_DIR:?}:ro
       - /etc/passwd:/etc/passwd:ro
       - /etc/shadow:/etc/shadow:ro
       - /etc/group:/etc/group:ro

@@ -623,6 +623,7 @@ def parse_lab_detail(value: object) -> LabDetail:
         config_time_status=_get_literal(obj, "config_time_status", where, CONFIG_TIME_STATUSES),
         permissions=_get_str_set(obj, "permissions", where),
         template_published=_get_bool(obj, "template_published", where),
+        message=_get_opt_str(obj, "message", where),
     )
 
 
@@ -654,6 +655,7 @@ def parse_deploy_response(value: object) -> DeployResponse:
         nodes=_get_str_list(obj, "nodes", where),
         configuration=_parse_opt_configuration(_req(obj, "configuration", where), where),
         validation=_parse_opt_validation(_req(obj, "validation", where), where),
+        warnings=_get_str_list(obj, "warnings", where) if "warnings" in obj else [],
     )
 
 

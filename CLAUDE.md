@@ -50,7 +50,7 @@ inferred adjacency was removed — and delta 24 batch runtime actions, approved
 2026-08-04: the v1.0 remnant of the SHELVED scenario item, many netem
 impairments + node power events in one request). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 136 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 140 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -228,7 +228,13 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build`.
 - **`backend/`** — FastAPI (uv, **Python 3.14**, ids are stdlib **UUIDv7**). Turns a declarative
   netlab definition into a running lab: runs `netlab create` to generate a containerlab topology,
-  then deploys it through the clab-api server (piped inline as `topologyContent`). Config push is
+  then deploys it through the clab-api server (piped inline as `topologyContent`); the generated
+  `node_files/` tree is materialized per lab on the host-shared `LAB_FILES_DIR` and the topology's
+  relative binds (and any relative `startup-config`) are REWRITTEN absolute onto it — same-path
+  invariant, dockerd mounts and clab-api pre-flights the identical path — so bind-delivered
+  artifacts (the all-nodes `/etc/hosts`, frr's daemons file, sh-mode config scripts) survive
+  inline deploy; destroy best-effort removes the regenerable tree, and with the env unset binds
+  are stripped as before (hand-rolled setups). Config push is
   delegated to the netlab-runner. **Every non-2xx wears one error envelope** `{code, message,
   extras}` (`api_errors.py`: ApiError + handlers covering FastAPI validation and framework errors;
   stable code slugs like `lab_not_found`, `permission_denied`, `netlab_invalid`). **Lab lifecycle
@@ -236,9 +242,15 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `created`, no definition) and allocates the lab's management `/24` from `MGMT_SUBNET_POOL` up
   front; `PUT /labs/{name}` authors/replaces the stored definition (validated by a dry `netlab
   create`; the record's name and subnet are re-pinned into it — `set_lab_name`/`set_mgmt_subnet`,
-  an explicit `addressing.mgmt.ipv4` wins); `POST /labs/{name}/deploy` is the ONLY deploy verb —
+  an explicit `addressing.mgmt.ipv4` wins; legal netlab keys Twinlab does not honor — `tools:`,
+  `defaults.netlab.up/down` shell hooks, OVS `bridge_type` — are 422 `unsupported_directive`
+  rather than silently ignored, and the definition's top-level `message:` rides `LabDetail` —
+  up-parity gaps 2/5/6/7, decisions in `docs/nos-sweep/`); `POST /labs/{name}/deploy` is the ONLY deploy verb —
   from the stored definition, fresh or overwrite-in-place, opt-in `configure`; 409 `no_definition`
-  on an unauthored record. **The four long operations (deploy/configure/destroy/suite-run) are
+  on an unauthored record; the deploy job's first step is an **image pre-flight** (gap 3): a
+  missing image whose device the catalog marks `local_only` (iol) fails fast with a friendly
+  `image_missing` job error, missing-but-pullable images only warn (`DeployResponse.warnings`),
+  and a runner outage skips the check. **The four long operations (deploy/configure/destroy/suite-run) are
   ASYNC JOBS** (contract delta 12): pre-accept checks stay synchronous, then the route returns
   **202 + a running Job** and the work runs in an in-process task; callers poll `GET
   /labs/{name}/jobs/{id}` (+ `GET .../jobs?limit=`, both `lab:read`, readable on a soft-deleted
@@ -498,12 +510,17 @@ format` + `ruff check`, basedpyright (strict), pytest.
 
 **Supported NOS platforms are VyOS and Cisco IOL — the tested set (maintainer's call
 2026-07-31)** — plus `linux` as the host/endpoint device; the builder's device catalog offers
-exactly these. Other netlab devices are out of scope for now, not merely unpolished: FRR in
-particular is untested AND its clab config path (sh-mode scripts delivered as clab binds) is known
-not to survive Twinlab's inline deploy, which strips `node_files/*` binds. A definition naming
+exactly these. Other netlab devices are out of scope for now, not merely unpolished. The old
+hard blocker is gone: netlab delivers some config as `node_files/*` clab binds, which inline
+deploy used to strip — since 2026-08-04 the deploy job **materializes that tree onto the
+host-shared `LAB_FILES_DIR` and rewrites the binds absolute** (same-path invariant: one path on
+the host and in the backend and clab-api mounts; see compose), so bind-delivered config works.
+FRR is proven live through that path (deploy + daemons file + sh-mode config push + OSPF Full)
+but stays OUTSIDE the supported set until the sweep formally admits it. A definition naming
 another device is not rejected — it edits as text and may even deploy — but nothing about it is
 promised. Widening the set is a maintainer decision that starts with testing, not a catalog edit —
-a pre-v1.0 **NOS platform sweep** (ROADMAP item 17, added 2026-08-03) is planned as exactly that
+a pre-v1.0 **NOS platform sweep** (ROADMAP item 17, added 2026-08-03, opened 2026-08-04 — the
+three analyses + decision log live in `docs/nos-sweep/`) is exactly that
 testing: obtain and exercise as many containerlab-kind NOSes as possible (images are used, never
 distributed) to confirm or deny support and shake out bugs before the release.
 

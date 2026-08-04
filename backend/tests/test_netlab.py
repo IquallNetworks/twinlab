@@ -9,8 +9,11 @@ from twinlab_backend.services.netlab import (
     DEVICE_KMODS,
     PROVIDER_KMODS,
     create_clab_topology,
+    find_unsupported_directives,
     read_lab_name,
+    read_message,
     read_mgmt_subnet,
+    rewrite_generated_binds,
     set_lab_name,
     set_mgmt_subnet,
     strip_generated_binds,
@@ -270,3 +273,134 @@ def test_strip_generated_binds_drops_node_files_binds() -> None:
 def test_strip_generated_binds_tolerates_missing_sections() -> None:
     # No topology/nodes sections -> returned unchanged, no error.
     assert strip_generated_binds({"name": "lab"}) == {"name": "lab"}
+
+
+def test_rewrite_generated_binds_points_at_lab_files_dir() -> None:
+    # Generated binds gain the absolute lab-files prefix (mount flags intact),
+    # genuine host binds and everything else stay untouched, and a relative
+    # startup-config is rewritten the same way — inline deploy would otherwise
+    # ship it unsatisfiable.
+    topology: dict[str, object] = {
+        "name": "lab",
+        "topology": {
+            "nodes": {
+                "n1": {
+                    "kind": "linux",
+                    "binds": [
+                        "node_files/n1/hosts:/etc/hosts:ro",
+                        "/lib/modules:/lib/modules:ro",
+                    ],
+                },
+                "r1": {"kind": "ios", "startup-config": "node_files/r1/startup.partial.config"},
+            }
+        },
+    }
+    rewritten = rewrite_generated_binds(topology, "/var/lib/twinlab/lab-files/lab")
+    nodes = cast(
+        "dict[str, dict[str, object]]", cast("dict[str, object]", rewritten["topology"])["nodes"]
+    )
+    assert nodes["n1"]["binds"] == [
+        "/var/lib/twinlab/lab-files/lab/node_files/n1/hosts:/etc/hosts:ro",
+        "/lib/modules:/lib/modules:ro",
+    ]
+    assert nodes["r1"]["startup-config"] == (
+        "/var/lib/twinlab/lab-files/lab/node_files/r1/startup.partial.config"
+    )
+    # The input is not mutated.
+    original = cast(
+        "dict[str, dict[str, object]]", cast("dict[str, object]", topology["topology"])["nodes"]
+    )
+    assert original["n1"]["binds"] == [
+        "node_files/n1/hosts:/etc/hosts:ro",
+        "/lib/modules:/lib/modules:ro",
+    ]
+
+
+def test_rewrite_generated_binds_tolerates_missing_sections() -> None:
+    assert rewrite_generated_binds({"name": "lab"}, "/data/lab") == {"name": "lab"}
+
+
+def test_find_unsupported_directives_clean_definition() -> None:
+    assert find_unsupported_directives(_VALID_DEFINITION) == []
+    # Unparseable / non-mapping input is not this check's business — the dry
+    # `netlab create` stays the syntax authority.
+    assert find_unsupported_directives(": not yaml [") == []
+    assert find_unsupported_directives("- a list\n") == []
+
+
+def test_find_unsupported_directives_rejected_keys() -> None:
+    # All three rejected features at once, spelled NESTED; each is reported
+    # once with its dotted key.
+    definition = """\
+provider: clab
+defaults:
+  device: vyos
+  netlab:
+    up:
+      pre_transform: echo hi
+  providers:
+    clab:
+      bridge_type: ovs-bridge
+tools:
+  graphite:
+nodes: [r1]
+"""
+    keys = [d.key for d in find_unsupported_directives(definition)]
+    assert keys == ["defaults.netlab.up", "defaults.providers.clab.bridge_type", "tools"]
+
+
+def test_find_unsupported_directives_dotted_spellings() -> None:
+    # netlab expands dotted keys identically to nested ones — the check must too.
+    definition = """\
+provider: clab
+defaults.device: vyos
+defaults.netlab.down.post_stop: echo bye
+defaults.providers.clab.bridge_type: ovs-bridge
+nodes: [r1]
+"""
+    keys = [d.key for d in find_unsupported_directives(definition)]
+    assert keys == ["defaults.netlab.down", "defaults.providers.clab.bridge_type"]
+
+
+def test_read_message() -> None:
+    assert read_message("name: x\nmessage: Use ssh to reach r1.\n") == "Use ssh to reach r1."
+    assert read_message("name: x\n") is None
+    assert read_message("message: [not, a, string]\n") is None
+    assert read_message(": broken [") is None
+
+
+def test_find_unsupported_directives_allows_default_bridge_type() -> None:
+    # Only the OVS value is rejected — an explicit (redundant) linux bridge
+    # selection is what hostprep does anyway.
+    definition = "provider: clab\ndefaults.providers.clab.bridge_type: bridge\nnodes: [r1]\n"
+    assert find_unsupported_directives(definition) == []
+
+
+def test_create_materializes_node_files(tmp_path: Path) -> None:
+    # The deploy path materializes the generated node_files/ tree so the
+    # rewritten binds resolve: every relative bind source in the produced
+    # topology must exist under the target, and a stale tree from a previous
+    # deploy is fully replaced.
+    target = tmp_path / "lab1" / "node_files"
+    target.mkdir(parents=True)
+    stale = target / "stale.txt"
+    _ = stale.write_text("leftover")
+    definition = "provider: clab\ndefaults.device: linux\nnodes: [n1, n2]\nlinks: [n1-n2]\n"
+    result = create_clab_topology(definition, node_files_target=target)
+    assert isinstance(result, Ok), result
+    assert not stale.exists()
+    nodes = cast(
+        "dict[str, dict[str, object]]",
+        cast("dict[str, object]", result.value.topology["topology"])["nodes"],
+    )
+    sources = [
+        bind.split(":", 1)[0]
+        for node in nodes.values()
+        for bind in cast("list[object]", node.get("binds", []))
+        if isinstance(bind, str) and bind.startswith("node_files/")
+    ]
+    # linux nodes DO carry generated binds (the shared /etc/hosts) — an empty
+    # list would mean this test proves nothing.
+    assert sources
+    for source in sources:
+        assert (tmp_path / "lab1" / source).is_file(), source

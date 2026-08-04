@@ -113,6 +113,9 @@ export const labDetailSchema = z.object({
   // PUT /labs/{name}/template toggle) — the header renders the toggle state.
   template_published: z.boolean(),
   permissions: z.array(z.string()), // the caller's effective permissions on this lab
+  // The definition's top-level `message:` — the author's "how to use this
+  // lab" note, surfaced instead of silently dropped (up-parity gap 7).
+  message: z.string().nullable(),
 })
 export type LabDetail = z.infer<typeof labDetailSchema>
 

@@ -342,6 +342,50 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     report — and a route merge would either kill fail-loudly for simple
     callers or leave ``ok`` a dead always-true field. (wire today: no
     batch — one round trip per interface/node.)
+25. Baseline impairment from the definition (SKETCHED then DEFERRED
+    2026-08-04 — maintainer parked it to the END of item 17 for
+    re-analysis; do NOT implement from this sketch. Direction as decided
+    that day, docs/nos-sweep/: honor netlab's `tc:` with ONE unified
+    application method). A definition's link/interface
+    `tc:` attributes become the lab's BASELINE impairment, applied by the
+    deploy job through the SAME clab-api netem executor the runtime API
+    uses (delta 24's `_netem_once` — a baseline is literally a batch the
+    deploy runs; no second raw-`tc` channel, no hand-rolled impairment
+    path). Semantics — the baseline-vs-runtime rules, settled once (and
+    inherited by post-v1.0 scenarios, ROADMAP 16.5):
+    - MAPPING: `tc.delay`/`tc.jitter` (ms) → Duration; `tc.loss` → loss %;
+      `tc.corrupt` → corruption %; `tc.rate` → rate (unit mapping to our
+      kbit/s VERIFIED against netlab's tc invocation at implementation —
+      probe item). `tc.duplicate` and `tc.reorder` do NOT exist on the
+      clab-api netem path: a definition carrying them is 422
+      `unsupported_directive` at PUT (maintainer's call — unified channel
+      over 7/7 coverage), listed like the other rejected keys.
+    - DEPLOY: after the clab deploy and node readiness, before any config
+      push, the job applies every `tc:`-derived impairment sequentially
+      (clab-api serializes netem per lab). A baseline that fails to apply
+      FAILS the job loudly (error `baseline_impairment_failed`, lab stays
+      deployed — same shape as a readiness failure): a lab silently not
+      matching its definition is the exact bug this delta removes.
+    - RESTART: netem qdiscs die with the container, so the node power
+      verbs (start/restart, standalone AND batch items, and the lab-level
+      start/restart fan-out) REAPPLY the node's baseline after a
+      successful action — a restarted node comes back matching the
+      definition, not bare. A reapply failure surfaces as that verb's
+      error (single: 502 envelope; batch item: its report entry).
+    - RUNTIME OVERRIDE: set_netem/batch netem items keep REPLACE
+      semantics and WIN over the baseline (they replace the whole qdisc —
+      the single-qdisc reality permits nothing else). A set with NO
+      dimensions ("clear") now REVERTS TO THE BASELINE when the interface
+      has one, bare wire when it doesn't — removing a baseline is a
+      definition edit + redeploy, never a runtime verb (the definition
+      stays the source of truth).
+    - READS: no new wire shapes. The active impairment (netem show, the
+      link table's endpoint `impairment`) is what it is today — a baseline
+      IS an active impairment once applied. Whether an interface's active
+      impairment equals its baseline is derivable client-side from the
+      stored definition; no server-side `baseline` flag until something
+      needs it.
+    (wire today: `tc:` validates and is silently dropped.)
 
 Conventions:
 
@@ -968,6 +1012,11 @@ class LabDetail:  # No Summary/Detail split for v1.0 (see LabSummary note).
     # the toggle's state from here. Detail-only: the labs LIST doesn't carry
     # it (the library view is GET /templates/network).
     template_published: bool
+    # The definition's top-level `message:` — the author's "how to use this
+    # lab" note `netlab up` would print after configuring. Surfaced instead
+    # of silently dropped (up-parity gap 7 decision 2026-08-04,
+    # docs/nos-sweep/). None when absent or unauthored.
+    message: str | None
     owner: Principal | None  # APPROVED — wire today: bare username string
     created_at: datetime
     updated_at: datetime
@@ -1006,6 +1055,11 @@ class DeployResponse:
     nodes: list[str]  # short node names
     configuration: list[NodeConfigResult] | None
     validation: list["SuiteReport"] | None
+    # Non-fatal image pre-flight findings (up-parity gap 3, 2026-08-04): a
+    # missing-but-pullable image, or the check skipped (runner unreachable).
+    # A missing image of a local-only device fails the JOB instead — error
+    # `image_missing`, before anything touches the host.
+    warnings: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2041,7 +2095,12 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         (applies on next deploy). The definition must name each node's `device`
         and the `provider`; any `name:` in it is overridden by the record, and
         the mgmt subnet is re-pinned (explicit `addressing.mgmt.ipv4` wins).
-        Validated by a dry `netlab create` (422). 409 subnet clash."""
+        Validated by a dry `netlab create` (422). 409 subnet clash. Legal
+        netlab keys Twinlab does not honor are 422 `unsupported_directive`
+        rather than silently ignored (up-parity decisions 2026-08-04,
+        docs/nos-sweep/): `tools:`, `defaults.netlab.up/down` shell hooks,
+        and `defaults.providers.clab.bridge_type: ovs-bridge`; extras
+        `directives` lists each `{key, reason}`."""
         raise NotImplementedError
 
     async def deploy_lab(
@@ -2052,7 +2111,11 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         skip_config_time_checks: bool = False,
     ) -> Job:
         """POST /labs/{name}/deploy — lab:edit. **202 + the running deploy
-        Job** (delta 12 — wire today: a synchronous long call returning
+        Job**. The job's first step is an image pre-flight (up-parity gap 3,
+        2026-08-04): a missing image whose device the catalog marks
+        local-only fails the job `image_missing` before anything touches the
+        host; missing-but-pullable images only warn (DeployResponse.warnings)
+        and a runner outage skips the check. (delta 12 — wire today: a synchronous long call returning
         DeployResponse directly). Deploys from the stored definition + suites
         + custom config: fresh if "created"/"destroyed", overwrite-in-place
         if running. The terminal job's `result` is a DeployResponse.

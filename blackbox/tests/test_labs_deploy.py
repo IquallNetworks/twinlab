@@ -188,6 +188,45 @@ async def test_links_live_state(admin: TwinlabClient, make_lab: LabFactory) -> N
         assert endpoint.interface in {iface.name for iface in inventory[endpoint.node]}
 
 
+async def test_nodes_resolve_each_other_by_name(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    """Host-shared lab files (up-parity gap 4): netlab delivers an all-nodes
+    /etc/hosts as a node_files/ bind, which inline deploy used to strip —
+    name-based resolution between nodes was silently absent. With the bind
+    rewritten onto the materialized tree, ping BY NAME (not IP) works. The
+    hosts file maps names to LINK addresses, which only exist once config
+    push assigns them — so this deploys with configure."""
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    job = await admin.deploy_lab(lab.name, configure=True)
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+    assert isinstance(done.result, DeployResponse)
+    assert done.result.status == "configured"
+    detail = await admin.get_lab(lab.name)
+    ping = {
+        "names": TestSuite(
+            tests={
+                "hosts": ValidationTest(
+                    nodes=["n1"],
+                    run=TestCase(
+                        # The name is the whole point — no address template here.
+                        command="ping -c 2 -W 2 n2",
+                        # Leading space: "50% packet loss" must not match.
+                        expect=TestExpectation(contains=" 0% packet loss"),
+                    ),
+                )
+            },
+        )
+    }
+    _ = await admin.put_test_suites(detail.name, ping)
+    run = await admin.run_test_suite(detail.name, "names")
+    run_done = await admin.wait_job(detail.name, run.id, timeout=JOB_WAIT)
+    assert run_done.status == "succeeded", run_done.error
+    report = run_done.result
+    assert isinstance(report, SuiteReport)
+    assert report.failed == 0 and report.passed >= 1
+
+
 async def test_lan_deploys_via_host_bridge_and_destroy_removes_it(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:

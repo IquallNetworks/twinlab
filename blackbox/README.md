@@ -98,6 +98,6 @@ permission/existence split, the deploy slice one batch shaping BOTH endpoints of
 alongside a deliberately unknown node, proving the batch still RUNS with only that item
 ok=false),
 and the suite is
-**entirely green** (136/136 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+**entirely green** (140/140 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

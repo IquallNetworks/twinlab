@@ -20,6 +20,19 @@ export function OverviewTab({ name }: { name: string }) {
 
   return (
     <div className="flex flex-col gap-6">
+      {lab.message !== null && (
+        <Card className="border-primary/40">
+          <CardHeader>
+            <CardTitle className="text-base">About this lab</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* The definition's `message:` — the author's how-to note netlab
+             * would print after `netlab up`; multi-line messages keep their
+             * line breaks. */}
+            <p className="text-sm whitespace-pre-wrap text-muted-foreground">{lab.message}</p>
+          </CardContent>
+        </Card>
+      )}
       {lab.status === 'created' &&
         (canEdit ? (
           <Card className="border-primary/40">

@@ -272,6 +272,10 @@ class DeployResponse(BaseModel):
     configuration: list[NodeConfigResult] | None = None
     # Present only when config-time suites ran (configure, not skipped, suites exist).
     validation: list[SuiteReport] | None = None
+    # Non-fatal image pre-flight findings (up-parity gap 3): a missing-but-
+    # pullable image, or the check skipped because the runner was unreachable.
+    # A missing local-only image fails the job (`image_missing`) instead.
+    warnings: list[str] = []
 
 
 class ConfigureResponse(BaseModel):
@@ -394,6 +398,10 @@ class LabDetail(BaseModel):
     # PUT /labs/{name}/template toggle). Detail-only — the library view is
     # GET /templates/network, not the labs list.
     template_published: bool
+    # The definition's top-level `message:` — the author's "how to use this
+    # lab" note `netlab up` would print after configuring (up-parity gap 7:
+    # surfaced instead of silently dropped). None when absent or unauthored.
+    message: str | None
 
 
 class LayoutPosition(BaseModel):

@@ -78,6 +78,7 @@ _LAB_DETAIL = {
     "config_time_status": "passed",
     "permissions": ["lab:read", "lab:edit"],
     "template_published": False,
+    "message": "Use ssh to reach r1.",
 }
 
 
@@ -240,6 +241,7 @@ async def test_get_lab_parses_detail(make_client: ClientFactory) -> None:
     assert detail.config_time_status == "passed"
     assert detail.deployed_definition == "provider: clab\n"
     assert detail.definition_drifted is False
+    assert detail.message == "Use ssh to reach r1."
 
 
 async def test_get_lab_parses_drift(make_client: ClientFactory) -> None:

@@ -13,6 +13,10 @@ export interface DeviceNodeData {
   // Live container that is NOT in the definition (definition edited after
   // deploy) — rendered unlinked rather than silently dropped.
   drifted?: boolean
+  // A link endpoint netlab will create by expanding a `components:` entry
+  // (`<node>_<member>`). It has no node of its own to edit, so the builder
+  // draws it read-only instead of dropping the link that names it.
+  fromComponent?: string
   // Group memberships as colored dots (delta 20; the builder canvas sets
   // this — a node can be in several groups, so dots beat a tinted border).
   groups?: { name: string; color: string }[]

@@ -186,6 +186,22 @@ plugin-defined attribute ride extras.
 
 ## 3. Promotion assessments
 
+> **Status 2026-08-04: the Tier A batch below is SHIPPED** — items 3–9 (hyphenated names +
+> the 16-char cap, nodes-as-dict-list, list-form dict members, dict-of-lists links, link
+> groups, components' minimum step, self-links) and the hierarchical-group-member emit
+> blocker in §2.6. Sections 1 and 2 describe the state BEFORE that batch and are kept as the
+> inventory that produced it; §4's "9 genuinely promotable" count is now zero. What remains
+> open is Tier B (§3.2), deferred to its own review before v1.0, and the unknown-device
+> policy gate, which moves with 17.1.
+>
+> Verified by a 36-check round-trip harness (esbuild bundle under node), by all five stored
+> definitions on the running stack, and against netlab 26.07 itself: every emitted form
+> creates cleanly, and the builder's link-group expansion produces a byte-identical expanded
+> topology to netlab's own. One live finding rode along — a self-link's two ends draw the
+> SAME pool address (netlab derives it from the node id), so `netlab create` refuses it
+> unless the link says `prefix: false` or each end carries an explicit `ipv4`; the link
+> inspector says so rather than blocking the save.
+
 ### 3.1 Tier A — inherent vs promotable
 
 1. **Invalid YAML / non-mapping doc (G1, G2): inherent.**

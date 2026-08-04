@@ -380,6 +380,26 @@ Frontend-driven wants that surfaced in this roadmap:
   (self-links), interfaces mixed with node keys, hyphenated names. **campus-lan.yml is fully
   buildable visually** — the 55-check harness pins it plus both MPLS examples, the form
   fixtures, the gates and the blockers.
+- **Builder Tier A batch** — **DONE 2026-08-04** (frontend-only; ROADMAP 17.3, scoped off
+  `docs/nos-sweep/builder-coverage-gaps.md`). The deliberately-still-gated list above is now
+  empty except for what netlab itself rejects: hyphenated names and netlab's real 16-char id
+  cap (emit falls back to the list form whenever an endpoint name carries a hyphen, since
+  netlab splits the terse `a-b` form on `-`), `nodes:` as a list of mappings, list-form link
+  members as `{node, …}` records, the **dict-of-lists `links:`** form kept LOSSLESS through a
+  typed `listName` (all-or-nothing, like netlab; a canvas-added link joins the last list and a
+  mixed doc is an emit blocker), **link groups** expanded on parse the way expand_groups does,
+  **self-links**, netlab's **component include-prefix** endpoints, and **nested groups**.
+  Two model changes fell out: endpoints are addressed by POSITION (a self-link's ends share a
+  name) across the reducer, inspector and member edge ids, and parse returns `notices` beside
+  `reasons` because a save can now legitimately REWRITE a document (a link group comes back
+  expanded). Canvas: a self-loop edge (both connect handles sit at the node center, so a
+  straight edge would have zero length) excluded from the dagre input, and a read-only
+  placeholder node for a component-expanded endpoint that selects its includer.
+  Verified by a 36-check round-trip harness, by every definition stored on the running stack,
+  and against netlab 26.07: each emitted form creates cleanly and the group expansion is
+  byte-identical to netlab's. Live finding recorded in the link inspector: both ends of a
+  self-link draw the SAME pool address (netlab derives it from the node id), so netlab
+  refuses one unless the link says `prefix: false` or each end carries an `ipv4`.
 - **Self password change on the Account page** — **DONE 2026-07-30** (frontend-only; no contract
   change). A Password card heads the Account page with a TanStack Form dialog over
   `PUT /auth/password` (`api.changePassword`): current + new + confirm, zod-validated with the

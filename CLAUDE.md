@@ -182,16 +182,31 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   sections (`build/extras-editor.tsx`). ONE shape classifier decides typed-vs-extras for both
   the parser and the editors, so a key never lives in both places (typed controls whose key the
   extras own disable with a pointer; an edge-path same-key collision is an emit-time save
-  blocker). `parseBuildDoc` now gates only on STRUCTURE — invalid YAML, link groups and
-  attribute-only link entries, the dict-of-lists `links:` shape, self-links (a node twice on
-  one link), interfaces mixed with node keys, hyphenated names, undeclared link
-  endpoints — plus the unknown-device POLICY gate (the NOS-sweep boundary, deliberately not
-  passthrough); `emitBuildDoc` stays canonical with the round-trip invariant
-  parse(emit(doc)) == doc (extras key order ignored), and emit problems (device-less node,
-  2-member LAN, undeclared group member — waived when the group sets `_auto_create` — a link
-  extras key naming ANY declared node, which would re-parse as an endpoint) BLOCK
+  blocker). **The Tier A batch (ROADMAP 17.3) shipped 2026-08-04**, so `parseBuildDoc` now
+  gates only on what NETLAB itself rejects — invalid YAML, attribute-only link entries,
+  interfaces mixed with node keys, undeclared link endpoints, a name outside netlab's id rule
+  (`[A-Za-z_][A-Za-z0-9_-]{0,15}` — hyphens legal, 16 chars) — plus the unknown-device POLICY
+  gate (the NOS-sweep boundary, deliberately not passthrough). Everything else netlab accepts
+  now parses: `nodes:` as a mapping or EITHER list form, list-form link members as bare names
+  or `{node, …}` records, **self-links** (a node twice on one link — endpoints are addressed
+  by POSITION throughout the reducer/inspector/canvas, emit uses the list form when bare and
+  the interfaces form when attributed, and the canvas draws a loop since both handles sit at
+  the node center), the **dict-of-lists `links:`** form (the sub-list name rides a typed
+  `listName` so a save re-emits the grouping; all-or-nothing, a mixed doc is an emit blocker),
+  **link groups** (expanded on parse exactly as netlab's expand_groups does — group data
+  copied down, member data winning — proven to yield a byte-identical expanded topology), and
+  **component-expanded endpoints** (`<node>_<member>` where the node has `include:` — netlab's
+  is_nodename_valid prefix rule; such a node needs no device, and the endpoint gets a
+  read-only canvas placeholder that selects its includer). Because a save can now REWRITE a
+  document, parse returns `notices` (link group expanded) beside the gating `reasons`.
+  `emitBuildDoc` stays canonical with the round-trip invariant parse(emit(doc)) == doc (extras
+  key order ignored), and emit problems (device-less node — waived for an `include:` node —
+  2-member LAN, a group member that is neither a declared node NOR another group (netlab
+  groups nest; waived when the group sets `_auto_create`), a mixed named/unnamed link list, a
+  link extras key naming ANY declared node, which would re-parse as an endpoint) BLOCK
   Save loudly; the reducer (`build/build-state.ts`) owns the doc (group
-  add/rename/delete/patch; link name/extras/endpoint patches + add-stub; node rename/delete
+  add/rename/delete/patch, nested memberships migrating on rename/delete; link
+  name/extras/endpoint patches + add-stub; node rename/delete
   keeps memberships and link endpoints consistent), the canvas
   derives from it
   (drag-to-connect via `validateConnect`, palette adds, index-safe deletions), and the

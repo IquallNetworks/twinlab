@@ -16,7 +16,11 @@ export function layoutNodes(nodes: AppNode[], edges: Edge[], rankdir: RankDir): 
     const isLan = node.type === 'lan'
     g.setNode(node.id, { width: isLan ? LAN_W : DEVICE_W, height: isLan ? LAN_H : DEVICE_H })
   }
-  for (const edge of edges) g.setEdge(edge.source, edge.target)
+  // Self-links carry no ranking information and dagre would inflate the
+  // layout around them; their node is placed by its other edges.
+  for (const edge of edges) {
+    if (edge.source !== edge.target) g.setEdge(edge.source, edge.target)
+  }
   dagre.layout(g)
 
   return nodes.map((node) => {

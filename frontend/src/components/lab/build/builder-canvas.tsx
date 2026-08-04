@@ -21,7 +21,13 @@ import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
-import { nextLanId, nextNodeName, parseNodeFragment, type BuildDoc } from '@/lib/build-doc'
+import {
+  linkEndpoints,
+  nextLanId,
+  nextNodeName,
+  parseNodeFragment,
+  type BuildDoc,
+} from '@/lib/build-doc'
 import type { CatalogDevice } from '@/lib/device-catalog'
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { groupColor, type GroupStyles } from '@/lib/group-colors'
@@ -41,6 +47,7 @@ import {
 import { LanNode } from '../topology/lan-node'
 import { StubNode } from '../topology/stub-node'
 import { layoutNodes, type RankDir } from '../topology/layout'
+import { SelfLoopEdge } from '../topology/self-loop-edge'
 import type { SavedPositions } from '../topology/flow-types'
 
 import { validateConnect, type BuilderAction, type BuilderState, type Selection } from './build-state'
@@ -49,6 +56,7 @@ import { ImportNodeDialog } from './import-node-dialog'
 
 // Module-scope so React Flow never sees a new nodeTypes identity per render.
 const NODE_TYPES = { device: DeviceNode, lan: LanNode, stub: StubNode }
+const EDGE_TYPES = { selfLoop: SelfLoopEdge }
 
 const FIT_VIEW = { padding: 0.2, maxZoom: 1.25 }
 const GRID = 24
@@ -56,9 +64,10 @@ const GRID = 24
 // Edge ids carry their doc coordinates ('|' never appears in node names or
 // lan/stub ids, so splitting is unambiguous): a p2p link — and a stub's tether
 // to its endpoint — is `link|<index>`, a LAN membership is
-// `member|<lanId>|<node>`.
+// `member|<lanId>|<memberIndex>` (by POSITION: one node may be on a segment
+// twice, exactly as it may be on both ends of a p2p link).
 const p2pEdgeId = (index: number) => `link|${index}`
-const memberEdgeId = (lanId: string, node: string) => `member|${lanId}|${node}`
+const memberEdgeId = (lanId: string, memberIndex: number) => `member|${lanId}|${memberIndex}`
 
 interface BuilderCanvasProps {
   state: BuilderState
@@ -104,6 +113,31 @@ function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode
     },
   }))
 
+  // Endpoints netlab will create by expanding a `components:` entry — they
+  // have no node of their own, so they get a read-only placeholder rather
+  // than an edge pointing at a node that isn't on the canvas.
+  const declared = new Set(doc.nodes.map((node) => node.name))
+  const componentEndpoints = new Map<string, string>()
+  for (const link of doc.links) {
+    for (const endpoint of linkEndpoints(link)) {
+      if (declared.has(endpoint.node) || componentEndpoints.has(endpoint.node)) continue
+      const includer = doc.nodes.find((node) => endpoint.node.startsWith(`${node.name}_`))
+      if (includer !== undefined) componentEndpoints.set(endpoint.node, includer.name)
+    }
+  }
+  for (const [name, includer] of componentEndpoints) {
+    nodes.push({
+      id: name,
+      type: 'device',
+      position: { x: 0, y: 0 },
+      width: DEVICE_W,
+      height: DEVICE_H,
+      deletable: false,
+      connectable: false,
+      data: { label: name, state: NOT_DEPLOYED, impairedIfaces: 0, fromComponent: includer },
+    })
+  }
+
   const edges: Edge[] = []
   doc.links.forEach((link, index) => {
     if (link.kind === 'p2p') {
@@ -113,7 +147,9 @@ function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode
         target: link.b.node,
         sourceHandle: 'c-s',
         targetHandle: 'c-t',
-        type: 'straight',
+        // Both handles sit at the node center, so a self-link's straight edge
+        // would have zero length — it gets a loop of its own.
+        type: link.a.node === link.b.node ? 'selfLoop' : 'straight',
         ...(link.name !== undefined && { label: link.name }),
       })
     } else if (link.kind === 'stub') {
@@ -148,16 +184,16 @@ function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode
               : `${link.members.length}-node LAN`,
         },
       })
-      for (const member of link.members) {
+      link.members.forEach((member, memberIndex) => {
         edges.push({
-          id: memberEdgeId(link.id, member.node),
+          id: memberEdgeId(link.id, memberIndex),
           source: link.id,
           target: member.node,
           sourceHandle: 'c-s',
           targetHandle: 'c-t',
           type: 'straight',
         })
-      }
+      })
     }
   })
 
@@ -326,7 +362,11 @@ function CanvasInner({
     const edge = selEdges[0]
     if (node !== undefined) {
       if (node.type === 'device') {
-        next = { kind: 'node', name: node.id }
+        // A component placeholder has no node of its own — selecting it opens
+        // the node that pulls the component in. (React Flow hands selection
+        // changes back as untyped nodes.)
+        const includer = node.data['fromComponent']
+        next = { kind: 'node', name: typeof includer === 'string' ? includer : node.id }
       } else {
         const linkIndex = doc.links.findIndex(
           (link) => link.kind !== 'p2p' && link.id === node.id,
@@ -344,7 +384,7 @@ function CanvasInner({
         else if (kind === 'stub') next = { kind: 'stub', linkIndex }
       } else if (tag === 'member' && first !== undefined && second !== undefined) {
         const linkIndex = doc.links.findIndex((link) => link.kind === 'lan' && link.id === first)
-        if (linkIndex >= 0) next = { kind: 'member', linkIndex, node: second }
+        if (linkIndex >= 0) next = { kind: 'member', linkIndex, endpointIndex: Number(second) }
       }
     }
     if (next !== null && !sameSelection(selectionRef.current, next)) {
@@ -353,11 +393,12 @@ function CanvasInner({
   }
 
   const onDelete = ({ nodes: delNodes, edges: delEdges }: { nodes: AppNode[]; edges: Edge[] }) => {
-    // Order matters: link indices are positional in the doc. Membership
-    // removals don't reshape the array, so they go first; then p2p/LAN link
-    // deletions in DESCENDING index order (earlier removals can't shift the
-    // later ones); node deletions are by name and cascade on their own.
-    const memberRemovals: { linkIndex: number; node: string }[] = []
+    // Order matters: both link indices and member positions are positional.
+    // Membership removals don't reshape the LINK array, so they go first (in
+    // descending member order); then link deletions in DESCENDING index order
+    // (earlier removals can't shift the later ones); node deletions are by
+    // name and cascade on their own.
+    const memberRemovals: { linkIndex: number; endpointIndex: number }[] = []
     const linkDeletions: number[] = []
     for (const edge of delEdges) {
       const [tag, first, second] = edge.id.split('|')
@@ -365,7 +406,7 @@ function CanvasInner({
         linkDeletions.push(Number(first))
       } else if (tag === 'member' && first !== undefined && second !== undefined) {
         const linkIndex = doc.links.findIndex((link) => link.kind === 'lan' && link.id === first)
-        if (linkIndex >= 0) memberRemovals.push({ linkIndex, node: second })
+        if (linkIndex >= 0) memberRemovals.push({ linkIndex, endpointIndex: Number(second) })
       }
     }
     const nodeDeletions: string[] = []
@@ -380,6 +421,9 @@ function CanvasInner({
         if (linkIndex >= 0) linkDeletions.push(linkIndex)
       }
     }
+    // Descending, like the link deletions below: removals are positional now,
+    // so an earlier one would shift the indices of the later ones.
+    memberRemovals.sort((a, b) => b.endpointIndex - a.endpointIndex)
     for (const removal of memberRemovals) dispatch({ type: 'remove-member', ...removal })
     for (const linkIndex of [...new Set(linkDeletions)].sort((a, b) => b - a)) {
       dispatch({ type: 'delete-link', linkIndex })
@@ -409,6 +453,7 @@ function CanvasInner({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeDragStop={(_event, _node, dragged) => persistCurrentPositions(dragged)}

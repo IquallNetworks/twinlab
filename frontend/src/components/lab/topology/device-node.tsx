@@ -65,7 +65,11 @@ export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFl
       <div className="flex min-w-0 flex-col">
         <span className="truncate font-mono text-sm font-medium">{data.label}</span>
         <span className="truncate text-[0.65rem] text-muted-foreground">
-          {data.drifted ? 'not in definition' : (data.device ?? '—')}
+          {data.drifted
+            ? 'not in definition'
+            : data.fromComponent !== undefined
+              ? `from ${data.fromComponent}`
+              : (data.device ?? '—')}
         </span>
       </div>
       <span

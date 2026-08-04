@@ -870,6 +870,20 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     extras→typed promotions (module presence ×14, subkey splits, field
     promotions, vlans, …) are DEFERRED to their own review after the sweep
     work, before v1.0.
+    **The Tier A batch SHIPPED 2026-08-04** — all nine, frontend-only. Verified
+    by a 36-check round-trip harness (esbuild bundle under node), by every
+    stored definition on the running stack, and against netlab 26.07 itself:
+    each emitted form creates cleanly, and the builder's link-group expansion
+    yields a byte-identical expanded topology to netlab's own. Saving can now
+    REWRITE a document (a link group comes back expanded), so parse gained a
+    notice channel distinct from the gating reasons, and endpoints are
+    addressed by POSITION rather than node name so a self-link's two ends stay
+    distinct. Live finding: both ends of a self-link draw the SAME pool address
+    (netlab derives it from the node id), so netlab refuses one unless the link
+    says `prefix: false` or each end carries an explicit `ipv4` — the link
+    inspector warns where the user edits; the dry create stays the judge. What
+    remains open in this strand is Tier B and the unknown-device policy gate,
+    which moves with 17.1.
 
 ### i18n · **deferred**
 

@@ -62,6 +62,12 @@ implementation.
   components minimum step (endpoint prefix rule + device-blocker waiver), hierarchical group
   members, 16-char name cap. Tier B promotions (module presence ×14, subkey splits, field
   promotions, vlans, …) are DEFERRED to their own review after the sweep work, before v1.0.
+  **SHIPPED 2026-08-04** — all nine, verified by a 36-check round-trip harness, the five
+  stored definitions on the running stack, and netlab 26.07 itself (every emitted form
+  creates cleanly; the builder's link-group expansion is byte-identical to netlab's own).
+  Live finding recorded: both ends of a self-link draw the SAME pool address, so netlab
+  refuses one unless the link is `prefix: false` or each end carries an `ipv4` — the link
+  inspector warns, the server's dry create stays the judge.
 - **Strand 17.1 acquisition waves** — agreed as proposed.
 
 Gaps 2–7 verified live 2026-08-04: blackbox **140/140** with the `deploy` marker.

@@ -90,7 +90,7 @@ function BuildTabInner({
   const parsed = useMemo(
     () =>
       lab.definition === null
-        ? ({ ok: true, doc: emptyBuildDoc() } as const)
+        ? ({ ok: true, doc: emptyBuildDoc(), notices: [] } as const)
         : parseBuildDoc(lab.definition, knownDevices),
     // knownDevices is settled for the mount's lifetime (BuildTab gates on it).
     [lab.definition, knownDevices],
@@ -187,7 +187,7 @@ function BuildTabInner({
     setSyncedDefinition(lab.definition)
     const next =
       lab.definition === null
-        ? ({ ok: true, doc: emptyBuildDoc() } as const)
+        ? ({ ok: true, doc: emptyBuildDoc(), notices: [] } as const)
         : parseBuildDoc(lab.definition, knownDevices)
     if (next.ok) rawDispatch({ type: 'reset', doc: next.doc })
   }, [lab.definition, syncedDefinition, dirty, knownDevices])
@@ -304,6 +304,16 @@ function BuildTabInner({
           <ul className="mt-1 list-inside list-disc text-muted-foreground">
             {emitted.problems.map((problem) => (
               <li key={problem}>{problem}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {mode === 'visual' && parsed.ok && parsed.notices.length > 0 && (
+        <div className="rounded-[2px] border bg-card px-3 py-2 text-sm text-muted-foreground">
+          <ul className="list-inside list-disc">
+            {parsed.notices.map((notice) => (
+              <li key={notice}>{notice}</li>
             ))}
           </ul>
         </div>

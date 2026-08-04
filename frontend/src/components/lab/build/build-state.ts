@@ -12,7 +12,9 @@ export type Selection =
   | { kind: 'lan'; linkIndex: number }
   | { kind: 'link'; linkIndex: number }
   | { kind: 'stub'; linkIndex: number }
-  | { kind: 'member'; linkIndex: number; node: string }
+  // Endpoints are identified by POSITION, not node name: a self-link puts the
+  // same node on both ends of one link.
+  | { kind: 'member'; linkIndex: number; endpointIndex: number }
 
 export interface BuilderState {
   doc: BuildDoc
@@ -28,10 +30,10 @@ export type BuilderAction =
   | { type: 'add-stub'; id: string; node: string }
   | { type: 'delete-node'; name: string }
   | { type: 'delete-link'; linkIndex: number }
-  | { type: 'remove-member'; linkIndex: number; node: string }
+  | { type: 'remove-member'; linkIndex: number; endpointIndex: number }
   | { type: 'patch-link'; linkIndex: number; patch: { name?: string; extras?: Extras } }
   // Replace one endpoint's attributes (undefined clears them).
-  | { type: 'patch-endpoint'; linkIndex: number; node: string; extras: Extras | undefined }
+  | { type: 'patch-endpoint'; linkIndex: number; endpointIndex: number; extras: Extras | undefined }
   | { type: 'rename-node'; from: string; to: string }
   | { type: 'patch-node'; name: string; patch: Partial<Omit<BuildNode, 'name'>> }
   | {
@@ -59,7 +61,11 @@ export type ConnectVerdict = { ok: true } | { ok: false; reason: string }
  * connect action itself. Canvas ids: a device node's id is its name, a LAN
  * hub's id is the link's `lan:<n>`. */
 export function validateConnect(doc: BuildDoc, source: string, target: string): ConnectVerdict {
-  if (source === target) return { ok: false, reason: 'a node cannot link to itself' }
+  // A node CAN link to itself (netlab gives it two interfaces on one link) —
+  // but a LAN hub or stub terminator stands for a link, not a node.
+  if (source === target && (isLanId(source) || isStubId(source))) {
+    return { ok: false, reason: 'a link cannot be its own endpoint' }
+  }
   if (isStubId(source) || isStubId(target)) {
     return { ok: false, reason: 'a stub link has only its one endpoint' }
   }
@@ -96,11 +102,24 @@ function applyPatch<T extends object>(target: T, patch: Partial<T>): T {
   return out
 }
 
+/** netlab's `links:` is either one list or a mapping of named lists — never a
+ * mix — so a link added to a doc that uses named lists joins the last one
+ * (the emitter blocks a mixed document loudly). */
+function newLinkList(doc: BuildDoc): { listName?: string } {
+  const listName = doc.links[doc.links.length - 1]?.listName
+  return listName === undefined ? {} : { listName }
+}
+
 function connect(doc: BuildDoc, source: string, target: string): BuildDoc {
   const lanId = isLanId(source) ? source : isLanId(target) ? target : null
   const device = isLanId(source) ? target : source
   if (lanId === null) {
-    const link: BuildLink = { kind: 'p2p', a: { node: source }, b: { node: target } }
+    const link: BuildLink = {
+      kind: 'p2p',
+      a: { node: source },
+      b: { node: target },
+      ...newLinkList(doc),
+    }
     return { ...doc, links: [...doc.links, link] }
   }
   return {
@@ -156,19 +175,20 @@ function renameInLinks(links: readonly BuildLink[], from: string, to: string): B
   })
 }
 
-/** Replace one endpoint's attributes on any link kind. */
-function patchEndpoint(link: BuildLink, node: string, extras: Extras | undefined): BuildLink {
-  const apply = (endpoint: LinkEndpoint): LinkEndpoint =>
-    endpoint.node !== node
+/** Replace one endpoint's attributes on any link kind, BY POSITION — a
+ * self-link's two endpoints share a node name. */
+function patchEndpoint(link: BuildLink, endpointIndex: number, extras: Extras | undefined): BuildLink {
+  const apply = (endpoint: LinkEndpoint, index: number): LinkEndpoint =>
+    index !== endpointIndex
       ? endpoint
       : extras === undefined || Object.keys(extras).length === 0
         ? { node: endpoint.node }
         : { node: endpoint.node, extras }
   switch (link.kind) {
     case 'p2p':
-      return { ...link, a: apply(link.a), b: apply(link.b) }
+      return { ...link, a: apply(link.a, 0), b: apply(link.b, 1) }
     case 'stub':
-      return { ...link, endpoint: apply(link.endpoint) }
+      return { ...link, endpoint: apply(link.endpoint, 0) }
     case 'lan':
       return { ...link, members: link.members.map(apply) }
   }
@@ -200,7 +220,7 @@ function coherentSelection(selection: Selection, doc: BuildDoc): Selection {
       const link = doc.links[selection.linkIndex]
       return link !== undefined &&
         link.kind === 'lan' &&
-        link.members.some((member) => member.node === selection.node)
+        link.members[selection.endpointIndex] !== undefined
         ? selection
         : { kind: 'lab' }
     }
@@ -222,13 +242,18 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       return { doc, dirty: true, selection: { kind: 'node', name: action.name } }
     }
     case 'add-lan': {
-      const link: BuildLink = { kind: 'lan', id: action.id, members: [] }
+      const link: BuildLink = { kind: 'lan', id: action.id, members: [], ...newLinkList(state.doc) }
       const doc = { ...state.doc, links: [...state.doc.links, link] }
       return { doc, dirty: true, selection: { kind: 'lan', linkIndex: doc.links.length - 1 } }
     }
     case 'add-stub': {
       if (!state.doc.nodes.some((node) => node.name === action.node)) return state
-      const link: BuildLink = { kind: 'stub', id: action.id, endpoint: { node: action.node } }
+      const link: BuildLink = {
+        kind: 'stub',
+        id: action.id,
+        endpoint: { node: action.node },
+        ...newLinkList(state.doc),
+      }
       const doc = { ...state.doc, links: [...state.doc.links, link] }
       return { doc, dirty: true, selection: { kind: 'stub', linkIndex: doc.links.length - 1 } }
     }
@@ -256,7 +281,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         ...state.doc,
         links: state.doc.links.map((link, index) =>
           index === action.linkIndex && link.kind === 'lan'
-            ? { ...link, members: link.members.filter((member) => member.node !== action.node) }
+            ? { ...link, members: link.members.filter((_, at) => at !== action.endpointIndex) }
             : link,
         ),
       }
@@ -286,7 +311,9 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       const doc = {
         ...state.doc,
         links: state.doc.links.map((link, index) =>
-          index === action.linkIndex ? patchEndpoint(link, action.node, action.extras) : link,
+          index === action.linkIndex
+            ? patchEndpoint(link, action.endpointIndex, action.extras)
+            : link,
         ),
       }
       return { ...state, doc, dirty: true }
@@ -360,9 +387,16 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       return { ...state, doc, dirty: true }
     }
     case 'delete-group': {
+      // Groups nest, so a deleted group also leaves the groups it was in.
       const doc = {
         ...state.doc,
-        groups: state.doc.groups.filter((group) => group.name !== action.name),
+        groups: state.doc.groups
+          .filter((group) => group.name !== action.name)
+          .map((group) =>
+            group.members.includes(action.name)
+              ? { ...group, members: group.members.filter((member) => member !== action.name) }
+              : group,
+          ),
       }
       return { ...state, doc, dirty: true }
     }
@@ -371,9 +405,18 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       if (state.doc.groups.some((group) => group.name === action.to)) return state
       const doc = {
         ...state.doc,
-        groups: state.doc.groups.map((group) =>
-          group.name === action.from ? { ...group, name: action.to } : group,
-        ),
+        groups: state.doc.groups.map((group) => {
+          const renamed = group.name === action.from ? { ...group, name: action.to } : group
+          // A nested membership names the group, so it follows the rename.
+          return renamed.members.includes(action.from)
+            ? {
+                ...renamed,
+                members: renamed.members.map((member) =>
+                  member === action.from ? action.to : member,
+                ),
+              }
+            : renamed
+        }),
       }
       return { ...state, doc, dirty: true }
     }

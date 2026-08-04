@@ -49,6 +49,7 @@ import {
   extrasOwn,
   groupExtrasKeyError,
   labExtrasKeyError,
+  declaredNodes,
   linkExtrasKeyError,
   nextStubId,
   nodeExtrasKeyError,
@@ -372,6 +373,45 @@ function GroupBlock({
           </div>
         )}
       </div>
+
+      {/* netlab groups nest — a member may be another group, which then
+          broadcasts this group's data to ITS members. */}
+      {doc.groups.length > 1 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Member groups</span>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {doc.groups
+              .filter((entry) => entry.name !== group.name)
+              .map((entry) => {
+                const id = `build-group-${group.name}-subgroup-${entry.name}`
+                const member = group.members.includes(entry.name)
+                return (
+                  <div key={entry.name} className="flex items-center gap-1.5">
+                    <Checkbox
+                      id={id}
+                      checked={member}
+                      onCheckedChange={(checked) =>
+                        dispatch({
+                          type: 'patch-group',
+                          name: group.name,
+                          patch: {
+                            members:
+                              checked === true
+                                ? [...group.members, entry.name]
+                                : group.members.filter((name) => name !== entry.name),
+                          },
+                        })
+                      }
+                    />
+                    <Label htmlFor={id} className="font-mono text-xs font-normal">
+                      {entry.name}
+                    </Label>
+                  </div>
+                )
+              })}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-1">
         <span className="text-xs text-muted-foreground">Config templates</span>
@@ -1266,13 +1306,13 @@ function LinkAdvanced({
   dispatch: Dispatch<BuilderAction>
   bare?: boolean
 }) {
-  const nodeNames = new Set(doc.nodes.map((node) => node.name))
+  const endpointNames = declaredNodes(doc.nodes)
   return (
     <ExtrasEditor
       key={JSON.stringify(link.extras ?? {})}
       idPrefix={`build-link-${linkIndex}`}
       value={link.extras}
-      keyError={(key, value) => linkExtrasKeyError(key, value, nodeNames)}
+      keyError={(key, value) => linkExtrasKeyError(key, value, endpointNames)}
       onApply={(extras) => dispatch({ type: 'patch-link', linkIndex, patch: { extras } })}
       placeholder={'link attributes, e.g.\nbandwidth: 100000\nmtu: 9000'}
       bare={bare}
@@ -1283,27 +1323,47 @@ function LinkAdvanced({
 function EndpointAdvanced({
   endpoint,
   linkIndex,
+  endpointIndex,
   dispatch,
   bare,
 }: {
   endpoint: LinkEndpoint
   linkIndex: number
+  // Endpoints are addressed by position: a self-link has the same node twice.
+  endpointIndex: number
   dispatch: Dispatch<BuilderAction>
   bare?: boolean
 }) {
   return (
     <ExtrasEditor
       key={JSON.stringify(endpoint.extras ?? {})}
-      idPrefix={`build-link-${linkIndex}-${endpoint.node}`}
+      idPrefix={`build-link-${linkIndex}-${endpointIndex}`}
       label={`${endpoint.node} attributes`}
       value={endpoint.extras}
       keyError={() => null}
-      onApply={(extras) =>
-        dispatch({ type: 'patch-endpoint', linkIndex, node: endpoint.node, extras })
-      }
+      onApply={(extras) => dispatch({ type: 'patch-endpoint', linkIndex, endpointIndex, extras })}
       placeholder={'per-endpoint attributes, e.g.\nifname: eth9\nipv4: 10.0.0.1/30'}
       bare={bare}
     />
+  )
+}
+
+/** netlab derives an interface address from the link prefix and the NODE's id,
+ * so both ends of a self-link draw the SAME address and `netlab create` fails
+ * with "Duplicate address" (verified against netlab 26.07). Two spellings
+ * avoid it, and the link is fine either way — so this warns where the user is
+ * editing instead of blocking a save the server would judge anyway. */
+function SelfLinkAddressingHint({ link }: { link: BuildLink }) {
+  if (link.kind !== 'p2p' || link.a.node !== link.b.node) return null
+  const unnumbered = link.extras?.['prefix'] === false
+  const addressed = link.a.extras?.['ipv4'] !== undefined && link.b.extras?.['ipv4'] !== undefined
+  if (unnumbered || addressed) return null
+  return (
+    <p className="text-xs text-muted-foreground">
+      Both ends of a self-link would take the same address from the link prefix, which netlab
+      rejects. Set <span className="font-mono">prefix: false</span> in Advanced properties for an
+      L2 link, or an <span className="font-mono">ipv4</span> on each end.
+    </p>
   )
 }
 
@@ -1355,16 +1415,29 @@ export function Inspector({
           <SectionTitle>link</SectionTitle>
           <p className="font-mono text-sm">
             {link.a.node} ↔ {link.b.node}
+            {link.a.node === link.b.node && (
+              <span className="ml-2 font-sans text-xs text-muted-foreground">
+                self-link — two interfaces on one node
+              </span>
+            )}
           </p>
+          <SelfLinkAddressingHint link={link} />
           <Tabs defaultValue="general">
             <TabsList className="w-full">
               <InspectorTab value="general">General</InspectorTab>
               <InspectorTab value="ep-a">
-                <span className="truncate font-mono">{link.a.node}</span>
+                {/* A self-link's ends share a name, so they wear their position. */}
+                <span className="truncate font-mono">
+                  {link.a.node}
+                  {link.a.node === link.b.node ? ' #1' : ''}
+                </span>
                 {countSuffix(extrasCount(link.a.extras))}
               </InspectorTab>
               <InspectorTab value="ep-b">
-                <span className="truncate font-mono">{link.b.node}</span>
+                <span className="truncate font-mono">
+                  {link.b.node}
+                  {link.a.node === link.b.node ? ' #2' : ''}
+                </span>
                 {countSuffix(extrasCount(link.b.extras))}
               </InspectorTab>
               <InspectorTab value="advanced">
@@ -1388,6 +1461,7 @@ export function Inspector({
               <EndpointAdvanced
                 endpoint={link.a}
                 linkIndex={selection.linkIndex}
+                endpointIndex={0}
                 dispatch={dispatch}
                 bare
               />
@@ -1396,6 +1470,7 @@ export function Inspector({
               <EndpointAdvanced
                 endpoint={link.b}
                 linkIndex={selection.linkIndex}
+                endpointIndex={1}
                 dispatch={dispatch}
                 bare
               />
@@ -1451,6 +1526,7 @@ export function Inspector({
               <EndpointAdvanced
                 endpoint={link.endpoint}
                 linkIndex={selection.linkIndex}
+                endpointIndex={0}
                 dispatch={dispatch}
                 bare
               />
@@ -1487,9 +1563,9 @@ export function Inspector({
               No members yet — drag from a node onto this segment.
             </p>
           )}
-          {link.members.map((member) => (
+          {link.members.map((member, memberIndex) => (
             <div
-              key={member.node}
+              key={`${member.node}-${memberIndex}`}
               className="flex items-center justify-between gap-2 rounded-[2px] border px-2 py-1"
             >
               <span className="font-mono text-sm">{member.node}</span>
@@ -1501,7 +1577,7 @@ export function Inspector({
                   dispatch({
                     type: 'remove-member',
                     linkIndex: selection.linkIndex,
-                    node: member.node,
+                    endpointIndex: memberIndex,
                   })
                 }
               >
@@ -1543,17 +1619,18 @@ export function Inspector({
     case 'member': {
       const link = doc.links[selection.linkIndex]
       if (link === undefined || link.kind !== 'lan') return lab
-      const member = link.members.find((entry) => entry.node === selection.node)
+      const member = link.members[selection.endpointIndex]
       if (member === undefined) return lab
       return (
         <div className="flex flex-col gap-4">
           <SectionTitle>lan membership</SectionTitle>
           <p className="font-mono text-sm">
-            {selection.node} on {link.name ?? link.id}
+            {member.node} on {link.name ?? link.id}
           </p>
           <EndpointAdvanced
             endpoint={member}
             linkIndex={selection.linkIndex}
+            endpointIndex={selection.endpointIndex}
             dispatch={dispatch}
             bare
           />
@@ -1566,7 +1643,7 @@ export function Inspector({
               dispatch({
                 type: 'remove-member',
                 linkIndex: selection.linkIndex,
-                node: selection.node,
+                endpointIndex: selection.endpointIndex,
               })
             }
           >

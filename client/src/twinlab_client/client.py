@@ -28,11 +28,14 @@ from twinlab_client.errors import TwinlabProtocolError, error_from_response
 from twinlab_client.models import (
     ApiKey,
     ApiKeyCreated,
+    ConfigDiffReport,
     CustomConfigResponse,
     DeviceCatalog,
+    DiffSource,
     Duration,
     Grant,
     GroupSummary,
+    ImportSource,
     Job,
     JobEvent,
     LabActionResponse,
@@ -48,8 +51,10 @@ from twinlab_client.models import (
     LayoutPosition,
     Liveness,
     NetemImpairment,
+    NetworkImport,
     NetworkTemplate,
     NetworkTemplateSummary,
+    NodeImport,
     NodeInterfaces,
     NodeLogsResponse,
     NodePowerAction,
@@ -488,6 +493,54 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
             json_body={"published": published, "description": description},
         )
         return None if payload is None else _wire.parse_network_template_summary(payload)
+
+    # ------------------------------------------------------------------ #
+    # Definition import (delta 22)
+    # ------------------------------------------------------------------ #
+
+    async def import_network(self, sources: list[ImportSource]) -> NetworkImport:
+        """POST /import/network — the definition factory: dumped running
+        configs in; netlab definition + carry + quarantine + maps out. PURE
+        (no lab is touched): compose create_lab -> put_custom_config ->
+        update_definition (custom config FIRST — the definition PUT
+        validates its `config:` references against the stored fileset).
+        GLOBAL lab:create. 422 unsupported_device /
+        config_unparseable / duplicate_node / netlab_invalid (stderr in
+        extras); inference gaps are warnings, never errors."""
+        payload = await self._send_json(
+            "POST",
+            "/import/network",
+            json_body={
+                "sources": [
+                    {"device": s.device, "content": s.content, "name": s.name} for s in sources
+                ]
+            },
+        )
+        return _wire.parse_network_import(payload)
+
+    async def import_node(self, device: str, content: str) -> NodeImport:
+        """POST /import/node — the single-node granularity: a stampable
+        fragment plus its carry (SOURCE interface names — the contract
+        QUIRK; the network flow is the fidelity-complete path). Any
+        authenticated user. Same 422 slugs as import_network."""
+        payload = await self._send_json(
+            "POST", "/import/node", json_body={"device": device, "content": content}
+        )
+        return _wire.parse_node_import(payload)
+
+    async def config_diff(self, name: str, sources: list[DiffSource]) -> ConfigDiffReport:
+        """POST /labs/{name}/config-diff — the import-fidelity proof:
+        collects each named node's RUNNING config over the exec transport
+        and classifies every comparable source line (matched / missing /
+        extra, modulo quarantine and the recomputed interface map).
+        lab:validate; requires a deployed lab (409 lab_not_running, 409
+        no_definition); 422 unknown_node. Informational, never a gate."""
+        payload = await self._send_json(
+            "POST",
+            f"/labs/{name}/config-diff",
+            json_body={"sources": [{"node": s.node, "content": s.content} for s in sources]},
+        )
+        return _wire.parse_config_diff_report(payload)
 
     # ------------------------------------------------------------------ #
     # Labs — lifecycle: create (record) -> author (PUTs) -> deploy

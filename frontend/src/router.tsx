@@ -20,6 +20,7 @@ import { LabDetailLayout } from '@/pages/lab/lab-detail-layout'
 import { NodesTab } from '@/pages/lab/nodes-tab'
 import { OperationsTab } from '@/pages/lab/operations-tab'
 import { OverviewTab } from '@/pages/lab/overview-tab'
+import { LabImportPage } from '@/pages/lab-import'
 import { LabsPage } from '@/pages/labs'
 import { LoginPage } from '@/pages/login'
 import { StyleguidePage } from '@/pages/styleguide'
@@ -67,6 +68,15 @@ const labsRoute = createRoute({
   // ?new=1 opens the create-lab dialog (the command palette links here).
   validateSearch: (search: Record<string, unknown>): { new?: true } =>
     search['new'] === true || search['new'] === '1' || search['new'] === 1 ? { new: true } : {},
+})
+
+// The import wizard (delta 22). A static segment, so TanStack Router ranks it
+// above /labs/$name — "import" is not a creatable lab name in practice, and
+// the wizard needs a full page (multi-file gather + review), not a dialog.
+const labImportRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/labs/import',
+  component: LabImportPage,
 })
 
 // /labs/$name is a layout: the tab pages are child routes so views deep-link
@@ -195,6 +205,7 @@ const routeTree = rootRoute.addChildren([
   authRoute.addChildren([
     indexRoute,
     labsRoute,
+    labImportRoute,
     labDetailRoute.addChildren([
       labIndexRoute,
       labOverviewRoute,

@@ -18,7 +18,7 @@ from http import HTTPStatus
 from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Path, Request
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, StringConstraints, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -94,6 +94,7 @@ from twinlab_backend.services.clab_api import (
 from twinlab_backend.services.clab_api import NetemImpairment as ClabNetemImpairment
 from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfaces
 from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
+from twinlab_backend.services.configimport import diff as configimport_diff
 from twinlab_backend.services.custom_config import BuiltinLibrary
 from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
@@ -1347,6 +1348,96 @@ async def put_custom_config(
     if isinstance(updated, lab_store.LabStoreError):
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _custom_config_response(library, updated)
+
+
+# --- Config-diff (contract delta 22): the import-fidelity proof. Stateless —
+# the sources ride the request (a lab never remembers its import origin) and
+# the interface map is recomputed by joining the sources' addresses against
+# the RUNNING configs collected over the exec transport. Informational, never
+# a gate. lab:validate: it execs on nodes, the suite-run class. ---
+
+
+class DiffSourceIn(BaseModel):
+    node: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", max_length=64)]
+    content: Annotated[str, StringConstraints(min_length=1, max_length=512 * 1024)]
+
+
+class ConfigDiffRequest(BaseModel):
+    sources: list[DiffSourceIn] = Field(min_length=1, max_length=64)
+
+
+class NodeConfigDiffOut(BaseModel):
+    node: str
+    matched: int
+    missing: list[str]
+    extra: list[str]
+    quarantined: int
+
+
+class ConfigDiffReportOut(BaseModel):
+    nodes: list[NodeConfigDiffOut]
+
+
+@router.post("/{lab_name}/config-diff", dependencies=[Depends(require_lab(perms.LAB_VALIDATE))])
+async def config_diff(
+    lab_name: LabName,
+    request: ConfigDiffRequest,
+    runner: RunnerClientDep,
+    library: BuiltinLibraryDep,
+    db: SessionDep,
+) -> ConfigDiffReportOut:
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    if lab.definition is None:
+        raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
+    if lab.status != "deployed":
+        raise ApiError(409, "lab_not_running", f"lab '{lab_name}' is not deployed")
+
+    facts = await _node_facts_for(db, lab, library)
+    devices: dict[str, str] = {}
+    for source in request.sources:
+        node_facts = facts.get(source.node)
+        device = node_facts.get("device") if node_facts is not None else None
+        if not isinstance(device, str):
+            raise ApiError(422, "unknown_node", f"lab '{lab_name}' has no node '{source.node}'")
+        if device not in configimport_diff.DUMP_COMMANDS:
+            raise ApiError(
+                422,
+                "unsupported_device",
+                f"node '{source.node}' is a {device}, which is not import-capable",
+            )
+        devices[source.node] = device
+
+    definition = lab.definition
+    templates = _config_fileset(library, lab)
+    # Sequential on purpose: the runner serializes inventory work per lab, and
+    # the validation gate's parallelization is itself parked (ROADMAP item 10).
+    results: list[NodeConfigDiffOut] = []
+    for source in request.sources:
+        device = devices[source.node]
+        collected = await runner.exec_command(
+            definition, source.node, configimport_diff.DUMP_COMMANDS[device], templates
+        )
+        if isinstance(collected, Err):
+            raise ApiError(
+                502,
+                "exec_failed",
+                f"could not collect node '{source.node}': {collected.error.message}",
+            )
+        diffed = configimport_diff.diff_node(source.node, device, source.content, collected.value)
+        if isinstance(diffed, Err):
+            raise ApiError(422, "config_unparseable", f"node '{source.node}': {diffed.error}")
+        results.append(
+            NodeConfigDiffOut(
+                node=diffed.value.node,
+                matched=diffed.value.matched,
+                missing=diffed.value.missing,
+                extra=diffed.value.extra,
+                quarantined=diffed.value.quarantined,
+            )
+        )
+    return ConfigDiffReportOut(nodes=results)
 
 
 # --- Topology layout (contract delta 19): ONE shared manual arrangement per

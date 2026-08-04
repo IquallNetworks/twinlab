@@ -25,6 +25,7 @@ from twinlab_client.models import (
     NODE_CONFIG_STATUSES,
     PARSE_MODES,
     PRINCIPAL_TYPES,
+    QUARANTINE_CLASSES,
     READINESS_STATUSES,
     ROLE_SCOPES,
     SUITE_STAGES,
@@ -34,6 +35,7 @@ from twinlab_client.models import (
     ApiKeyCreated,
     BuiltinTemplate,
     CatalogDevice,
+    ConfigDiffReport,
     ConfigureResponse,
     CustomConfigResponse,
     DeployResponse,
@@ -43,6 +45,7 @@ from twinlab_client.models import (
     Grant,
     GroupMember,
     GroupSummary,
+    ImportWarning,
     Job,
     JobError,
     JobEvent,
@@ -62,15 +65,19 @@ from twinlab_client.models import (
     LinkEndpoint,
     Liveness,
     NetemImpairment,
+    NetworkImport,
     NetworkTemplate,
     NetworkTemplateSummary,
+    NodeConfigDiff,
     NodeConfigResult,
+    NodeImport,
     NodeInterface,
     NodeInterfaces,
     NodeLogsResponse,
     NodeTemplate,
     Principal,
     Principals,
+    QuarantineEntry,
     Readiness,
     Role,
     RoleScope,
@@ -372,6 +379,7 @@ def parse_catalog_device(value: object) -> CatalogDevice:
         modules=_get_str_list(obj, "modules", where),
         image=_get_str(obj, "image", where),
         image_present=_get_opt_bool(obj, "image_present", where),
+        config_import=_get_bool(obj, "config_import", where),
     )
 
 
@@ -416,6 +424,95 @@ def parse_node_template(value: object) -> NodeTemplate:
         description=_get_str(obj, "description", where),
         device=_get_str(obj, "device", where),
         content=_get_str(obj, "content", where),
+    )
+
+
+def _get_opt_str_dict(obj: dict[str, object], key: str, where: str) -> dict[str, str | None]:
+    raw = as_object(_req(obj, key, where), where)
+    result: dict[str, str | None] = {}
+    for name, value in raw.items():
+        if value is not None and not isinstance(value, str):
+            raise TwinlabProtocolError(
+                where, f"{key!r}[{name!r}]: expected string or null, got {type(value).__name__}"
+            )
+        result[name] = value
+    return result
+
+
+def parse_quarantine_entry(value: object) -> QuarantineEntry:
+    where = "QuarantineEntry"
+    obj = as_object(value, where)
+    return QuarantineEntry(
+        reason=_get_literal(obj, "reason", where, QUARANTINE_CLASSES),
+        content=_get_str(obj, "content", where),
+    )
+
+
+def parse_import_warning(value: object) -> ImportWarning:
+    where = "ImportWarning"
+    obj = as_object(value, where)
+    return ImportWarning(
+        node=_get_opt_str(obj, "node", where), message=_get_str(obj, "message", where)
+    )
+
+
+def parse_network_import(value: object) -> NetworkImport:
+    where = "NetworkImport"
+    obj = as_object(value, where)
+    interface_map_raw = as_object(_req(obj, "interface_map", where), f"{where}.interface_map")
+    interface_map = {
+        node: _get_str_dict(interface_map_raw, node, f"{where}.interface_map")
+        for node in interface_map_raw
+    }
+    quarantine_raw = as_object(_req(obj, "quarantine", where), f"{where}.quarantine")
+    quarantine = {
+        node: [
+            parse_quarantine_entry(entry)
+            for entry in as_list(entries, f"{where}.quarantine[{node!r}]")
+        ]
+        for node, entries in quarantine_raw.items()
+    }
+    return NetworkImport(
+        definition=_get_str(obj, "definition", where),
+        custom_config=_get_str_dict(obj, "custom_config", where),
+        interface_map=interface_map,
+        name_map=_get_str_dict(obj, "name_map", where),
+        quarantine=quarantine,
+        warnings=[parse_import_warning(v) for v in as_list(_req(obj, "warnings", where), where)],
+    )
+
+
+def parse_node_import(value: object) -> NodeImport:
+    where = "NodeImport"
+    obj = as_object(value, where)
+    return NodeImport(
+        fragment=_get_str(obj, "fragment", where),
+        config=_get_str(obj, "config", where),
+        interfaces=_get_opt_str_dict(obj, "interfaces", where),
+        quarantine=[
+            parse_quarantine_entry(v) for v in as_list(_req(obj, "quarantine", where), where)
+        ],
+        warnings=[parse_import_warning(v) for v in as_list(_req(obj, "warnings", where), where)],
+    )
+
+
+def parse_node_config_diff(value: object) -> NodeConfigDiff:
+    where = "NodeConfigDiff"
+    obj = as_object(value, where)
+    return NodeConfigDiff(
+        node=_get_str(obj, "node", where),
+        matched=_get_int(obj, "matched", where),
+        missing=_get_str_list(obj, "missing", where),
+        extra=_get_str_list(obj, "extra", where),
+        quarantined=_get_int(obj, "quarantined", where),
+    )
+
+
+def parse_config_diff_report(value: object) -> ConfigDiffReport:
+    where = "ConfigDiffReport"
+    obj = as_object(value, where)
+    return ConfigDiffReport(
+        nodes=[parse_node_config_diff(v) for v in as_list(_req(obj, "nodes", where), where)]
     )
 
 

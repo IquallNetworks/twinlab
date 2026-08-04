@@ -18,10 +18,13 @@ import {
   labLinksSchema,
   labListSchema,
   labOwnerSchema,
+  configDiffReportSchema,
+  networkImportSchema,
   networkTemplateListSchema,
   networkTemplateSchema,
   networkTemplateSummarySchema,
   nodeLogsResponseSchema,
+  nodeImportSchema,
   nodeTemplateListSchema,
   nodeTemplateSchema,
   nodeNetemSchema,
@@ -147,6 +150,12 @@ export interface CreateNodeTemplateInput {
   content: string // YAML node-attribute mapping; must name `device`
 }
 
+export interface ImportSourceInput {
+  device: string // must be import-capable (CatalogDevice.config_import)
+  content: string // the dumped running config, <= 512 KiB
+  name?: string // node-name override; default = the config's hostname
+}
+
 export const api = {
   me: () => request('/auth/me', userInfoSchema),
   login: (username: string, password: string) =>
@@ -243,6 +252,28 @@ export const api = {
     request(`/labs/${encodeURIComponent(name)}/template`, networkTemplateSummarySchema.nullable(), {
       method: 'PUT',
       body: JSON.stringify({ published, description }),
+    }),
+
+  // Config import (delta 22): pure definition factories — no lab is touched.
+  // Compose importNetwork() -> createLab() -> putCustomConfig() ->
+  // updateLabDefinition() (custom config FIRST: the definition PUT validates
+  // its config: references against the STORED fileset).
+  importNetwork: (sources: ImportSourceInput[]) =>
+    request('/import/network', networkImportSchema, {
+      method: 'POST',
+      body: JSON.stringify({ sources }),
+    }),
+  importNode: (device: string, content: string) =>
+    request('/import/node', nodeImportSchema, {
+      method: 'POST',
+      body: JSON.stringify({ device, content }),
+    }),
+  // The fidelity proof: stateless (sources ride the request), lab:validate,
+  // deployed lab required. Informational, never a gate.
+  configDiff: (name: string, sources: { node: string; content: string }[]) =>
+    request(`/labs/${encodeURIComponent(name)}/config-diff`, configDiffReportSchema, {
+      method: 'POST',
+      body: JSON.stringify({ sources }),
     }),
 
   // The lifecycle split: create a bare record (name only), author the definition

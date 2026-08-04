@@ -243,8 +243,16 @@ User-stated, for after the frontend work:
   `/templates/node` (snapshot fragments), gated by the new global-only `template:manage`.
   Frontend: create-lab "Start from" selector, node templates in the builder's Add menu
   (stamped through `parseNodeFragment`), "Save as template" in the node inspector, and the
-  lab header's publish-toggle dialog + `template` badge. Config-file import (part two) stays
-  parked — deferred at the design discussion until after templates and scenarios.
+  lab header's publish-toggle dialog + `template` badge. **Config-file import (part two) DONE
+  2026-08-04 (contract delta 22)** — record in `docs/config-import.md`. Frontend: the
+  `/labs/import` two-step wizard (sources with per-file device select → review: warnings,
+  renames, inferred definition, per-node interface maps + collapsible carry + quarantine with
+  reason badges → create composes createLab → putCustomConfig → updateLabDefinition — custom
+  config FIRST, the PUT validates `config:` refs against the stored fileset), an Import button
+  on the labs page, and the builder Add menu's "From config file…" (stamps the fragment via
+  the shared `stampFragment` path; carry + quarantine land in custom config UNATTACHED with a
+  toast explaining the wire-links-first QUIRK — a single config infers no links, so its carry
+  keeps SOURCE interface names).
 - **Scenario definition** — specific/random traffic between nodes or between "clients" attached
   to edge nodes; specific/random impairment schedules on the network.
 

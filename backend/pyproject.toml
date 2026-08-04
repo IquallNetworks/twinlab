@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
     "napalm>=5.2.0",
+    "netutils>=1.18.0",
     "networklab>=26.7",
     "ntc-templates>=9.2.0",
     "pwdlib[argon2]>=0.3.0",

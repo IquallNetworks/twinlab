@@ -218,6 +218,38 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     template can never block publishing a lab. (wire today: no template
     surface — the create-lab flow starts blank and the builder's Add menu
     offers bare catalog devices only.)
+22. Config import (APPROVED 2026-08-04 — design record + plan: docs/config-import.md):
+    definition input methods, part two — a deployable lab from DUMPED
+    RUNNING CONFIGS. Import is a pure DEFINITION FACTORY (no lab side
+    effects; the client composes create_lab → update_definition →
+    put_custom_config — delta 21's no-instantiate principle): ``POST
+    /import/network`` turns one config file per node into a netlab
+    definition plus per-node carried config; ``POST /import/node`` turns
+    one config into a node-template-style fragment for the builder's Add
+    menu. NOTHING IS DROPPED — every source line lands in exactly ONE of
+    three buckets (the builder's typed-vs-extras philosophy applied to
+    import): MODELED (consumed into a deliberately THIN skeleton — nodes,
+    subnet-inferred links, PINNED addressing, NO protocol modules; netlab
+    regenerates modeled config natively, so it must never also ride the
+    carry), CARRIED (verbatim per-node custom-config templates that
+    ``netlab initial`` applies — OSPF/BGP/MPLS/ACLs/everything; untouched
+    except INTERFACE RENAMING, source names rewritten to the
+    netlab-assigned lab ifnames via the dry create's expanded topology,
+    with the map returned), or QUARANTINED (kept but unattached by
+    default: config referencing the PRODUCTION environment that would
+    break the lab — mgmt / auth / telemetry / hardware classes). modeled
+    ∪ carried ∪ quarantined = source is a factory invariant. Fidelity is
+    PROVEN, not trusted: ``POST /labs/{name}/config-diff`` collects the
+    running configs over the exec transport and classifies every source
+    line against them — stateless (sources ride the request; a lab never
+    remembers its import origin), the interface map recomputed by joining
+    the sources' pinned addresses against the lab's facts. Scope is the
+    import-capable subset of the catalog (``CatalogDevice.config_import``:
+    vyos + iol — linux has no config-dump concept). A raw-containerlab
+    SECOND DEPLOYMENT MODEL was considered and REJECTED — interface
+    renaming and link inference are needed either way, and a second lab
+    species forks the whole downstream stack (docs/config-import.md).
+    (wire today: no import surface.)
 
 Conventions:
 
@@ -482,6 +514,11 @@ class CatalogDevice:
     image_present: bool | None  # default image exists on the host Docker
     #                             daemon — best-effort; None = could not check
     #                             (see DeviceCatalog.live)
+    # PROPOSED (delta 22, APPROVED): this device's dumped running configs can
+    # be imported (POST /import/*). Import capability is NARROWER than
+    # deployability — linux has no config-dump concept — and widens only with
+    # a per-device parser (a NOS-sweep-adjacent decision, never implicit).
+    config_import: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,6 +587,139 @@ class NodeTemplate:
     #              surfaced so the palette renders the entry like a
     #              CatalogDevice (icon, image-missing warning)
     content: str
+
+
+# --------------------------------------------------------------------------- #
+# Config-import shapes (delta 22, APPROVED)
+# --------------------------------------------------------------------------- #
+
+
+# Pinned because WE derive it: the quarantine classes — source config that
+# references the PRODUCTION environment rather than the network's own
+# behavior, kept but not applied by default (a lab that locks out its own
+# access is not "configured correctly"). Routing policy / ACLs / QoS / VRFs
+# are NEVER quarantined — they carry and apply.
+QUARANTINE_CLASSES = ("mgmt", "auth", "telemetry", "hardware")
+QuarantineClass = Literal["mgmt", "auth", "telemetry", "hardware"]
+# mgmt      — the source mgmt interface + its addressing (mgmt is Twinlab's:
+#             the receiving lab's PUT pins its own subnet)
+# auth      — AAA / TACACS / RADIUS / local-user auth (would lock the lab's
+#             own config push + terminal access out)
+# telemetry — prod-pointing NTP / SNMP / syslog / flow exporters
+# hardware  — transceivers / stacking / licensing / boot lines a container
+#             image cannot hold
+
+
+@dataclass(frozen=True, slots=True)
+class ImportSource:
+    """One dumped running config. `device` must be import-capable
+    (CatalogDevice.config_import — 422 ``unsupported_device``). VyOS accepts
+    both the brace format (`show configuration`) and the flat set form
+    (`show configuration commands`); IOS/IOL the plain running-config text.
+    `name` overrides the node name; default is the config's hostname,
+    sanitized to the name charset (the applied renames land in
+    NetworkImport.name_map). Bounds, shape-only: ≤ 64 sources per call,
+    ≤ 512 KiB each (422)."""
+
+    device: str
+    content: str
+    name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class QuarantineEntry:
+    """One quarantined block of a node's source config, with why."""
+
+    reason: QuarantineClass
+    content: str  # verbatim source lines, hierarchy preserved
+
+
+@dataclass(frozen=True, slots=True)
+class ImportWarning:
+    """A named, non-fatal fidelity hazard — never silent: an interface-like
+    token in carried config that matched no map entry, an interface with no
+    subnet peer (emitted as a stub link), an exotic stanza carried untouched
+    but unrecognized, a sanitized hostname collision suffix, …"""
+
+    node: str | None  # None = network-level
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkImport:
+    """`POST /import/network` — the definition factory's output. PURE: no
+    lab is touched; the client composes create_lab → put_custom_config →
+    update_definition — custom config FIRST, because the definition PUT's
+    dry `netlab create` validates its `config:` references against the
+    lab's STORED fileset. The definition carries no `name:` and no mgmt
+    addressing — the receiving lab's PUT pins both.
+
+    `custom_config` is ready for put_custom_config verbatim: per node one
+    CARRY file `imported/<node>.j2` (referenced by that node's `config:`
+    list in the definition; content is `{% raw %}`-wrapped so device config
+    containing brace sequences survives netlab's Jinja render byte-exact)
+    and, when its quarantine is non-empty, one UNATTACHED file
+    `imported/<node>.quarantine.j2` — kept visible and re-attachable, never
+    silently lost; `quarantine` carries the classified breakdown."""
+
+    definition: str
+    custom_config: dict[str, str]
+    interface_map: dict[str, dict[str, str]]  # node → {source-if: lab-if}.
+    #   The rename applied to the carry, from the dry create's expanded
+    #   topology; the identity map for same-platform imports.
+    name_map: dict[str, str]  # source hostname → sanitized node name
+    quarantine: dict[str, list[QuarantineEntry]]  # node → entries
+    warnings: list[ImportWarning]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeImport:
+    """`POST /import/node` — one config into a node-template-style fragment
+    (a YAML node-attribute mapping naming `device`, stampable exactly like
+    a NodeTemplate) plus its carry. QUIRK, flagged for review: a single
+    config has no peers to subnet-join, so NO links are inferred and the
+    carry keeps SOURCE interface names — renaming needs links that don't
+    exist until the receiving doc wires them. `interfaces` lists what was
+    found so the client can wire and warn; the NETWORK flow is the
+    fidelity-complete path."""
+
+    fragment: str
+    config: str  # the carried config — un-rewritten, `{% raw %}`-wrapped
+    interfaces: dict[str, str | None]  # source ifname → ipv4 CIDR (None =
+    #                                    unnumbered/L2-only)
+    quarantine: list[QuarantineEntry]
+    warnings: list[ImportWarning]
+
+
+@dataclass(frozen=True, slots=True)
+class DiffSource:
+    """One node's source config for config_diff. No `device`: a diff source
+    names a LAB node, and the device comes from the lab's definition."""
+
+    node: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class NodeConfigDiff:
+    """One node's fidelity classification — every source line accounted for."""
+
+    node: str
+    matched: int  # source lines present in the running config (post-map)
+    missing: list[str]  # source lines ABSENT from the running config — the
+    #                     lines to look at
+    extra: list[str]  # running-config lines with no source counterpart.
+    #                    Expected noise, informational: the lab's own
+    #                    mgmt/user baseline, defaults the NOS materializes.
+    quarantined: int  # source lines excluded from comparison by class
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigDiffReport:
+    """`POST /labs/{name}/config-diff` — the import-fidelity proof.
+    Informational, NEVER a gate (the drift-badge philosophy)."""
+
+    nodes: list[NodeConfigDiff]
 
 
 # --------------------------------------------------------------------------- #
@@ -1603,6 +1773,46 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
+    # Definition import (delta 22, APPROVED)
+    # ------------------------------------------------------------------ #
+
+    async def import_network(self, sources: list[ImportSource]) -> NetworkImport:
+        """PROPOSED (delta 22, APPROVED) POST /import/network — the definition
+        factory: dumped running configs in; netlab definition + carry +
+        quarantine + maps out. GLOBAL lab:create (proposed: it is the
+        create-a-lab flow's factory, and it runs a netlab subprocess — the
+        dry create that yields the interface map — so it is not free).
+        SYNCHRONOUS (proposed: cost ≈ a PUT's dry validate; not a job —
+        nothing runs on any lab). 422 ``unsupported_device`` /
+        ``config_unparseable`` / ``duplicate_node`` (extras name the
+        offending source). Inference gaps are WARNINGS, never errors — a
+        one-node network with no inferable links is legal."""
+        raise NotImplementedError
+
+    async def import_node(self, device: str, content: str) -> NodeImport:
+        """PROPOSED (delta 22, APPROVED) POST /import/node — the single-node
+        granularity for the builder's Add menu. Any authenticated user
+        (proposed: a pure parse, no subprocess — the same class as reading
+        the template library). Same 422 slugs as import_network."""
+        raise NotImplementedError
+
+    async def config_diff(
+        self, name: str, sources: list[DiffSource]
+    ) -> ConfigDiffReport:
+        """PROPOSED (delta 22, APPROVED) POST /labs/{name}/config-diff — the
+        fidelity proof: collect each named node's RUNNING config over the
+        exec transport and classify every source line (matched / missing /
+        extra, modulo quarantine and the interface map — recomputed
+        STATELESSLY by joining the sources' pinned addresses against the
+        lab's facts, because a lab never remembers its import origin).
+        lab:validate (proposed — it execs on nodes, the suite-run class).
+        Requires a deployed lab (409 ``lab_not_running``); every
+        DiffSource.node must be a lab node (422). SYNCHRONOUS in v1
+        (proposed, review item: N sequential execs — becomes a job if that
+        proves slow). Informational, never a gate."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
     # Labs — lifecycle
     # ------------------------------------------------------------------ #
 
@@ -2024,3 +2234,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 # made those labs unpublishable. The NODE collection's builtin tier starts
 # EMPTY: bare devices are the catalog's job; a shipped preconfigured motif
 # (e.g. a PE-router preset) must earn its way in later.
+#
+# Import-capable devices (delta 22, APPROVED): vyos, iol. The catalog's
+# config_import flag is the queryable form; widening requires a per-device
+# parser, so it is a code change and therefore a contract change here.

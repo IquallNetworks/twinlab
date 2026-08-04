@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Panel } from '@xyflow/react'
-import { Bookmark, Plus, Router, Server, TriangleAlert, Waypoints } from 'lucide-react'
+import { Bookmark, FileUp, Plus, Router, Server, TriangleAlert, Waypoints } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -24,10 +24,12 @@ export function BuilderPalette({
   onAddDevice,
   onAddTemplate,
   onAddLan,
+  onImportConfig,
 }: {
   onAddDevice: (device: CatalogDevice) => void
   onAddTemplate: (template: NodeTemplateWire) => void
   onAddLan: () => void
+  onImportConfig: () => void
 }) {
   const { devices } = useDeviceCatalog()
   const templates = useNodeTemplates()
@@ -93,6 +95,12 @@ export function BuilderPalette({
           <DropdownMenuItem onSelect={onAddLan}>
             <Waypoints className="size-3.5" />
             LAN segment
+          </DropdownMenuItem>
+          {/* Single-node config import (delta 22) — stamps a fragment, keeps
+              the rest of the config unattached in custom config. */}
+          <DropdownMenuItem onSelect={onImportConfig}>
+            <FileUp className="size-3.5" />
+            From config file…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

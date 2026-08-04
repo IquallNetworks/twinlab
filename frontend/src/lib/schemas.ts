@@ -201,6 +201,7 @@ export const catalogDeviceSchema = z.object({
   modules: z.array(z.string()), // netlab vocabulary; the builder intersects
   image: z.string(), // netlab's default clab image (untagged = ":latest")
   image_present: z.boolean().nullable(), // null = presence unknown (see live)
+  config_import: z.boolean(), // delta 22: dumped configs of this device import
 })
 export type CatalogDeviceWire = z.infer<typeof catalogDeviceSchema>
 
@@ -239,6 +240,56 @@ export const nodeTemplateSchema = z.object({
 })
 export type NodeTemplateWire = z.infer<typeof nodeTemplateSchema>
 export const nodeTemplateListSchema = z.array(nodeTemplateSchema)
+
+// --- Config import (delta 22): the definition factory. Nothing is dropped —
+// every source line is modeled (skeleton), carried (custom-config) or
+// quarantined (kept unattached); the completeness is server-enforced. ---
+export const quarantineClassSchema = z.enum(['mgmt', 'auth', 'telemetry', 'hardware'])
+export type QuarantineClass = z.infer<typeof quarantineClassSchema>
+
+export const quarantineEntrySchema = z.object({
+  reason: quarantineClassSchema,
+  content: z.string(), // verbatim source lines, hierarchy preserved
+})
+export type QuarantineEntry = z.infer<typeof quarantineEntrySchema>
+
+export const importWarningSchema = z.object({
+  node: z.string().nullable(), // null = network-level
+  message: z.string(),
+})
+export type ImportWarning = z.infer<typeof importWarningSchema>
+
+export const networkImportSchema = z.object({
+  definition: z.string(), // no name:/mgmt — the receiving lab's PUT pins both
+  custom_config: z.record(z.string(), z.string()), // ready for the custom-config
+  //   PUT verbatim; quarantine files are present but UNREFERENCED
+  interface_map: z.record(z.string(), z.record(z.string(), z.string())),
+  name_map: z.record(z.string(), z.string()),
+  quarantine: z.record(z.string(), z.array(quarantineEntrySchema)),
+  warnings: z.array(importWarningSchema),
+})
+export type NetworkImport = z.infer<typeof networkImportSchema>
+
+export const nodeImportSchema = z.object({
+  fragment: z.string(), // stampable node-attribute mapping naming device
+  config: z.string(), // the carry — SOURCE interface names (the contract QUIRK)
+  interfaces: z.record(z.string(), z.string().nullable()),
+  quarantine: z.array(quarantineEntrySchema),
+  warnings: z.array(importWarningSchema),
+})
+export type NodeImport = z.infer<typeof nodeImportSchema>
+
+export const nodeConfigDiffSchema = z.object({
+  node: z.string(),
+  matched: z.number(),
+  missing: z.array(z.string()), // the lines to look at
+  extra: z.array(z.string()), // expected noise (lab baseline, NOS defaults)
+  quarantined: z.number(),
+})
+export const configDiffReportSchema = z.object({
+  nodes: z.array(nodeConfigDiffSchema),
+})
+export type ConfigDiffReport = z.infer<typeof configDiffReportSchema>
 
 export const suiteReportSchema = z.object({
   suite: z.string(),

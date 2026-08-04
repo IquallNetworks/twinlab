@@ -274,6 +274,9 @@ class CatalogDevice:
     image_present: bool | None  # default image exists on the host Docker
     #                             daemon — best-effort; None = could not check
     #                             (see DeviceCatalog.live)
+    config_import: bool  # delta 22: dumped running configs of this device can
+    #                      be imported (POST /import/*). Narrower than
+    #                      deployability — linux has no config-dump concept.
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +338,118 @@ class NodeTemplate:
     description: str
     device: str  # the fragment's `device` (required in the fragment)
     content: str
+
+
+# --------------------------------------------------------------------------- #
+# Config-import shapes (delta 22)
+# --------------------------------------------------------------------------- #
+
+
+# Pinned because Twinlab derives it: the quarantine classes — source config
+# referencing the PRODUCTION environment rather than the network's own
+# behavior, kept but not applied by default. Routing policy / ACLs / QoS /
+# non-mgmt VRFs are never quarantined.
+QuarantineClass = Literal["mgmt", "auth", "telemetry", "hardware"]
+QUARANTINE_CLASSES: Final[tuple[QuarantineClass, ...]] = (
+    "mgmt",
+    "auth",
+    "telemetry",
+    "hardware",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ImportSource:
+    """One dumped running config for import_network. `device` must be
+    import-capable (CatalogDevice.config_import). VyOS accepts both the
+    brace format and the flat set form; IOS/IOL the plain running-config
+    text. `name` overrides the node name (default: the config's hostname,
+    sanitized — the rename lands in NetworkImport.name_map). Bounds: <= 64
+    sources per call, <= 512 KiB each."""
+
+    device: str
+    content: str
+    name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class QuarantineEntry:
+    """One quarantined block of a node's source config, with why."""
+
+    reason: QuarantineClass
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImportWarning:
+    """A named, non-fatal fidelity hazard — never silent."""
+
+    node: str | None  # None = network-level
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkImport:
+    """`POST /import/network` — the definition factory's output. PURE: no
+    lab is touched; compose create_lab -> put_custom_config ->
+    update_definition — custom config FIRST, because the definition PUT's
+    dry netlab create validates its `config:` references against the lab's
+    STORED fileset. The definition carries no `name:` and no mgmt
+    addressing — the receiving lab's PUT pins both."""
+
+    definition: str
+    custom_config: dict[str, str]  # ready for put_custom_config verbatim:
+    #   per node a carry file `imported/<node>.j2` (referenced by the
+    #   definition, {% raw %}-wrapped) and, when non-empty, an UNATTACHED
+    #   `imported/<node>.quarantine.j2`
+    interface_map: dict[str, dict[str, str]]  # node -> {source-if: lab-if}
+    name_map: dict[str, str]  # source hostname -> sanitized node name
+    quarantine: dict[str, list[QuarantineEntry]]
+    warnings: list[ImportWarning]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeImport:
+    """`POST /import/node` — one config into a node-template-style fragment
+    plus its carry. QUIRK: a single config has no peers to subnet-join, so
+    the carry keeps SOURCE interface names; the network flow is the
+    fidelity-complete path."""
+
+    fragment: str
+    config: str  # the carried config — un-rewritten, {% raw %}-wrapped
+    interfaces: dict[str, str | None]  # source ifname -> ipv4 CIDR (None =
+    #                                    unnumbered/L2-only)
+    quarantine: list[QuarantineEntry]
+    warnings: list[ImportWarning]
+
+
+@dataclass(frozen=True, slots=True)
+class DiffSource:
+    """One node's source config for config_diff. No device: a diff source
+    names a LAB node; the device comes from the lab's definition."""
+
+    node: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class NodeConfigDiff:
+    """One node's fidelity classification — every source line accounted for."""
+
+    node: str
+    matched: int  # source lines present in the running config (post-map)
+    missing: list[str]  # source lines ABSENT from the running config
+    extra: list[str]  # running-config lines with no source counterpart —
+    #                    expected noise (lab baseline, NOS defaults)
+    quarantined: int  # source lines excluded from comparison by class
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigDiffReport:
+    """`POST /labs/{name}/config-diff` — the import-fidelity proof.
+    Informational, never a gate."""
+
+    nodes: list[NodeConfigDiff]
 
 
 # --------------------------------------------------------------------------- #

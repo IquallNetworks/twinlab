@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from twinlab_backend.auth.dependencies import CurrentUserDep
 from twinlab_backend.deps import RunnerClientDep
 from twinlab_backend.result import Ok
+from twinlab_backend.services.configimport.pipeline import import_capable_devices
 from twinlab_backend.services.device_catalog import (
     SUPPORTED_DEVICES,
     DeviceRole,
@@ -29,6 +30,10 @@ class CatalogDeviceOut(BaseModel):
     modules: list[str]
     image: str
     image_present: bool | None  # None = presence unknown (see live)
+    # Delta 22: dumped running configs of this device can be imported
+    # (POST /import/*). Narrower than deployability — derived from the
+    # importer's parser set, so it can never drift from what actually parses.
+    config_import: bool
 
 
 class DeviceCatalogOut(BaseModel):
@@ -40,6 +45,7 @@ def build_catalog(present_images: frozenset[str] | None) -> DeviceCatalogOut:
     """Pure assembly: the curated specs joined with the daemon's image set
     (None = the runner was unreachable — every presence degrades to None,
     never an error; the link-table honesty pattern)."""
+    importable = import_capable_devices()
     return DeviceCatalogOut(
         devices=[
             CatalogDeviceOut(
@@ -53,6 +59,7 @@ def build_catalog(present_images: frozenset[str] | None) -> DeviceCatalogOut:
                     if present_images is None
                     else image_reference(spec.image) in present_images
                 ),
+                config_import=spec.device in importable,
             )
             for spec in SUPPORTED_DEVICES
         ],

@@ -10,7 +10,9 @@ import pytest
 
 from twinlab_client import (
     DeployResponse,
+    DiffSource,
     Duration,
+    ImportSource,
     Job,
     JobEvent,
     LabDetail,
@@ -585,6 +587,7 @@ async def test_device_catalog_parses(make_client: ClientFactory) -> None:
                         "modules": ["bgp", "mpls", "ospf", "vrf"],
                         "image": "ghcr.io/sysoleg/vyos-container",
                         "image_present": True,
+                        "config_import": True,
                     },
                     {
                         "device": "linux",
@@ -593,6 +596,7 @@ async def test_device_catalog_parses(make_client: ClientFactory) -> None:
                         "modules": [],
                         "image": "python:3.13-alpine",
                         "image_present": None,
+                        "config_import": False,
                     },
                 ],
                 "live": True,
@@ -605,7 +609,9 @@ async def test_device_catalog_parses(make_client: ClientFactory) -> None:
     assert [d.device for d in catalog.devices] == ["vyos", "linux"]
     assert catalog.devices[0].role == "router"
     assert catalog.devices[0].image_present is True
+    assert catalog.devices[0].config_import is True
     assert catalog.devices[1].image_present is None
+    assert catalog.devices[1].config_import is False
 
 
 async def test_device_catalog_unknown_role_is_protocol_error(make_client: ClientFactory) -> None:
@@ -621,6 +627,7 @@ async def test_device_catalog_unknown_role_is_protocol_error(make_client: Client
                         "modules": [],
                         "image": "x",
                         "image_present": None,
+                        "config_import": False,
                     }
                 ],
                 "live": False,
@@ -1076,3 +1083,104 @@ async def test_lab_detail_serves_template_published(make_client: ClientFactory) 
     async with make_client(handler) as client:
         detail = await client.get_lab("lab1")
     assert detail.template_published is True
+
+
+# --------------------------------------------------------------------------- #
+# Config import (delta 22)
+# --------------------------------------------------------------------------- #
+
+_NETWORK_IMPORT_PAYLOAD = {
+    "definition": "provider: clab\nnodes:\n  r1:\n    device: iol\n",
+    "custom_config": {
+        "imported/r1.j2": "{% raw %}\ninterface Ethernet0/1\n{% endraw %}\n",
+        "imported/r1.quarantine.j2": "{% raw %}\naaa new-model\n{% endraw %}\n",
+    },
+    "interface_map": {"r1": {"GigabitEthernet0/0/1": "Ethernet0/1"}},
+    "name_map": {"prod-r1": "prod_r1"},
+    "quarantine": {"r1": [{"reason": "auth", "content": "aaa new-model"}]},
+    "warnings": [{"node": "r1", "message": "something noted"}],
+}
+
+
+async def test_import_network_round_trip(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/import/network"
+        body = json.loads(request.content)
+        assert body == {"sources": [{"device": "iol", "content": "hostname r1\n", "name": "r1"}]}
+        return httpx.Response(200, json=_NETWORK_IMPORT_PAYLOAD)
+
+    async with make_client(handler) as client:
+        result = await client.import_network(
+            [ImportSource(device="iol", content="hostname r1\n", name="r1")]
+        )
+    assert "provider: clab" in result.definition
+    assert result.interface_map["r1"]["GigabitEthernet0/0/1"] == "Ethernet0/1"
+    assert result.name_map == {"prod-r1": "prod_r1"}
+    assert result.quarantine["r1"][0].reason == "auth"
+    assert result.warnings[0].node == "r1"
+    assert "imported/r1.quarantine.j2" in result.custom_config
+
+
+async def test_import_network_error_slug(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "code": "duplicate_node",
+                "message": "two sources resolve to node name 'r1'",
+                "extras": {},
+            },
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabApiError) as excinfo:
+            _ = await client.import_network([ImportSource(device="iol", content="x\n")])
+    assert excinfo.value.code == "duplicate_node"
+
+
+async def test_import_node_parses(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/import/node"
+        return httpx.Response(
+            200,
+            json={
+                "fragment": "device: iol\nloopback:\n  ipv4: 10.0.0.1/32\n",
+                "config": "{% raw %}\ninterface Ethernet0/1\n{% endraw %}\n",
+                "interfaces": {"Ethernet0/1": "10.1.2.1/30", "Ethernet0/2": None},
+                "quarantine": [],
+                "warnings": [{"node": None, "message": "carried config keeps SOURCE names"}],
+            },
+        )
+
+    async with make_client(handler) as client:
+        result = await client.import_node("iol", "hostname r1\n")
+    assert "device: iol" in result.fragment
+    assert result.interfaces == {"Ethernet0/1": "10.1.2.1/30", "Ethernet0/2": None}
+    assert result.warnings[0].node is None
+
+
+async def test_config_diff_round_trip(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/config-diff"
+        body = json.loads(request.content)
+        assert body == {"sources": [{"node": "r1", "content": "hostname r1\n"}]}
+        return httpx.Response(
+            200,
+            json={
+                "nodes": [
+                    {
+                        "node": "r1",
+                        "matched": 12,
+                        "missing": [" passive-interface Ethernet0/1"],
+                        "extra": ["username admin secret 5 x"],
+                        "quarantined": 3,
+                    }
+                ]
+            },
+        )
+
+    async with make_client(handler) as client:
+        report = await client.config_diff("lab1", [DiffSource(node="r1", content="hostname r1\n")])
+    assert report.nodes[0].matched == 12
+    assert report.nodes[0].missing == [" passive-interface Ethernet0/1"]
+    assert report.nodes[0].quarantined == 3

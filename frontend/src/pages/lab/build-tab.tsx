@@ -360,6 +360,7 @@ function BuildTabInner({
                 <BuilderCanvas
                   state={state}
                   dispatch={dispatch}
+                  labName={name}
                   positions={positions}
                   onPositions={onPositions}
                   groupStyles={groupStyles}

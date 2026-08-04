@@ -45,6 +45,7 @@ import type { SavedPositions } from '../topology/flow-types'
 
 import { validateConnect, type BuilderAction, type BuilderState, type Selection } from './build-state'
 import { BuilderPalette } from './builder-palette'
+import { ImportNodeDialog } from './import-node-dialog'
 
 // Module-scope so React Flow never sees a new nodeTypes identity per render.
 const NODE_TYPES = { device: DeviceNode, lan: LanNode, stub: StubNode }
@@ -62,6 +63,9 @@ const memberEdgeId = (lanId: string, node: string) => `member|${lanId}|${node}`
 interface BuilderCanvasProps {
   state: BuilderState
   dispatch: Dispatch<BuilderAction>
+  // The lab's name — the single-node config import saves its carry into the
+  // lab's custom config (delta 22).
+  labName: string
   positions: SavedPositions
   // persist=true writes through to the per-lab layout store (drag end,
   // palette add, auto-layout); transient bookkeeping passes false.
@@ -163,6 +167,7 @@ function graphFromDoc(doc: BuildDoc, groupStyles: GroupStyles): { nodes: AppNode
 function CanvasInner({
   state,
   dispatch,
+  labName,
   positions,
   onPositions,
   groupStyles,
@@ -172,6 +177,7 @@ function CanvasInner({
   const { fitView, screenToFlowPosition } = useReactFlow()
   const { devices: catalogDevices } = useDeviceCatalog()
   const [rankdir, setRankdir] = useState<RankDir>('LR')
+  const [importOpen, setImportOpen] = useState(false)
   const [showMiniMap, setShowMiniMap] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const doc = state.doc
@@ -273,21 +279,29 @@ function CanvasInner({
   // Stamp a node template (delta 21): parse the fragment through the same
   // typed-vs-extras split the doc parser applies, add the node, then patch
   // the parsed attributes onto it — indistinguishable from hand authoring.
-  const addTemplate = (template: NodeTemplateWire) => {
-    const name = nextNodeName(doc, template.device)
+  // Stamp an arbitrary node fragment (templates and config import share the
+  // path, so a stamped node is indistinguishable from a hand-authored one).
+  // Returns the assigned name, or null after toasting why not.
+  const stampFragment = (fragment: string, forDevice: string, label: string): string | null => {
+    const name = nextNodeName(doc, forDevice)
     const parsed = parseNodeFragment(
-      template.content,
+      fragment,
       name,
       catalogDevices.map((entry) => entry.device),
     )
     if (!parsed.ok) {
-      toast.error(`Template "${template.name}": ${parsed.reason}`)
-      return
+      toast.error(`${label}: ${parsed.reason}`)
+      return null
     }
     const { name: _name, device, ...patch } = parsed.node
     onPositions({ ...positionsRef.current, [name]: dropPosition() }, true)
     dispatch({ type: 'add-node', name, device })
     dispatch({ type: 'patch-node', name, patch })
+    return name
+  }
+
+  const addTemplate = (template: NodeTemplateWire) => {
+    void stampFragment(template.content, template.device, `Template "${template.name}"`)
   }
 
   const addLan = () => {
@@ -434,7 +448,18 @@ function CanvasInner({
           />
         )}
 
-        <BuilderPalette onAddDevice={addDevice} onAddTemplate={addTemplate} onAddLan={addLan} />
+        <BuilderPalette
+          onAddDevice={addDevice}
+          onAddTemplate={addTemplate}
+          onAddLan={addLan}
+          onImportConfig={() => setImportOpen(true)}
+        />
+        <ImportNodeDialog
+          labName={labName}
+          open={importOpen}
+          onOpenChange={setImportOpen}
+          onStamp={(fragment, device) => stampFragment(fragment, device, 'Imported config')}
+        />
 
         {/* Teaching overlay: gone the moment the first node lands. */}
         {doc.nodes.length === 0 && (

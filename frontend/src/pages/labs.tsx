@@ -1,7 +1,7 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { Plus, Trash2 } from 'lucide-react'
+import { FileUp, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -307,7 +307,18 @@ export function LabsPage() {
             </span>
           )}
         </div>
-        {canCreate && <CreateLabDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} />}
+        {canCreate && (
+          <div className="flex items-center gap-2">
+            {/* Import (delta 22) rides the same lab:create the factory needs. */}
+            <Button variant="outline" asChild>
+              <Link to="/labs/import">
+                <FileUp className="size-4" />
+                Import
+              </Link>
+            </Button>
+            <CreateLabDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} />
+          </div>
+        )}
       </div>
 
       {isError ? (

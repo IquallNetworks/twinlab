@@ -69,7 +69,7 @@ it unset until the guard is implemented.
 | `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, power, terminal, events |
 | `test_ssh_jump.py`     | (`deploy`) real `ssh` probes through the jump host: permitopen scoping, revocation, fail-safe |
 
-The backend implements the full v1.0 contract (twenty deltas — delta 12 made the four long
+The backend implements the full v1.0 contract (twenty-two deltas — delta 12 made the four long
 operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the
 SSH jump host the ssh slices exercise; delta 14 the link table; deltas 15/16 the cross-lab job
 listing and the stream's job events, both covered in the cheap slice; delta 17 reworked test
@@ -81,8 +81,14 @@ authoring slice covers the layout roundtrip/replace/permission gate, and the dep
 asserts the drift flag across deploy → edit → redeploy → destroy; delta 20 group styles on
 the layout — roundtrip, whole-resource replace, hex-pinned color 422; delta 21 the template
 library — the templates slice covers both collections, the publish-toggle lifecycle incl. the
-live view and soft-delete withdrawal, fragment structural 422s, and the template:manage split),
+live view and soft-delete withdrawal, fragment structural 422s, and the template:manage split;
+delta 22 config import — the imports slice covers the catalog's config_import flags, the
+factory's output shape and 422 slugs, the permission split, config-diff pre-checks, the
+composed lifecycle (custom config BEFORE the definition PUT — its dry create validates
+`config:` refs against the stored fileset), and the deploy-marked flagship round trip: import
+two VyOS configs → compose → deploy with configure (the carried OSPF applies) → the fidelity
+diff reports zero missing lines with the quarantined NTP counted),
 and the suite is
-**entirely green** (123/123 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+**entirely green** (130/130 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

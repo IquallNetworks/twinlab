@@ -21,6 +21,7 @@ from twinlab_backend.api.events import router as events_router
 from twinlab_backend.api.grants import router as grants_router
 from twinlab_backend.api.groups import router as groups_router
 from twinlab_backend.api.health import router as health_router
+from twinlab_backend.api.imports import router as imports_router
 from twinlab_backend.api.internal import router as internal_router
 from twinlab_backend.api.jobs import fleet_router as fleet_jobs_router
 from twinlab_backend.api.jobs import router as jobs_router
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
     app.include_router(roles_router, prefix=_API_PREFIX)
     app.include_router(catalog_router, prefix=_API_PREFIX)
     app.include_router(templates_router, prefix=_API_PREFIX)
+    app.include_router(imports_router, prefix=_API_PREFIX)
     app.include_router(directory_router, prefix=_API_PREFIX)
     app.include_router(events_router, prefix=_API_PREFIX)
     app.include_router(terminal_router, prefix=_API_PREFIX)

@@ -660,13 +660,36 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        publishing deliberately exposes the definition deployment-wide); node
        templates are snapshot fragments (structural validation only); builtin
        tier seeded from `examples/` with a drift-guard; NO instantiate verb.
-       Shipped across backend (migration 0019) + client + blackbox (9 tests,
-       123 total green live) + frontend (create-from-template, palette
-       stamping, save-node-as-template, header publish toggle). **Part two —
-       definitions from real config files — deliberately DEFERRED** ("gets a
-       lot more complex"); when picked up, the discussion's leads: skeleton +
-       custom-config residue, ciscoconfparse is GPLv3 (backend blocker —
-       sidecar aggregation or a hand-rolled subset are the outs).
+       Shipped across backend (migration 0019) + client + blackbox (9 tests)
+       + frontend (create-from-template, palette stamping,
+       save-node-as-template, header publish toggle). **Part two —
+       definitions from real config files — DONE 2026-08-04 (contract delta
+       22)**, unparked ahead of scenarios (maintainer's call), designed and
+       shipped the same day; full record in **`docs/config-import.md`**.
+       Decided at design: one deployment model (a raw-clab second model was
+       considered and REJECTED — interface renaming and link inference are
+       needed either way, and a second lab species forks the whole stack);
+       import is a pure definition factory (thin skeleton —
+       nodes/links/pinned addressing, NO modules — plus verbatim carry as
+       custom-config and a pinned mgmt/auth/telemetry/hardware quarantine,
+       nothing ever dropped: the three buckets partition the source, a
+       tested invariant); interface renaming via the dry-create expanded
+       topology joined on pinned addresses; a stateless post-configure
+       fidelity diff (`POST /labs/{name}/config-diff`). Parsers: netutils
+       (Apache-2.0, approved) for IOS, own boundary parser for VyOS (nothing
+       off-the-shelf exists; Batfish set aside — no VyOS, heavyweight;
+       ciscoconfparse2 GPLv3-blocked). Shipped across backend
+       (`services/configimport/`, `/import/*` + config-diff +
+       `CatalogDevice.config_import`) + client + blackbox (7 tests, 130
+       total green live incl. the flagship deploy round trip: import two
+       VyOS configs → compose → deploy with configure → zero missing lines
+       in the diff) + frontend (the `/labs/import` wizard and the builder's
+       "From config file…"). Live-proven en route: compose order is
+       put_custom_config BEFORE update_definition; VyOS op-mode collection
+       needs the vyatta-op-cmd-wrapper over docker exec. **Next per the
+       2026-08-04 sequencing: the aux-input analysis** (CDP/LLDP neighbor
+       dumps / explicit wiring lists to pin adjacencies addressing cannot —
+       the Batfish-layer1 precedent), immediately, before scenarios.
     5. **Scenario definition** — traffic between nodes/attached clients,
        impairment schedules. The least-specified item; also starts with a
        design discussion.

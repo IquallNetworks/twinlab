@@ -36,15 +36,17 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (twenty-one deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (twenty-two deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
 2026-08-03, delta 18 the device/image catalog, delta 19 the deployed-definition snapshot +
 shared topology layout — both approved same day — delta 20 group canvas styling on the
-layout resource, approved 2026-08-04, and delta 21 the template library — input methods part
-one, approved same day with the reviewer-directed per-kind split). Two non-compose
+layout resource, approved 2026-08-04, delta 21 the template library — input methods part
+one, approved same day with the reviewer-directed per-kind split — and delta 22 config
+import — input methods part two, approved 2026-08-04, design record in
+`docs/config-import.md`). Two non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 123 tests
+client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 130 tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker). The suite is the contract's enforcement — backend changes are verified against
 it, and contract changes go through review.
@@ -89,10 +91,20 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   from a hand-authored one — the node inspector's General tab gained "Save as template", and
   the lab header wears a `template` badge with a publish-toggle dialog in its `⋯` menu; the
   library queries live under their own `['templates']` root so SSE lab bursts don't churn
-  them); still
-  parked, order agreed 2026-08-03 (ROADMAP item 16; **builder link forms DONE 2026-08-04** —
-  see Phase 4 below): definitions from real config files (input methods part two, deliberately
-  deferred at the 2026-08-04 design discussion — "gets a lot more complex") → scenarios;
+  them), and
+  **config import DONE 2026-08-04** (contract delta 22 — see the backend bullet; the frontend
+  gained the `/labs/import` wizard — gather sources with per-file device select → analyze via
+  the pure factory → review warnings/renames/definition/per-node maps + carry + quarantine →
+  create composes createLab → putCustomConfig → updateLabDefinition, custom config FIRST
+  because the definition PUT validates its `config:` refs against the STORED fileset — plus an
+  Import button on the labs page and the builder Add menu's "From config file…", which stamps
+  the fragment through the shared `stampFragment` path and saves carry + quarantine into the
+  lab's custom config UNATTACHED, since a single config infers no links and keeps SOURCE
+  interface names); still
+  parked, order agreed 2026-08-03/04 (ROADMAP item 16; **builder link forms DONE
+  2026-08-04** — see Phase 4 below): the import aux-input analysis (CDP/LLDP neighbor dumps /
+  explicit wiring lists — sequenced immediately after import v1, see `docs/config-import.md`)
+  → scenarios (the least-specified item; starts with a design discussion);
   after that batch comes the **NOS platform
   sweep** (ROADMAP item 17), then a
   comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
@@ -277,6 +289,29 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   mutations ride the NEW global-only `template:manage` (admin + global_operator);
   `LabDetail.template_published` renders the toggle; NO instantiate verb — clients compose the
   lifecycle),
+  **config import** (delta 22, design record `docs/config-import.md`: `POST /import/network` —
+  global `lab:create`, sync — and `POST /import/node` — any authenticated — are PURE definition
+  factories in `services/configimport/`: per-platform boundary parsers (VyOS set+brace own code;
+  IOS over netutils, Apache-2.0, with a local `typings/` stub since ConfigLine is an untyped
+  namedtuple) → subnet-join link inference (2=p2p, 3+=LAN, 1=stub; mgmt-VRF interfaces never
+  join) → THIN skeleton emission (nodes/links/pinned addressing, NO modules) → the same dry
+  `netlab create` a PUT runs, whose expanded topology yields the source-if→lab-if map joined on
+  PINNED addresses → carry rewrite (IOS single-pass alternation over names+abbreviations so
+  shifted maps can't cascade; VyOS structural token rewrite incl. the ethernet→dummy type change
+  stubs force — VyOS stubs realize as `dumN`, loopback pins as `dum0`, IOL stubs as real
+  `EthernetX` via clab dummy links, all live-probed). Every source line lands in EXACTLY ONE of
+  modeled/carried/quarantined (partition is a tested invariant); carry files are
+  `imported/<node>.j2` (`{% raw %}`-wrapped, referenced by the definition) and quarantine files
+  sit beside them UNREFERENCED; quarantine classes mgmt/auth/telemetry/hardware are pinned
+  vocabulary, the line lists are code. COMPOSE ORDER: put_custom_config BEFORE
+  update_definition — the PUT's dry create validates `config:` refs against the STORED fileset
+  (live-proven). `POST /labs/{name}/config-diff` (lab:validate, deployed lab) is the STATELESS
+  fidelity proof: collects running configs over the runner exec transport (VyOS needs
+  `/opt/vyatta/bin/vyatta-op-cmd-wrapper` — bare op-mode commands return empty over docker
+  exec) and classifies every comparable source line matched/missing/extra modulo quarantine +
+  an address-join map recompute; informational, never a gate. 422 slugs `unsupported_device` /
+  `config_unparseable` / `duplicate_node` (+ `netlab_invalid` with stderr); `CatalogDevice`
+  gained `config_import`, derived from the parser set),
   `GET /labs` + `GET /labs/{name}` (stored record merged with best-effort
   live node state; owner as `Principal {id, name}`, `config_time_status` tri-state, per-lab
   `permissions` MASKED to the lab-scoped set; **delta 19**: both carry `definition_drifted` —

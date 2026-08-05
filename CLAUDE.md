@@ -383,10 +383,22 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `{command, expect, parse, interactive}` or a DEVICE-KEYED dict of cases (one suite serves
   several NOS flavors; a node whose device has no case reports `skip`). Commands and expectation
   strings carry Jinja2 templates rendered per node against the lab's **fact namespace** — netlab's
-  RAW node dicts from the expanded topology (PROVISIONAL, pinning is a pre-v1.0 decision), served
-  by `GET /labs/{name}/facts` (lazy-backfilled JSONB cache like the link table) with one `address`
-  filter; rendering is sandboxed + StrictUndefined, PUT syntax-checks always and dry-renders when
-  facts exist (422 `template_invalid` naming suite/test/field). `parse` is `json` (free on VyOS —
+  node data from the expanded topology, served by `GET /labs/{name}/facts` (lazy-backfilled JSONB
+  cache like the link table) with one `address` filter. **PINNED since 2026-08-05 (contract
+  delta 26, `docs/fact-namespace.md`, closing delta 17's pre-v1.0 reservation): each node's dict
+  is PARTITIONED** into a promised core — identity, `mgmt`, `loopback?`, `interfaces` (with
+  `neighbors`) and the `ospf`/`bgp`/`ldp`/`vrfs` subtrees, stable contract enforced by a
+  drift-guard test over the examples' real netlab output — and a per-object **`_extras`** holding
+  EVERY other key verbatim with no promises, netlab's internal `_`-prefixed bookkeeping included.
+  Nothing is dropped (reassembly reproduces the raw dict) and nothing is duplicated, so the tier
+  is visible in the path: `{{ node.ospf.router_id }}` is contract, `{{ node._extras.mtu }}`
+  renders but may break on a netlab upgrade, and the OLD spelling of a demoted key
+  (`{{ node.box }}`) is a hard StrictUndefined failure rather than a silent empty. The partition
+  is applied at the SERVE boundaries (facts endpoint, render context, PUT dry-render — all via
+  `_node_facts_for`), so the cache stays raw and the member lists can change with no migration;
+  `services/fact_namespace.py` is the schema. Rendering is sandboxed + StrictUndefined, PUT
+  syntax-checks always and dry-renders when facts exist (422 `template_invalid` naming
+  suite/test/field). `parse` is `json` (free on VyOS —
   FRR's `vtysh -c "show … json"`, incl. `show bgp ipv4 vpn summary json`; the `vpnv4 unicast`
   spelling doesn't exist) or `textfsm` (ntc-templates' cisco_ios set overlaid by Twinlab-packaged
   templates in `services/textfsm_templates/` — e.g. our own `show mpls ldp neighbor`; a missing

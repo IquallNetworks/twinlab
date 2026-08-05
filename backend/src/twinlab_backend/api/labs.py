@@ -103,6 +103,7 @@ from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
 from twinlab_backend.services.configimport import diff as configimport_diff
 from twinlab_backend.services.custom_config import BuiltinLibrary
 from twinlab_backend.services.device_catalog import LOCAL_ONLY_DEVICES, image_reference
+from twinlab_backend.services.fact_namespace import partition_node_facts
 from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
 from twinlab_backend.services.netlab import (
@@ -338,12 +339,16 @@ def _runner_executor(
 
 
 async def _node_facts_for(db: AsyncSession, lab: Lab, library: BuiltinLibrary) -> NodeFacts:
-    """The lab's fact namespace (delta 17), from the record's cache — lazily
+    """The lab's fact namespace, PARTITIONED (delta 26: promised core in place,
+    everything else under `_extras`) — from the record's cache, lazily
     regenerated from the stored definition when the cache predates the column.
-    Callers guarantee `lab.definition` is set."""
+    Callers guarantee `lab.definition` is set.
+
+    The cache holds netlab's RAW dicts; partitioning happens here, at the serve
+    boundary, so the member lists can change without a migration."""
     stored = _stored_node_facts(lab)
     if stored is not None:
-        return stored
+        return partition_node_facts(stored)
     if lab.definition is None:  # callers pre-check; defensive for typing
         raise ApiError(409, "no_definition", f"lab '{lab.name}' has no stored definition yet")
     artifacts = await run_in_threadpool(
@@ -354,7 +359,7 @@ async def _node_facts_for(db: AsyncSession, lab: Lab, library: BuiltinLibrary) -
         raise _netlab_failed(artifacts.error.message, artifacts.error.stderr)
     facts = artifacts.value.node_facts
     _ = await lab_store.set_node_facts(db, lab.name, dict(facts))
-    return facts
+    return partition_node_facts(facts)
 
 
 async def _run_config_time(
@@ -626,9 +631,10 @@ def _stored_links(lab: Lab) -> list[TopologyLink] | None:
 
 
 def _stored_node_facts(lab: Lab) -> dict[str, dict[str, object]] | None:
-    """The lab's cached fact namespace; None = absent (rows predating the
-    column) — healed by regeneration. Values are raw netlab node dicts
-    (delta 17: provisional, unpinned), so only the outer shape is checked."""
+    """The lab's cached fact namespace as STORED — netlab's raw node dicts,
+    pre-partition (delta 26 partitions at the serve boundary, so the cache
+    needs no migration). None = absent (rows predating the column), healed by
+    regeneration. Only the outer shape is checked; the rest is netlab's."""
     if lab.node_facts is None:
         return None
     facts: dict[str, dict[str, object]] = {}
@@ -1377,8 +1383,13 @@ async def put_test_suites(
     # Delta 17: templates are syntax-checked always, and dry-rendered per target
     # node when the lab has facts (a definition). A suite authored before the
     # definition passes on syntax alone; a later run surfaces render problems as
-    # per-check errors.
-    problems = check_suite_templates(request.test_suites, _stored_node_facts(lab))
+    # per-check errors. The dry render sees the PARTITIONED namespace (delta 26)
+    # — it must agree with the run-time context exactly, or PUT would accept
+    # templates that fail at run time (or reject ones that work).
+    cached = _stored_node_facts(lab)
+    problems = check_suite_templates(
+        request.test_suites, None if cached is None else partition_node_facts(cached)
+    )
     if problems:
         raise ApiError(
             422,
@@ -2033,9 +2044,11 @@ async def lab_links(
 async def lab_facts(
     lab_name: LabName, db: SessionDep, library: BuiltinLibraryDep
 ) -> LabFactsResponse:
-    """The per-node fact namespace suite templates render against (contract
-    delta 17): served from the record's cached extract, lazily regenerated from
-    the stored definition when the cache predates the column."""
+    """The per-node fact namespace suite templates render against: served from
+    the record's cached extract (lazily regenerated when the cache predates the
+    column), PARTITIONED into the promised core and `_extras` (delta 26). This
+    payload is exactly the template render context — the two must not diverge,
+    which is why both go through `_node_facts_for`."""
     lab = await lab_store.get_lab(db, lab_name)
     if lab is None:
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")

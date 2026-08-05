@@ -737,8 +737,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 
     async def facts(self, name: str) -> LabFacts:
         """GET /labs/{name}/facts — lab:read. The per-node fact namespace suite
-        templates render against (PROVISIONAL raw netlab node data until pinned,
-        pre-v1.0). 409 ``no_definition`` on a bare created record — no
+        templates render against, partitioned into the promised core and
+        per-object ``_extras`` (see `LabFacts` for the two tiers and what each
+        promises). 409 ``no_definition`` on a bare created record — no
         definition, no facts."""
         payload = await self._send_json("GET", f"/labs/{name}/facts")
         return _wire.parse_lab_facts(payload)

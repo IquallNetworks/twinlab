@@ -86,7 +86,9 @@ class TestCase(BaseModel):
     """What actually runs on a node (contract delta 17): one command and how to
     judge its output. `command` — and every string inside `expect` — may carry
     Jinja2 templates rendered per executing node against the lab's fact
-    namespace (`node` / `nodes.<name>`, see GET /labs/{name}/facts).
+    namespace (`node` / `nodes.<name>`, see GET /labs/{name}/facts) — whose
+    promised core is stable contract while a path through `_extras` is
+    netlab-shaped and may drift across netlab releases (delta 26).
     `interactive` routes the exec through a persistent CLI channel when the
     node's transport is SSH (IOS truncates timed commands like `ping ...
     repeat` on a one-shot exec channel); it is a deliberate no-op over docker
@@ -188,11 +190,13 @@ class TestSuitesResponse(BaseModel):
 
 
 class LabFactsResponse(BaseModel):
-    """The per-node fact namespace test-suite templates render against (contract
-    delta 17), keyed by SHORT node name. PROVISIONAL: values are netlab's raw
-    node dicts from the expanded topology, deliberately unpinned until a stable
-    subset is chosen (pre-v1.0) — this endpoint is the discoverability and
-    insulation layer for that decision."""
+    """The per-node fact namespace test-suite templates render against, keyed by
+    SHORT node name. PARTITIONED (delta 26): the promised core sits in place with
+    pinned shapes and is stable contract; every other key rides under a
+    per-object `_extras`, verbatim and netlab-shaped, with NO promises. The
+    member lists live in `services/fact_namespace.py` and the contract's "Pinned
+    fact namespace" appendix; the type stays untyped-dict deliberately, since
+    typing the core would freeze netlab's whole node schema into our models."""
 
     nodes: dict[str, dict[str, object]]
 

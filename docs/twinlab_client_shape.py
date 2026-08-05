@@ -391,6 +391,38 @@ Deltas from today's wire, applied below (= the backend rework checklist):
       stored definition; no server-side `baseline` flag until something
       needs it.
     (wire today: `tc:` validates and is silently dropped.)
+26. The fact namespace pinned (APPROVED 2026-08-05, SHIPPED same day — the
+    pre-v1.0 decision reserved by delta 17's resolution (a); analysis,
+    evidence and live verification: docs/fact-namespace.md). Each node's facts become a PARTITION: a
+    **promised core** stays in place with pinned shapes, and EVERY other
+    key — netlab-internal `_`-prefixed bookkeeping included — moves
+    verbatim under **`_extras`**, for which NO promises are made. Nothing
+    is ever dropped; the stability signal travels in the template path
+    itself (`{{ node.ospf.router_id }}` is contract,
+    `{{ node._extras.mtu }}` is visibly unstable ground). The partition
+    is PER-OBJECT, not top-level-only: every dict the pin recognizes as
+    an object (node, mgmt, loopback, interface entry, interface
+    neighbor, per-interface ospf overlay, ospf, bgp, bgp neighbor, ldp,
+    vrf entry, vrf loopback_address) carries its own `_extras` (omitted
+    when empty), so unpinned members inside pinned subtrees are marked
+    too — `ospf.areas` lands at `ospf._extras.areas`; lists are never
+    index-mirrored. Invariants: every raw key lands in exactly one
+    place (reassembly reproduces netlab's raw dict — tested); a
+    netlab-supplied `_extras` key would itself be unpinned and land at
+    `_extras._extras`, so ours always wins the position; jinja2's
+    sandbox resolves `node._extras.x` fine (dict-key lookup, probed).
+    The promised core is the compatibility promise: Twinlab adapts —
+    shim or errata — if a netlab upgrade moves a source key, enforced
+    by a drift-guard test over the examples' real netlab output. Member
+    lists: the appendix below. Both example suites already resolve
+    entirely inside the core, and internal consumers of the raw facts
+    (config-import, device-keyed dispatch) read only core paths — the
+    cache stays raw, partition applies at the serve boundaries (render
+    context, PUT dry-render, GET facts), which stay IDENTICAL. LabFacts
+    keeps its untyped `dict` shape: a fully typed facts model would
+    freeze netlab's entire node schema — the opposite of insulation.
+    (Shipped 2026-08-05; the previous wire — delta 17's raw
+    unpartitioned dict — is gone.)
 
 Conventions:
 
@@ -1375,10 +1407,14 @@ class TestCase:
     artifact behind the link table) — e.g. ``loopback.ipv4``, ``mgmt.ipv4``,
     ``interfaces[].{ifname, ipv4, neighbors}``, ``vrfs.<vrf>.loopback`` —
     plus one filter ``address`` stripping a CIDR's prefix length
-    ("10.0.0.5/32" → "10.0.0.5"). APPROVED (delta 17): the namespace is
-    netlab's RAW node dict for now — PROVISIONAL and deliberately unpinned
-    (netlab-shaped, may drift across netlab versions); pinning a stable
-    subset is a decision to make BEFORE v1.0. Inspect it with `facts()`.
+    ("10.0.0.5/32" → "10.0.0.5"). APPROVED (delta 26 — supersedes
+    delta 17's PROVISIONAL namespace): the namespace is
+    PARTITIONED — promised-core paths (appendix: "Pinned fact
+    namespace") are stable contract; everything else sits under
+    per-object ``_extras`` and carries NO promises, so a template
+    spelling ``node._extras.…`` is visibly leaning on netlab-shaped
+    data that may drift across netlab versions. Inspect it with
+    `facts()`.
     Rendering is SANDBOXED (jinja2 SandboxedEnvironment, no attribute
     escapes) with StrictUndefined: at PUT, templates are always
     syntax-checked and — when the lab has a definition, so facts exist —
@@ -1475,15 +1511,22 @@ class TestSuitesResponse:
 
 @dataclass(frozen=True, slots=True)
 class LabFacts:
-    """PROPOSED (delta 17, APPROVED, not served yet) the per-node fact
-    namespace test-suite templates render against — netlab's node data
-    from the expanded topology, keyed by SHORT node name.
+    """The per-node fact namespace test-suite templates render against —
+    netlab's node data from the expanded topology, keyed by SHORT node
+    name. `nodes[n]` is exactly what `nodes.<n>` (and `node`, for the
+    executing node) resolves to in a template.
 
-    `nodes[n]` is exactly what `nodes.<n>` (and `node`, for the executing
-    node) resolves to in a template. PROVISIONAL: the values are
-    netlab-shaped raw dicts, deliberately unpinned until a stable subset
-    is chosen (before v1.0) — this endpoint is the insulation layer, so
-    consumers discover the namespace instead of assuming it."""
+    APPROVED (delta 26): each node's dict is a PARTITION —
+    the promised-core members (appendix: "Pinned fact namespace") sit in
+    place with pinned shapes and are stable contract; EVERY other key
+    rides verbatim under `_extras` (per recognized object, omitted when
+    empty), netlab-shaped, NO promises — may change or vanish with any
+    netlab release, netlab-internal `_`-prefixed keys included. Nothing
+    is dropped: reassembling `_extras` in place reproduces netlab's raw
+    dict. The type stays untyped-dict on purpose: typing the core would
+    freeze netlab's node schema into the client — the appendix, not the
+    type system, is the contract surface. Inspect a real lab's namespace
+    with `facts()`."""
 
     nodes: dict[str, dict[str, object]]
 
@@ -2250,13 +2293,13 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         raise NotImplementedError
 
     async def facts(self, name: str) -> LabFacts:
-        """PROPOSED (delta 17, APPROVED, not served yet) GET
-        /labs/{name}/facts — lab:read. The per-node fact namespace suite
-        templates render against (see LabFacts: PROVISIONAL raw netlab
-        node data until pinned, pre-v1.0). 409 ``no_definition`` on a bare
-        created record — no definition, no facts. Derived from the same
-        dry `netlab create` that validates a PUT and persisted like the
-        link table, so reads never pay the subprocess cost."""
+        """GET /labs/{name}/facts — lab:read. The per-node fact namespace
+        suite templates render against (see LabFacts; delta 26:
+        partitioned into the promised core + per-object ``_extras``).
+        409 ``no_definition`` on a bare created record — no definition,
+        no facts. Derived from the same dry `netlab create` that
+        validates a PUT and persisted like the link table, so reads
+        never pay the subprocess cost."""
         raise NotImplementedError
 
     async def put_test_suites(
@@ -2550,3 +2593,69 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 # The catalog's config_import flag is the queryable form; widening requires a
 # per-device parser, so it is a code change and therefore a contract change
 # here.
+
+# --------------------------------------------------------------------------- #
+# Appendix — pinned fact namespace (delta 26, APPROVED)
+# --------------------------------------------------------------------------- #
+# The promised core of the per-node fact namespace (LabFacts / template
+# rendering). A path listed here is stable Twinlab contract: it exists with
+# this shape whenever its feature exists, across netlab upgrades (Twinlab
+# adapts if netlab moves the source key; a drift-guard test over the examples'
+# real netlab output enforces it). EVERY key not listed rides under the
+# containing object's `_extras`, verbatim and netlab-shaped, with NO promises
+# — including netlab-internal `_`-prefixed keys. `?` = present when the
+# feature exists; ABSENCE IS MEANINGFUL (a role:host node with a router_id
+# but no `loopback` is a fact about the lab, not a gap in the data).
+# Evidence + worked example: docs/fact-namespace.md.
+#
+# Node (each value of LabFacts.nodes):
+#   name: str          — short node name (the dict key, repeated)
+#   id: int            — netlab node id
+#   device: str        — the definition's device (device-keyed case dispatch)
+#   hostname: str      — container name (clab-<lab>-<node>)
+#   role: str?         — absent = router (netlab's default)
+#   af: {ipv4?: bool, ipv6?: bool}
+#   module: [str]      — enabled netlab modules
+#   mgmt: {ifname: str, ipv4?: str, ipv6?: str, mac?: str}   — bare IPs
+#   loopback?: {ifname: str, ipv4?: str, ipv6?: str}          — CIDR form
+#   interfaces: [ ... ]                                       — see below
+#   ospf? / bgp? / ldp? / vrfs?                               — see below
+#   _extras?: { ... }  — everything else (observed on 26.07: box, clab, mtu,
+#                        router_id, mpls, dhcp, routing, _daemon*,
+#                        _node_config, netlab_ansible_skip_module)
+#
+# interfaces[i]:
+#   ifname: str        — NOS-side name (CHR: ether2; the container-side name
+#                        is the link table's `interface` — deliberately NOT
+#                        duplicated here)
+#   ifindex: int
+#   type: str          — presence pinned, vocabulary netlab's (passthrough)
+#   linkindex?: int    — joins the link table's `index`
+#   name?: str         — the link's name
+#   ipv4?: str / ipv6?: str                                   — CIDR form
+#   neighbors: [{node: str, ifname: str, ipv4?: str, ipv6?: str, _extras?}]
+#   ospf?: {area: str, _extras?}   — per-interface overlay
+#   _extras?: { ... }  — observed: mtu, bridge, gateway, virtual_interface,
+#                        clab
+#
+# Protocol subtrees (pinned for the proven module set; a subtree exists iff
+# its module is on):
+#   ospf: {router_id: str, area: str, _extras?}
+#   bgp:  {as: int, router_id: str,
+#          neighbors: [{name: str, as: int, type: str, ipv4?: str,
+#                       vpnv4?: str, _extras?}],
+#          _extras?}
+#   ldp:  {router_id: str, _extras?}
+#   vrfs: {<vrf>: {rd: str, import: [str], export: [str],
+#                  loopback_address?: {ipv4?: str, ipv6?: str, _extras?},
+#                  _extras?}}
+#
+# Template filter: `address` — CIDR → bare address ("10.0.0.5/32" →
+# "10.0.0.5"). Part of the namespace contract since delta 17.
+#
+# Partition rules (contract, all tested): per-object `_extras`, omitted when
+# empty; lists are never index-mirrored (a list entry is an object with its
+# own `_extras`); below an unpinned key content is verbatim (the partition
+# never descends into `_extras`); reassembly reproduces netlab's raw dict;
+# a netlab-supplied `_extras` key lands at `_extras._extras` — ours wins the
+# position.

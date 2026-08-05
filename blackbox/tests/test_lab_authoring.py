@@ -174,11 +174,59 @@ async def test_facts_namespace_from_authored_record(
     lab = await make_lab(None)
     _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
     facts = await admin.facts(lab.name)
-    # The namespace is netlab's raw node data (provisional/unpinned): only its
-    # outer shape and load-bearing keys are asserted.
     assert set(facts.nodes) == {"n1", "n2"}
-    assert facts.nodes["n1"]["device"] == "linux"
-    assert isinstance(facts.nodes["n1"].get("interfaces"), list)
+    # The PROMISED CORE (delta 26) — these paths are contract, so they are
+    # asserted by shape, not merely by presence.
+    n1 = facts.nodes["n1"]
+    assert n1["name"] == "n1"
+    assert n1["device"] == "linux"
+    assert isinstance(n1["id"], int)
+    assert isinstance(n1["hostname"], str)
+    assert isinstance(n1["module"], list)
+    mgmt = n1["mgmt"]
+    assert isinstance(mgmt, dict)
+    assert isinstance(mgmt["ifname"], str)
+    interfaces = n1["interfaces"]
+    assert isinstance(interfaces, list) and interfaces
+    interface = interfaces[0]
+    assert isinstance(interface, dict)
+    assert isinstance(interface["ifname"], str)
+    assert isinstance(interface["ifindex"], int)
+    assert isinstance(interface["type"], str)
+    neighbors = interface["neighbors"]
+    assert isinstance(neighbors, list) and neighbors
+    assert neighbors[0]["node"] == "n2"
+
+
+async def test_facts_partition_marks_unpromised_keys(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Delta 26: every key outside the promised core rides under a per-object
+    `_extras`, so a template's path says which tier it depends on. `box` (the
+    node's image) is the stable witness — netlab has always computed it and
+    Twinlab has never promised it."""
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    facts = await admin.facts(lab.name)
+    n1 = facts.nodes["n1"]
+
+    extras = n1["_extras"]
+    assert isinstance(extras, dict)
+    assert isinstance(extras["box"], str)
+    # Unpromised keys are ONLY there — never duplicated into the core, so a
+    # consumer cannot accidentally read one as if it were stable.
+    assert "box" not in n1
+
+    # The partition is per-object, not top-level-only: a linux node's interface
+    # carries netlab's `mtu` under the ENTRY's own `_extras`.
+    interfaces = n1["interfaces"]
+    assert isinstance(interfaces, list)
+    interface = interfaces[0]
+    assert isinstance(interface, dict)
+    interface_extras = interface.get("_extras")
+    assert isinstance(interface_extras, dict)
+    assert "mtu" in interface_extras
+    assert "mtu" not in interface
 
 
 async def test_run_unknown_suite_is_404(admin: TwinlabClient, make_lab: LabFactory) -> None:

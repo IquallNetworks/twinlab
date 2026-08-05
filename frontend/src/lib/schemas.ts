@@ -191,8 +191,11 @@ export const testResultSchema = z.object({
 export type TestResult = z.infer<typeof testResultSchema>
 
 export const labFactsSchema = z.object({
-  // Raw netlab node dicts keyed by short node name — PROVISIONAL/unpinned
-  // until the pre-v1.0 pinning decision; the endpoint is the insulation.
+  // Per-node facts keyed by short node name, PARTITIONED server-side (delta
+  // 26): the promised core in place, every other key under a per-object
+  // `_extras` with no stability promise. Stays `unknown`-valued on purpose —
+  // typing the core here would freeze netlab's node schema into the frontend,
+  // and the payload is only ever displayed, never destructured.
   nodes: z.record(z.string(), z.record(z.string(), z.unknown())),
 })
 export type LabFacts = z.infer<typeof labFactsSchema>

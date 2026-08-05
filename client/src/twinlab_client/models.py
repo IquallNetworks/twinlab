@@ -862,7 +862,9 @@ class TestExpectation:
 class TestCase:
     """What actually runs on a node: one command and how to judge its output.
     `command` — and every string inside `expect` — may carry Jinja2 templates
-    rendered per node against the lab's fact namespace (see `facts()`).
+    rendered per node against the lab's fact namespace (see `facts()`), whose
+    promised core is stable contract while a path through `_extras` is
+    netlab-shaped and may drift across netlab releases.
     `interactive` routes the exec through a persistent CLI channel where the
     node's transport is SSH (IOS truncates timed commands on a one-shot exec
     channel); a deliberate no-op over docker exec."""
@@ -940,9 +942,30 @@ class TestSuitesResponse:
 @dataclass(frozen=True, slots=True)
 class LabFacts:
     """The per-node fact namespace test-suite templates render against, keyed
-    by SHORT node name. PROVISIONAL: values are netlab's raw node dicts,
-    deliberately unpinned until a stable subset is chosen (pre-v1.0) — this
-    endpoint is the discoverability and insulation layer for that decision."""
+    by SHORT node name — `nodes[n]` is exactly what `nodes.<n>` (and `node`,
+    for the executing node) resolves to in a template.
+
+    Each node's dict is PARTITIONED into two tiers:
+
+    * the **promised core**, in place — node identity (`name`, `id`, `device`,
+      `hostname`, `role?`, `af`, `module`), `mgmt`, `loopback?`, `interfaces`
+      (with `neighbors`), and the `ospf`/`bgp`/`ldp`/`vrfs` subtrees. These
+      paths are stable contract: they keep their shape across netlab
+      upgrades, because Twinlab absorbs the change if netlab moves one.
+    * **`_extras`** — every other key, verbatim, netlab-shaped, with NO
+      promises: it may change or vanish with any netlab release, and it
+      includes netlab's internal `_`-prefixed bookkeeping. Present per
+      object (a node, an interface entry, a protocol subtree each carry
+      their own), omitted when empty.
+
+    So `{{ node.ospf.router_id }}` is contract and `{{ node._extras.mtu }}`
+    is not — the tier is visible in the path. Absence inside the core is
+    MEANINGFUL, never a gap: a `role: host` node has a router id but no
+    `loopback` interface, so `loopback` is simply absent.
+
+    Left as untyped dicts on purpose: typing the core would freeze netlab's
+    entire node schema into this client, which is what the partition exists
+    to avoid. Inspect a real lab's namespace with `facts()`."""
 
     nodes: dict[str, dict[str, object]]
 

@@ -23,10 +23,14 @@ said what was left.
 2. **Tier B builder promotions** (item 17.3). Its own review, after the sweep work:
    the extras→typed promotions (module presence, subkey splits, field promotions,
    vlans, …) deliberately held back from the Tier A batch.
-3. **Pin the fact-namespace subset** (item 16's tail). The delta 17 resolution left
-   the namespace as netlab's RAW node dict, provisional on purpose;
-   `GET /labs/{name}/facts` is the insulation layer. Independent of everything
-   above — it can land whenever.
+3. ~~**Pin the fact-namespace subset**~~ — **DONE 2026-08-05 (contract delta 26,
+   APPROVED and SHIPPED same day)**, closing delta 17's pre-v1.0 reservation.
+   A promised core plus a per-object **`_extras`** holding every unpinned key —
+   internal keys included, nothing dropped, no promises inside `_extras`, the
+   tier visible in the template path. Analysis, evidence (14 nodes across all
+   six platforms) and live verification in `docs/fact-namespace.md`; the
+   member lists are a contract appendix and a drift-guard test over the
+   examples' real netlab output is their teeth.
 4. **Playwright e2e UX suite** (item 14). Sequenced last-but-one on purpose: the
    surfaces it pins down must be final first.
 5. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
@@ -632,9 +636,11 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
 
     **Review resolutions (all user-decided 2026-08-03):** (a) the fact
     namespace starts as netlab's RAW node dict — provisional, deliberately
-    unpinned; **pinning a stable subset is a pre-v1.0 decision** — and a
-    `GET /labs/{name}/facts` endpoint ships now (authoring discoverability
-    AND the insulation layer for that future pinning); (b) `compare` ⟺
+    unpinned; **pinning a stable subset is a pre-v1.0 decision** (DONE
+    2026-08-05 — contract delta 26, the promised core + `_extras`
+    partition; see the Road to v1.0 list and `docs/fact-namespace.md`) —
+    and a `GET /labs/{name}/facts` endpoint ships now (authoring
+    discoverability AND the insulation layer that pinning then used); (b) `compare` ⟺
     `parse` stays strict; (c) NO v1→v2 data migration (dev-phase, no
     real-world stored suites; repo example suites rewritten to v2); (d)
     CASE-level device keying confirmed over field-level (one atomic recipe
@@ -788,9 +794,9 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        surface; permission `lab:configure`, no new grant.
     Each contract-touching item goes through the review gate
     (sketch → user review → implement). Also due before the tag, independent
-    of this batch: **pin the fact-namespace subset** (the delta 17 resolution —
-    the raw netlab node dict is provisional; `GET /labs/{name}/facts` is the
-    insulation layer).
+    of this batch: **pin the fact-namespace subset** — **DONE 2026-08-05**
+    (contract delta 26: the promised core + per-object `_extras`, closing the
+    delta 17 resolution; `docs/fact-namespace.md`).
 
 ### NOS platform sweep — and the two reviews it informs · **in progress; 17.1 CLOSED for v1.0 and 17.3's Tier A shipped — TWO items remain: gap 1 / delta 25 and 17.3's Tier B review** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
 

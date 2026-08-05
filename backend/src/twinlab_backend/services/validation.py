@@ -46,8 +46,11 @@ from twinlab_backend.result import Err, Ok, Result
 # node's transport is SSH; a no-op over docker exec).
 type NodeExecutor = Callable[[str, str, bool], Awaitable[Result[str, str]]]
 
-# The fact namespace templates render against: netlab's raw node dicts keyed by
-# short node name (delta 17 — provisional/unpinned, see GET /labs/{name}/facts).
+# The fact namespace templates render against, keyed by short node name. The
+# caller passes it PARTITIONED (delta 26: promised core in place, everything
+# else under per-object `_extras` — see services/fact_namespace.py); this module
+# only reads pinned members (`device`, for device-keyed dispatch), so the
+# partition is invisible to it beyond what templates address.
 type NodeFacts = dict[str, dict[str, object]]
 
 # Poll cadence while waiting for a test to converge: short enough to notice a

@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "check:build-doc": "node scripts/check-build-doc.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

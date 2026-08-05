@@ -215,7 +215,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   stub, attributed LAN) are fully buildable visually. Text mode
   is the full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
   `netlab_invalid` renders as a panel with the envelope's `extras.stderr` (`ApiError` carries
-  extras). Unsaved changes get a router blocker + beforeunload guard. Phase 5 (editor +
+  extras). Unsaved changes get a router blocker + beforeunload guard. The parser/emitter's invariants are guarded by **`pnpm check:build-doc`** (`frontend/scripts/`) — 36 round-trip/gate/blocker checks incl. all three `examples/` definitions, bundling the pure module with vite's own API and running it under plain node, since the frontend has no test runner. Phase 5 (editor +
   polish): a shared **`CodeEditor`** (`components/code-editor.tsx`, hand-rolled CodeMirror 6
   wrapper — controlled value with an echo guard, compartments, minimalSetup + explicit
   extensions, themed purely from identity CSS vars with three `--id-code-*` syntax tokens)
@@ -240,7 +240,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   invalidates the `['labs']`/`['jobs']` query roots. API access goes through the typed,
   zod-parsed client (`src/lib/api.ts`) raising the `{code, message, extras}` envelope as
   `ApiError`; dev server proxies `/api/v1` (`VITE_PROXY_TARGET`, default
-  `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build`.
+  `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build` + `pnpm check:build-doc`.
 - **`backend/`** — FastAPI (uv, **Python 3.14**, ids are stdlib **UUIDv7**). Turns a declarative
   netlab definition into a running lab: runs `netlab create` to generate a containerlab topology,
   then deploys it through the clab-api server (piped inline as `topologyContent`); the generated

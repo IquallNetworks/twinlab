@@ -50,13 +50,15 @@ ENV PATH="/app/.venv/bin:$PATH"
 # then reports "network os <x> is not supported" + UNREACHABLE per node.
 #   community.docker  — the `docker` connection (VyOS, FRR, bird, dnsmasq et
 #     al., exec via the socket; the daemons need no collection of their own)
-#   cisco.ios + ansible.netcommon — the `network_cli` connection for Cisco
-#     IOS/IOL, whose config push is SSH to the node mgmt IP (see openssh-client
-#     above; the paramiko transport comes from pyproject).
-#   community.routeros — `network_cli` for MikroTik RouterOS 7 (CHR), same SSH
-#     path as IOL.
+#   community.routeros + ansible.netcommon — the `network_cli` connection for
+#     MikroTik RouterOS 7 (CHR), whose config push is SSH to the node mgmt IP
+#     (see openssh-client above; the paramiko transport comes from pyproject).
+#     netcommon is network_cli's own home, so it stays as long as ANY
+#     network_cli device is admitted.
+# cisco.ios was here for Cisco IOL and went with it 2026-08-05 (withdrawn on
+# CML licensing — ROADMAP 17.1). The SSH plumbing it shared with CHR stays.
 RUN ansible-galaxy collection install \
-      community.docker cisco.ios ansible.netcommon community.routeros
+      community.docker ansible.netcommon community.routeros
 
 # netlab system defaults: policy overrides of netlab's packaged device data,
 # applied at `netlab create` time. Currently the connection-plugin fixups that

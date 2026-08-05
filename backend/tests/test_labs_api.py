@@ -154,21 +154,24 @@ def _artifacts(nodes: dict[str, str], devices: dict[str, str]) -> ClabArtifacts:
 
 
 def testimage_preflight_report_missing_local_only_is_fatal() -> None:
-    # iol is catalog-marked local-only: a missing image means the deploy is
-    # impossible — fatal. The present image raises nothing.
+    # routeros7 is catalog-marked local-only (vrnetlab-built from a vendor
+    # download): a missing image means the deploy is impossible — fatal. The
+    # present image raises nothing.
     artifacts = _artifacts(
-        {"r1": "vrnetlab/cisco_iol:17.16.01a", "r2": "vrnetlab/cisco_iol:missing"},
-        {"r1": "iol", "r2": "iol"},
+        {"r1": "vrnetlab/mikrotik_routeros:7.21.4", "r2": "vrnetlab/mikrotik_routeros:missing"},
+        {"r1": "routeros7", "r2": "routeros7"},
     )
-    fatal, warnings = image_preflight_report(artifacts, frozenset({"vrnetlab/cisco_iol:17.16.01a"}))
+    fatal, warnings = image_preflight_report(
+        artifacts, frozenset({"vrnetlab/mikrotik_routeros:7.21.4"})
+    )
     assert warnings == []
-    assert fatal == ["node 'r2' needs image vrnetlab/cisco_iol:missing (device iol)"]
+    assert fatal == ["node 'r2' needs image vrnetlab/mikrotik_routeros:missing (device routeros7)"]
 
 
 def testimage_preflight_report_missing_pullable_is_warning() -> None:
-    # linux is pullable, and a device OUTSIDE the catalog (frr) counts as
-    # pullable too — unknown is not a reason to block. Untagged names
-    # normalize to :latest for the presence match.
+    # Both linux and frr are catalog-marked pullable, so a missing image is
+    # only a warning — docker pulls at deploy. Untagged names normalize to
+    # :latest for the presence match.
     artifacts = _artifacts(
         {"n1": "python:3.13-alpine", "f1": "quay.io/frrouting/frr:10.6.1"},
         {"n1": "linux", "f1": "frr"},
@@ -181,6 +184,21 @@ def testimage_preflight_report_missing_pullable_is_warning() -> None:
     ]
     all_present = frozenset({"python:3.13-alpine", "quay.io/frrouting/frr:10.6.1"})
     assert image_preflight_report(artifacts, all_present) == ([], [])
+
+
+def testimage_preflight_report_treats_uncatalogued_devices_as_pullable() -> None:
+    # A device outside the catalog is UNKNOWN, not impossible, so its missing
+    # image only warns. iol is the live case since its 2026-08-05 withdrawal:
+    # a hand-loaded image that can never be pulled now degrades from a fast
+    # `image_missing` job failure to a warning plus a late clab-api error —
+    # the honest consequence of leaving the supported set.
+    artifacts = _artifacts({"r1": "vrnetlab/cisco_iol:17.16.01a"}, {"r1": "iol"})
+    fatal, warnings = image_preflight_report(artifacts, frozenset())
+    assert fatal == []
+    assert warnings == [
+        "image vrnetlab/cisco_iol:17.16.01a for node 'r1' is not on the host; "
+        "the deploy will try to pull it"
+    ]
 
 
 def test_detail_surfaces_topology_message() -> None:

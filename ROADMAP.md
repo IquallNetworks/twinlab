@@ -761,6 +761,9 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     *informed by what the sweep finds* — the platform matrix decides what an
     image pre-flight must cover and where the builder's typed core actually
     falls short. They run alongside the sweep, not after it.
+    **Numbering note: 18 and 19 are RETIRED, not missing.** They were exactly
+    those two reviews, and they live on as 17.2 and 17.3; nothing was dropped.
+    Do not reuse either number — the next new item takes **22**.
 
     **Opened 2026-08-04 with three parallel analyses, recorded in
     `docs/nos-sweep/`** (acquisition matrix, full up-parity audit, builder
@@ -782,13 +785,99 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     use them ourselves. The expected side effect is the real payoff: every new
     NOS stresses deploy, config push, interface naming, facts, parsing and
     validation differently, so the sweep is also a bug hunt across the whole
-    stack before v1.0. Widening CLAUDE.md's supported set (VyOS + IOL) is
+    stack before v1.0. Widening CLAUDE.md's supported set — **VyOS + IOL when
+    this paragraph was written; VyOS, FRR, MikroTik CHR, bird, dnsmasq and linux
+    today, IOL having been withdrawn on licensing (below)** — is
     explicitly "a maintainer decision that starts with testing" — this strand IS
     that testing. Prior art: Nokia SR Linux is already proven end-to-end in the
     parallel `nokia/` work; SR OS (TiMOS) is blocked on a client-provided
     qcow2 + license (see `docs/nokia-sros.md`). Scope, the platform matrix, and
     what "supported" formally requires (deploy? config push? facts? suites?)
     are designed when picked up.
+
+    **The CML licensing decision, and Cisco IOL's WITHDRAWAL (2026-08-05).**
+    Cisco's reference-platform VM images — the only legitimate source of IOL —
+    are licensed for use inside Cisco Modeling Labs only. Cisco's own docs are
+    unambiguous: *"The Cisco VM images that are provided for download with
+    Cisco Modeling Labs or as part of the CML refplat ISO file are only
+    licensed for use within Cisco Modeling Labs"*, and *"Downloading these VM
+    images and using them outside Cisco Modeling Labs without a proper license
+    is prohibited"*
+    ([DevNet](https://developer.cisco.com/docs/modeling-labs/vm-images-for-cml-labs/)).
+    Three stances were put to the maintainer: (1) state the status quo — test
+    -only use of legitimately obtained refplat images is acceptable, since
+    Twinlab distributes nothing; (2) conservative — CML images stay in CML,
+    which means IOL leaves the supported set; (3) grandfather IOL but do not
+    expand. **Maintainer's call: stance 2, "for now".**
+    So IOL is WITHDRAWN — on licensing, never on behaviour: it deployed,
+    configured, held OSPF/LDP/VPNv4 and passed 25/25 of its suite. Withdrawal
+    ran the admission procedure in reverse (catalog + frontend fallback, the
+    `cisco.ios` runner collection, the example and its builtin network
+    template, the suite's iol cases, every doc claim); `DEVICE_KMODS` and
+    hostprep needed nothing, since iol carries no netlab kmods key. What
+    deliberately STAYED, because the mechanisms are generic and device-
+    agnostic: the config-import IOS parser (`POST /import/*` still accepts
+    `device: iol`; only the catalog's `config_import` flag can no longer
+    advertise it), the `textfsm`/`cisco_ios` platform map with Twinlab's own
+    LDP template, and the `mpls_te`/`ip_sla` built-in custom-config templates —
+    they ARE the built-in library, and emptying it would delete a shipped
+    capability rather than withdraw a platform.
+    Consequences worth knowing: an iol definition still PUTs and may still
+    deploy (nothing rejects an uncatalogued device), but it edits as TEXT only
+    (the builder's unknown-device gate) and its missing image degrades from a
+    fast `image_missing` job failure to a warning plus a late clab-api error;
+    and the example suite lost its second live flavor, so the device-keyed
+    mechanism, the `textfsm` parse mode and `compare`-over-parsed-output have
+    no worked example until the sweep admits another flavor for it (**sweep
+    follow-up**). Everything below the CML line is now out of reach too:
+    CML-Free's extra IOL versions and ASAv, and CML Personal's IOSv/IOSv-L2/
+    CSR1000v/cat8000v/n9kv. **Cisco is not entirely closed** — XRd Control
+    Plane and the Cisco 8000 emulator ship under separate entitlements, not
+    the CML SEULA, so they remain acquirable if a Cisco service contract turns
+    up (XRd also needs no KVM and is light).
+    **Revisit stance 1 after v1.0** — see the dedicated item below.
+
+    **Nokia SR-SIM: PARKED 2026-08-05.** Nokia's containerized SR OS
+    (netlab device `srsim`, clab kind `nokia_srsim`, no KVM) is the better
+    long-term Nokia target than the vSIM VM and would delete the top SR OS
+    risk — vrnetlab wires its datapath with tc `mirred` filters on the very
+    interfaces Twinlab writes netem to, and SR-SIM has no vrnetlab wrapper at
+    all. It was NOT added to the client ask, for two reasons recorded here so
+    the pickup doesn't re-derive them: it is 25.x-era only, so it cannot run
+    the releases the client actually holds (TiMOS 22.10.R3 / 24.10.R7), and
+    its licence is an ANNUAL SUBSCRIPTION mounted at
+    `/nokia/license/license.txt` — the container refuses to boot without one
+    and reboots when it expires, so it trades vSIM's KVM/RAM cost for a
+    recurring renewal obligation. When picked up: probe the INTEGRATED
+    (pizza-box) chassis first — the distributed ones are one CPM container
+    plus an IOM container per line card sharing a netns
+    (`network-mode: container:<cpm>`), i.e. several containers per netlab
+    node, the same class of problem that got `kind` denied. Note also that the
+    Nokia work all lives on the parallel `nokia/` tree and has never reached
+    `dev`: this runner has no `nokia.grpc`/`nokia.srlinux`, no
+    `grpcio`/`protobuf`, and no
+    `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` (needed because
+    nokia.grpc 1.0.2's generated protobuf code is rejected by the C++/upb
+    runtime, and netlab's own fix pins a protobuf with no Python 3.13
+    wheels). **SR Linux is the cheap win parked with it** — free, public
+    (`ghcr.io/nokia/srlinux`, no account, no licence) and already proven end
+    to end on the `nokia/` branch; admitting it on `dev` needs only those
+    four runner items plus a `netlab-defaults.yml` connection entry, with no
+    acquisition and no licensing question. Detail in
+    `nokia/docs/nokia-sros.md`.
+
+    **The acquisition ask is PARKED to after v1.0 (2026-08-05, maintainer's
+    call) — see item 21.** Everything left in 17.1 that needed the maintainer to
+    register for an account, accept terms or buy something (cEOS, the vJunos
+    trio, FortiGate, Aruba, cRPD/cSRX, XRd) stops blocking v1.0. That is a
+    scope decision, not an abandonment: the sweep already did its job as a bug
+    hunt (seven up-parity gaps found, six shipped; the runner-collection trap;
+    CHR's missing netmiko driver; two wrong catalog module mirrors), and the
+    supported set it settled — VyOS, FRR, CHR, bird, dnsmasq, linux — is a
+    coherent, tested six. **What remains in 17.1 for v1.0 is exactly one thing:
+    the large mixed-NOS topology** over that set, which needs nothing from
+    anyone. When it lands, 17.1 closes for v1.0 and only gap 1 (delta 25,
+    below) keeps item 17 open.
 
     **Parked out of 17.1, to reconsider later (2026-08-05):**
     - **FRR's config push is not hermetic.** netlab's FRR initial script
@@ -922,6 +1011,98 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     inspector warns where the user edits; the dry create stays the judge. What
     remains open in this strand is Tier B and the unknown-device policy gate,
     which moves with 17.1.
+
+### Post-v1.0 · reconsider the CML licensing stance (stance 1) · **planned, after the v1.0 tag**
+
+20. **Revisit whether test-only use of legitimately obtained Cisco CML
+    reference-platform images is acceptable** — deferred here by the
+    maintainer when stance 2 was adopted "for now" (2026-08-05; the full
+    three-stance framing, Cisco's exact wording and everything the decision
+    gates are in item 17.1). Nothing about this is urgent and nothing in v1.0
+    depends on it; it is recorded so the choice stays a decision rather than
+    becoming an accident.
+
+    **What reversing to stance 1 would restore**, in rough order of value:
+    Cisco IOL itself (re-admission is the four-part procedure plus the example,
+    the builtin network template and the suite's device-keyed second flavor —
+    all of it is in git history at the 2026-08-05 withdrawal commits, so it is
+    a revert, not a rebuild); then CML-Free's extra IOL *versions* and ASAv,
+    which is what makes a mixed-**version** topology possible without cEOS;
+    then CML Personal ($199/yr) for IOSv, IOSv-L2, CSR1000v, Catalyst 8000v
+    and Nexus 9300v — five platforms for one purchase, and the only realistic
+    n9kv route.
+
+    **The hedge worth examining if it is ever revisited:** Cisco's prohibition
+    reads *"...outside Cisco Modeling Labs **without a proper license**"*,
+    which implies an independent entitlement to the OS could cover use
+    elsewhere. Whether a Cisco service contract constitutes that is a question
+    for whoever holds one — not something this project can answer for itself.
+
+    **Independent of the stance:** XRd Control Plane and the Cisco 8000
+    emulator ship under separate entitlements, NOT the CML SEULA, so they can
+    be pursued at any time without touching this decision. XRd is the
+    attractive one — native container, ~2 GB, no KVM — and needs a Cisco
+    service contract.
+
+### Post-v1.0 · resume the platform sweep — the acquisition-blocked tail · **planned, after the v1.0 tag**
+
+21. **The platforms that need a human before they need an engineer.** Parked out
+    of strand 17.1 on 2026-08-05 (maintainer's call) so v1.0 is not gated on
+    accounts, terms and purchases. The full actionable detail — every URL, what
+    each account costs, the build path and what each platform unlocks — is
+    `docs/nos-sweep/acquisition-checklist.md`; this is the sequencing record.
+
+    **The ask, in the order it was already prioritized** (most coverage per unit
+    of effort first):
+    1. **Arista cEOS** — free account (corporate email), `docker import`, no KVM,
+       ~2 GB/node, full netlab support, `network_cli` transport. **Get 2–3
+       versions**: cEOS has the deepest back-catalog of anything on the list and
+       is now the ONLY route to a mixed-**version** topology, since CML-Free's
+       extra IOL versions went with the licensing decision (item 20).
+    2. **Juniper vJunos trio** (router / switch / Evolved) — free, no licence,
+       but 5–8 GB RAM and 4 vCPU *per node* with ~15-minute boots; a 3-node lab
+       is this host's ceiling. Unlocks the **netconf** transport.
+    3. **Fortinet FortiGate** — free FortiCare account; the only **httpapi**
+       transport on the list. Evaluation licence is capacity-limited, which is
+       fine for a transport probe.
+    4. **Aruba AOS-CX** — support-portal account; whether a bare free account
+       suffices is itself unconfirmed and is part of what the step establishes.
+    5. **Juniper cRPD / cSRX** — trial downloads, low effort, and **unblocked
+       since the `LAB_FILES_DIR` bind rewrite** (both deliver config through a
+       `netlab-config.sh` bind that inline deploy used to strip).
+    6. **Cisco XRd Control Plane** — needs a **service contract** entitlement,
+       NOT the CML SEULA, so item 20's stance does not block it. Native
+       container, ~2 GB, no KVM — the most attractive Cisco platform left.
+
+    **Also parked here, not blocked on acquisition** — these need engineering
+    time, not a purchase, and are written up in 17.1:
+    - **Nokia SR Linux** — the cheapest win of the lot. Free and public
+      (`ghcr.io/nokia/srlinux`, no account, no licence), already proven end to
+      end on the parallel `nokia/` tree. Admitting it on `dev` is pure runner
+      plumbing: that tree's `nokia.grpc`/`nokia.srlinux` collections,
+      `grpcio`/`protobuf`, the pure-Python protobuf env var, and a
+      `netlab-defaults.yml` connection entry (netlab names `paramiko` for it,
+      which ansible-core 2.21 removed). No licensing question at all.
+    - **FRR's non-hermetic config push** — fix proven (an image carrying
+      gnupg+curl), cost is leaving netlab's default image, which a drift guard
+      asserts on purpose.
+    - **OpenBSD** — boots, authenticates and renders config now; hangs at
+      `/tmp/config.sh` past 500s, most likely a pty expectation.
+    - **Nokia SR-SIM** — the better long-term Nokia target (native container, no
+      vrnetlab, which deletes the netem-vs-`mirred` risk), parked on being
+      25.x-only and on an annual-subscription licence the container will not
+      boot without.
+    - **Extreme EXOS** and **`kind`** are DENIALS, not parks — the EXOS
+      vrnetlab launcher wedges before sshd on both tested versions, and
+      `k8s-kind` names its container outside clab's convention so the live-state
+      merge cannot see it. Re-testing EXOS on a new release is fair game;
+      `kind` needs a different mechanism, not a retry.
+
+    **When picked up:** each platform runs the standing procedure in
+    `docs/nos-sweep/admitting-a-platform.md` (probe → evidence in `results.md` →
+    the four-or-five coordinated admission changes), against the **two bars**
+    settled 2026-08-05 — a platform must work *and* its image must be one we may
+    legitimately run.
 
 ### i18n · **deferred**
 

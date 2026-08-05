@@ -13,17 +13,16 @@ from twinlab_backend.services.network_templates import load_network_templates
 # Template name -> the examples/ file it mirrors. The `example-` prefix keeps
 # the builtin namespace off real lab names (a builtin name blocks publishing a
 # lab called the same — and labs deployed from these examples ARE called by
-# the bare names); the IOL example's dotted filename becomes a hyphen.
+# the bare names).
 _EXAMPLE_SOURCES = {
     "example-mpls-l3vpn": "mpls-l3vpn.yml",
-    "example-mpls-l3vpn-iol": "mpls-l3vpn.iol.yml",
     "example-campus-lan": "campus-lan.yml",
 }
 
 _EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 
 
-def test_load_serves_the_three_builtins_in_spec_order() -> None:
+def test_load_serves_the_builtins_in_spec_order() -> None:
     loaded = load_network_templates()
     assert isinstance(loaded, Ok)
     library = loaded.value

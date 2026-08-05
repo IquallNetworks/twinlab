@@ -1,5 +1,14 @@
 # NOS availability & acquisition matrix (2026-08-04)
 
+> **Superseded in part, 2026-08-05.** Every Cisco row that depends on the CML reference-platform
+> set — iol/ioll2, iosv/iosvl2, csr, cat8000v, nxos, asav — is now **out of scope**: the
+> maintainer settled the SEULA question against extracting those images, so **IOL was withdrawn
+> from the supported set** and the CML-Free / CML Personal routes are off the acquisition list.
+> The Cisco rows that survive are `iosxr` (XRd) and `cisco8000v`, which ship under separate
+> entitlements. Nokia `srsim` is **parked** (25.x-only, so it cannot run the client's releases,
+> plus an annual subscription licence). The matrix below is left as the dated research it was —
+> see `results.md`, `acquisition-checklist.md` and ROADMAP 17.1 / item 20 for what holds now.
+
 Research input to ROADMAP item 17, strand 17.1. Installed netlab: **26.07** (read from
 `netlab-runner/.venv/.../site-packages/netsim/`). Candidate set = netlab 26.07 devices with a
 `clab` provider section, cross-checked against containerlab's kinds list

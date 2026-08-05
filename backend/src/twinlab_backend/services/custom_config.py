@@ -30,15 +30,20 @@ from twinlab_backend.result import Err, Ok, Result
 # maps to a `builtin_templates/<name>/` directory of per-device `.j2` variants.
 # Keep the description user-facing: it is what the UI shows for a built-in.
 _BUILTIN_SPECS: tuple[tuple[str, str], ...] = (
+    # Both ship an `ios.j2` variant only. Cisco IOL left the supported device
+    # set 2026-08-05 (CML licensing — ROADMAP 17.1), so these currently target
+    # no catalog device; they stay because they ARE the built-in library and
+    # the mechanism they demonstrate is device-agnostic — netlab picks the
+    # variant matching whatever device a node declares.
     (
         "mpls_te",
         "MPLS-TE: an RSVP-TE tunnel mesh between PE routers with OSPF-TE and RSVP "
-        "bandwidth on the core. IOS/iol.",
+        "bandwidth on the core. IOS variant only.",
     ),
     (
         "ip_sla",
         "IP SLA: ICMP-echo probes from each PE into the L3VPN toward every remote "
-        "customer site, scheduled to run forever. IOS/iol.",
+        "customer site, scheduled to run forever. IOS variant only.",
     ),
 )
 

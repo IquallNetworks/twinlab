@@ -210,7 +210,7 @@ export function StyleguidePage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="vyos">vyos</SelectItem>
-                <SelectItem value="iol">cisco_iol</SelectItem>
+                <SelectItem value="frr">frr</SelectItem>
                 <SelectItem value="linux">linux</SelectItem>
               </SelectContent>
             </Select>

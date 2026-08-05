@@ -13,7 +13,17 @@ trap — the signatures are the expensive part, because most of them surface as 
 
 ## 0. What "supported" means
 
-A platform is admitted when, through Twinlab's own API:
+There are **two bars, and behaviour is only the second one.**
+
+**Bar one — may we legitimately run this image here?** Check the licence *before* spending time
+on a probe. Twinlab distributes nothing, so this is not the project's open-source constraint; it
+is about what the maintainer runs on their own host. The trap is a vendor that hands the image
+out freely *for use inside its own product*: Cisco's CML reference platforms are licensed for
+use within CML only, which is why **Cisco IOL was withdrawn in August 2026 after passing every
+behavioural test** — the most expensive lesson in this file. Free-to-download does not mean
+free-to-use-anywhere, and "the community does it" is not a licence.
+
+**Bar two — does it actually work?** A platform clears it when, through Twinlab's own API:
 
 - `PUT` accepts a definition naming it (the dry `netlab create` is the first gate),
 - `POST /deploy` with `configure: true` reaches `status="configured"`,
@@ -23,7 +33,7 @@ A platform is admitted when, through Twinlab's own API:
 - `DELETE ?remove=true` tears it down and leaves nothing behind.
 
 Anything less is recorded in `results.md` as a denial with its reason. A denial is a real
-deliverable — three of the platforms probed so far are denials.
+deliverable — most of the platforms probed so far are denials of one kind or another.
 
 ## 1. Obtain the image
 
@@ -68,9 +78,9 @@ not admitted despite deploying and configuring fine.
 ### The Ansible collection for its transport
 
 `netlab-runner/Dockerfile` installs **one collection per transport**. Docker-exec platforms
-(vyos, frr, linux, the daemons) need none; `network_cli` and friends do — `cisco.ios` for IOL,
+(vyos, frr, linux, the daemons) need none; `network_cli` and friends do —
 `community.routeros` for CHR, `arista.eos` for cEOS, `junipernetworks.junos` for Junos,
-`fortinet.fortios` for FortiGate.
+`fortinet.fortios` for FortiGate. (`cisco.ios` was here for IOL and left with it.)
 
 > **Signature:** `[ERROR]: Task failed: network os <x> is not supported` plus `UNREACHABLE!`
 > per node — *after* netlab logged `[CREATED] r1: initial,ospf`. The config was rendered fine;
@@ -78,6 +88,19 @@ not admitted despite deploying and configuring fine.
 
 Collections are GPL-3.0-or-later, the same process-boundary aggregation already documented for
 ansible-core. No new licensing question, but confirm it the same way each time.
+
+### The netmiko driver, if its transport is SSH
+
+An SSH-transport platform also needs an entry in the runner's `_NETMIKO_DEVICE_TYPES`
+(`ansible_network_os` → netmiko `device_type`), or `interactive: true` test cases cannot run on
+it. **CHR was admitted without one and nobody noticed**, because the probe protocol in §2 never
+exercises interactive mode and the failure is a clean typed error rather than a wrong driver.
+
+> **Signature:** `no interactive CLI driver for network_os '<x>'` from an interactive case,
+> with everything else about the platform working perfectly.
+
+Read the value off the inventory rather than guessing it — `ansible-inventory --host <node>` in
+the runner, or netlab's device YAML `group_vars.ansible_network_os`.
 
 ### The connection plugin
 
@@ -154,8 +177,36 @@ Once probed green, admission is **four** edits that must land together:
 3. **`backend/.../services/netlab.py` `DEVICE_KMODS` AND `hostprep/.../host.py`'s allowlist** —
    together. The drift guard only covers the netlab side, so a module allowed in one and not
    the other fails at deploy.
-4. **`netlab-runner/Dockerfile`** — the Ansible collection for its transport, and
-   `netlab-defaults.yml` if it needs a connection override.
+4. **`netlab-runner/Dockerfile`** — the Ansible collection for its transport, plus
+   `netlab-defaults.yml` if it needs a connection override and
+   `runner.py`'s `_NETMIKO_DEVICE_TYPES` if that transport is SSH.
+
+## 4b. Withdrawing a platform
+
+Same four edits in reverse, and it reaches **further** than admission did, because admission
+also seeds artifacts that keep advertising the platform:
+
+- its `examples/` definition **and** the packaged builtin network template mirroring it (a
+  builtin is a first-class "start from" offer — leaving one behind keeps promising the
+  platform), plus the drift-guard map in `test_network_templates.py`;
+- its cases in any shared test-suites file, including tests that were only ever its;
+- any test that leaned on a *property* of its catalog entry rather than on the platform — the
+  image pre-flight test used IOL merely because it was `local_only`, so it had to move to
+  another local-only device, not be deleted;
+- every claim in `CLAUDE.md`, `results.md`, the ROADMAP and the acquisition checklist.
+
+**Keep the generic mechanisms.** Anything device-agnostic that merely happens to cover the
+platform stays: the withdrawal of IOL kept the config-import IOS parser, the
+`textfsm`/`cisco_ios` map with Twinlab's own LDP template, and the `mpls_te`/`ip_sla`
+built-ins — which are the entire built-in custom-config library, so deleting them would have
+removed a shipped capability rather than a platform promise. The line that worked: *remove what
+exists solely to make the platform first-class; keep what would still make sense if the
+platform had never been admitted.*
+
+**Say what the withdrawal costs.** Losing a platform can silently orphan coverage — IOL's exit
+left `textfsm`, `compare`-over-parsed-output and device-keyed cases with no worked example, and
+left dnsmasq's `dhcp` module path with no candidate client. Record those in `results.md` as
+follow-ups instead of letting them evaporate.
 
 ## 5. Tests and docs
 

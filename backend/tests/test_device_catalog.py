@@ -78,7 +78,9 @@ def test_image_reference_normalizes_untagged() -> None:
     assert image_reference("ghcr.io/sysoleg/vyos-container") == (
         "ghcr.io/sysoleg/vyos-container:latest"
     )
-    assert image_reference("vrnetlab/cisco_iol:17.16.01a") == "vrnetlab/cisco_iol:17.16.01a"
+    assert image_reference("vrnetlab/mikrotik_routeros:7.21.4") == (
+        "vrnetlab/mikrotik_routeros:7.21.4"
+    )
     # A registry port is not a tag separator.
     assert image_reference("registry.local:5000/vyos") == "registry.local:5000/vyos:latest"
 
@@ -90,7 +92,7 @@ def test_build_catalog_matches_presence() -> None:
     assert catalog.live
     by_device = {d.device: d for d in catalog.devices}
     assert by_device["vyos"].image_present is True
-    assert by_device["iol"].image_present is False
+    assert by_device["routeros7"].image_present is False
     assert by_device["linux"].image_present is True
 
 

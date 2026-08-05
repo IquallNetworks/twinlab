@@ -93,4 +93,31 @@ collection** change, not a catalog edit.
   k8s-kind names the container outside clab's convention, so the live-state merge cannot see
   it. `acquisition-checklist.md` is the maintainer's shopping list for the rest.
 
+- **CML licensing / Cisco IOL (2026-08-05)** — the question raised by
+  `acquisition-checklist.md` §5 was answered: Cisco licenses its reference-platform images for
+  use *inside CML only*, and three stances were put up (state the status quo / CML images stay
+  in CML / grandfather IOL without expanding). **Maintainer's call: the conservative stance,
+  "for now" — so Cisco IOL is WITHDRAWN**, on licensing and not on behaviour (it passed every
+  probe and 25/25 of its suite). Withdrawal ran the admission procedure in reverse plus the
+  example/builtin-template/suite-case layer; generic IOS-covering mechanisms stayed on purpose.
+  Everything behind the CML licence is off the acquisition list (CML-Free's ASAv + extra IOL
+  versions, CML Personal's five platforms); XRd and the c8000 emulator are unaffected, being
+  separate entitlements. **Revisiting the stance is ROADMAP item 20, post-v1.0.** Full record
+  in `results.md` ("Cisco IOL — withdrawn on licensing") and ROADMAP 17.1.
+- **Nokia SR-SIM (2026-08-05)** — considered for the existing SR OS client ask and **PARKED**:
+  25.x-only so it cannot run the client's 22.10/24.10 releases, and its licence is an annual
+  subscription the container will not boot without. SR Linux — free, public, already proven on
+  the `nokia/` tree — is parked with it as the cheap win; admitting it on `dev` is runner
+  plumbing only, since none of that tree's Nokia collections ever landed here.
+- **The acquisition tail is PARKED to after v1.0 (2026-08-05)** — maintainer's call, recorded
+  as **ROADMAP item 21**. Everything still needing an account, terms acceptance or a purchase
+  (cEOS, the vJunos trio, FortiGate, Aruba, cRPD/cSRX, XRd) stops gating the release, and the
+  engineering-only parks (SR Linux, the FRR image, OpenBSD, SR-SIM) go with them. The sweep
+  already paid for itself as a bug hunt — seven up-parity gaps found and six shipped, the
+  runner-collection trap, CHR's missing netmiko driver, two wrong catalog module mirrors — and
+  it settled a coherent tested six (VyOS, FRR, CHR, bird, dnsmasq, linux). **Strand 17.1's
+  only remaining v1.0 item is the large mixed-NOS topology over that set**, which needs
+  nothing from anyone. `acquisition-checklist.md` keeps every URL and build path for the
+  post-v1.0 pickup.
+
 Gaps 2–7 verified live 2026-08-04: blackbox **140/140** with the `deploy` marker.

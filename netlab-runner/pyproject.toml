@@ -11,10 +11,10 @@ dependencies = [
     # silences netlab's "cannot import ansible" version-probe wart.
     "networklab",
     "ansible-core",
-    # SSH transport for Ansible's network_cli connection (Cisco IOS/IOL config
-    # push). VyOS uses the docker connection and needs none of this, but IOL is
-    # only reachable over SSH; ansible.netcommon's persistent connection drives
-    # paramiko.
+    # SSH transport for Ansible's network_cli connection (MikroTik CHR config
+    # push). VyOS and the daemons use the docker connection and need none of
+    # this, but a network_cli device is only reachable over SSH;
+    # ansible.netcommon's persistent connection drives paramiko.
     "paramiko",
     "pyyaml",
     "netmiko>=4.7.0",

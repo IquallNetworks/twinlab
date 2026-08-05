@@ -350,7 +350,8 @@ def wait_ready(definition: str, templates: dict[str, str]) -> ReadyOutcome | Run
     """Wait for every node to become ready (its NOS booted and accepting SSH/
     console) via `netlab initial --ready` — a readiness poll, no config push. Used
     on the deploy path so a lab is reported done only once its devices actually
-    respond (IOL/IOS keeps booting ~60-90s after the container is up). Needs the
+    respond (a VM-in-container NOS like CHR keeps booting long after the
+    container itself is up). Needs the
     inventory, and the custom-config templates the definition's `config:` may
     reference (netlab create validates them). `definition` must carry the stable
     `name:`."""
@@ -375,8 +376,12 @@ def wait_ready(definition: str, templates: dict[str, str]) -> ReadyOutcome | Run
 # one-shot exec channel truncates timed commands and the interactive path
 # applies. Everything else (docker, …) already streams complete output.
 _SSH_CONNECTIONS = frozenset({"network_cli", "paramiko", "ssh"})
-# ansible_network_os -> netmiko device_type, for the supported NOS set.
-_NETMIKO_DEVICE_TYPES = {"ios": "cisco_ios", "vyos": "vyos"}
+# ansible_network_os -> netmiko device_type, for the supported NOS set. An
+# absent entry is a clean typed error below, never a wrong driver — so this
+# tracks the catalog: `ios` left with Cisco IOL (2026-08-05, CML licensing),
+# `routeros` arrived because CHR is a network_cli device and interactive cases
+# therefore apply to it.
+_NETMIKO_DEVICE_TYPES = {"routeros": "mikrotik_routeros", "vyos": "vyos"}
 
 
 def _host_vars(workdir: Path, node: str) -> dict[str, object] | RunnerError:

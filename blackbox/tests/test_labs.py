@@ -100,23 +100,24 @@ async def test_deploy_missing_local_only_image_fails_fast(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:
     """Image pre-flight (up-parity gap 3): a missing image for a local-only
-    device (iol — never publicly pullable) fails the deploy job up front with
-    a friendly `image_missing` error instead of clab-api's late opaque 502.
-    Nothing touches the host, so this stays in the cheap slice."""
+    device (routeros7 — vrnetlab-built from a vendor download, so never
+    publicly pullable) fails the deploy job up front with a friendly
+    `image_missing` error instead of clab-api's late opaque 502. Nothing
+    touches the host, so this stays in the cheap slice."""
     lab = await make_lab(None)
     definition = (
         "provider: clab\n"
-        "defaults.device: iol\n"
+        "defaults.device: routeros7\n"
         "nodes:\n"
         "  r1:\n"
-        "    image: vrnetlab/cisco_iol:never-pulled\n"
+        "    image: vrnetlab/mikrotik_routeros:never-pulled\n"
     )
     _ = await admin.update_definition(lab.name, definition)
     job = await admin.deploy_lab(lab.name)
     done = await admin.wait_job(lab.name, job.id, timeout=120)
     assert done.status == "failed"
     assert done.error is not None and done.error.code == "image_missing"
-    assert "vrnetlab/cisco_iol:never-pulled" in done.error.message
+    assert "vrnetlab/mikrotik_routeros:never-pulled" in done.error.message
     # The failure restored the pre-deploy status.
     assert (await admin.get_lab(lab.name)).status == "created"
 

@@ -50,8 +50,12 @@ _WIRING_WITH_L2 = [*_WIRING, ["r1:eth2", "r2:eth2"]]
 async def test_catalog_names_the_import_capable_devices(admin: TwinlabClient) -> None:
     catalog = {d.device: d for d in (await admin.device_catalog()).devices}
     assert catalog["vyos"].config_import is True
-    assert catalog["iol"].config_import is True
     assert catalog["linux"].config_import is False  # no config-dump concept
+    # The flag lives on a CATALOG entry, so a parser without one is invisible
+    # here: the IOS parser is still installed and `POST /import/*` still
+    # accepts `device: iol`, but IOL left the catalog 2026-08-05 on CML
+    # licensing (ROADMAP 17.1) and nothing advertises it.
+    assert "iol" not in catalog
 
 
 async def test_wiring_suggestion_is_advice_the_factory_accepts(admin: TwinlabClient) -> None:

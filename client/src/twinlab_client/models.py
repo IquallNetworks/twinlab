@@ -263,10 +263,10 @@ class CatalogDevice:
     host device. A definition naming an uncataloged device is not rejected;
     it is simply unpromised."""
 
-    device: str  # netlab device slug ("vyos", "iol", "linux") — what a
+    device: str  # netlab device slug ("vyos", "frr", "linux") — what a
     #              definition's `device:` takes; the set widens as platforms
     #              get tested, so it is not pinned.
-    label: str  # display name, e.g. "Cisco IOL"
+    label: str  # display name, e.g. "FRRouting"
     role: DeviceRole
     modules: list[str]  # netlab config modules the device can run (netlab's
     #                     vocabulary; consumers intersect with what they author)
@@ -868,7 +868,7 @@ class TestCase:
 @dataclass(frozen=True, slots=True)
 class ValidationTest:
     """Run a case on each node; poll until it passes. `run` is ONE case for
-    every node or a DEVICE-KEYED dict (netlab device names: "vyos", "iol",
+    every node or a DEVICE-KEYED dict (netlab device names: "vyos", "frr",
     "linux", …) — a node whose device has no case reports "skip". `wait`
     (0-600 s) polls until the expectation holds — the convergence knob."""
 

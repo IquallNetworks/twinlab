@@ -1,5 +1,13 @@
 # Acquisition checklist — what the maintainer needs to obtain (strand 17.1)
 
+> **PARKED TO AFTER v1.0 (2026-08-05, maintainer's call) — ROADMAP item 21.** Nothing on this
+> list gates the release any more. v1.0 ships on the six platforms already tested and admitted
+> (VyOS, FRR, MikroTik CHR, bird, dnsmasq, linux); strand 17.1's remaining v1.0 work is the
+> large mixed-NOS topology over that set, which needs nothing from anyone. This file stays the
+> actionable detail — every URL, account cost, build path and what each platform unlocks — so
+> the post-v1.0 pickup is a matter of reading it, not re-researching it. The ordering below is
+> still the agreed priority.
+
 Actionable form of `nos-availability.md`. Everything here needs a human: an account, an
 acceptance of terms, or a purchase. **Images are used, never redistributed** — every build is
 local, consistent with Twinlab's licensing stance.
@@ -49,32 +57,53 @@ source for.
 - **Download:** AOS-CX Switch Simulator OVA (latest is 10.13.1000), extract the vmdk
 - **Build:** vrnetlab `aruba/aoscx`
 
-## 5. Cisco — needs a decision from you first
+## 5. Cisco — CLOSED for now (decided 2026-08-05)
 
-**The open question:** the CML SEULA licenses the reference-platform images for use *inside
-CML*. Extracting them for containerlab is common community practice but formally outside it
+**Nothing to obtain here.** The CML licensing question was answered: Cisco licenses its
+reference-platform images for use *inside CML only*
 (https://developer.cisco.com/docs/modeling-labs/vm-images-for-cml-labs/,
-https://www.cisco.com/c/dam/en_us/about/doing_business/legal/seula/Cisco-Modeling-Labs-SEULA.pdf).
-Twinlab already runs Cisco IOL from that same source, so a position has effectively been
-taken — but it should be a stated one, because it decides everything below.
+https://www.cisco.com/c/dam/en_us/about/doing_business/legal/seula/Cisco-Modeling-Labs-SEULA.pdf),
+and the maintainer took the conservative stance — so **Cisco IOL was withdrawn from the
+supported set**, and everything gated behind that licence is off the list:
 
-- **CML-Free** (https://developer.cisco.com/docs/modeling-labs/cml-free/) — free, single user;
-  ships **IOL, IOL-L2 and ASAv** refplat images. Cheapest way to add ASAv and more IOL
-  versions.
-- **CML Personal, $199/yr** (https://developer.cisco.com/docs/modeling-labs/reference-platforms-and-images/)
-  — unlocks **IOSv, IOSv-L2, CSR1000v, Catalyst 8000v and Nexus 9300v**: five platforms for one
-  purchase, and the only realistic route to n9kv.
+- ~~**CML-Free**~~ — would have added ASAv and extra IOL *versions* (the mixed-version case).
+- ~~**CML Personal, $199/yr**~~ — would have added IOSv, IOSv-L2, CSR1000v, Catalyst 8000v and
+  Nexus 9300v.
+
+Revisiting the stance is a **post-v1.0** item (ROADMAP item 20); if it reverses, this section
+comes back as written above and IOL re-admission is largely a revert.
+
+**Still open, because it is NOT under the CML SEULA:**
+
 - **XRd Control Plane** — https://software.cisco.com/downloads, needs a **service contract**
   entitlement (https://xrdocs.io/virtual-routing/tutorials/2022-08-22-xrd-images-where-can-one-get-them).
-  Native container, light (~2 GB). Worth asking whoever holds a Cisco contract.
+  Native container, light (~2 GB), no KVM. Worth asking whoever holds a Cisco contract — this
+  is the one Cisco platform the licensing decision does not block.
+- **Cisco 8000 emulator** — Cisco account team only; heavy, low value per effort.
 
-## 6. Nokia — the existing client ask
+## 6. Nokia — PARKED for now (decided 2026-08-05)
 
-Already tracked in `docs/nokia-sros.md`: SR OS vSIM is blocked on a customer qcow2 + license.
-**Add SR-SIM to the same ask** — Nokia's modern replacement, a *native container* (no KVM), so
-it is materially easier to operate than vSIM
+SR OS vSIM stays blocked on a customer qcow2 + licence (`nokia/docs/nokia-sros.md`), and
+**SR-SIM was considered and parked rather than added to the ask**. Two reasons: it is 25.x-era
+only, so it cannot run the releases the client actually holds (TiMOS 22.10.R3 / 24.10.R7), and
+its licence is an **annual subscription** mounted at `/nokia/license/license.txt` — no licence
+means the container will not boot, and expiry reboots it
 (https://documentation.nokia.com/sr/25-7/7x50-shared/srsim-installation-setup/obtaining-the-sr-sim-software.html).
-It needs a 1-year subscription license file mounted at `/nokia/license/license.txt`.
+That is a recurring obligation, not a one-time file, which is worth naming before recommending
+it.
+
+Kept here because it stays the better long-term Nokia target: SR-SIM is a *native container*
+(no KVM, no vrnetlab wrapper), which deletes the top SR OS risk — vrnetlab wires its datapath
+with tc `mirred` filters on the very interfaces Twinlab writes netem to. Probe the
+**integrated** (pizza-box) chassis first if it is ever picked up; the distributed ones are one
+CPM container plus an IOM container per line card sharing a netns, i.e. several containers per
+netlab node.
+
+**The free Nokia win, also parked:** SR Linux needs no acquisition at all
+(`ghcr.io/nokia/srlinux`, no account, no licence) and is already proven end to end on the
+parallel `nokia/` tree. Admitting it on `dev` is runner plumbing only — that tree's
+`nokia.grpc`/`nokia.srlinux` collections, `grpcio`/`protobuf`, and
+`PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` have never been ported here.
 
 ## 7. Juniper cRPD / cSRX — low effort, now unblocked
 
@@ -89,18 +118,24 @@ they are worth a trial now.
 
 ## Already in hand — nothing needed from you
 
-VyOS, Cisco IOL, linux, Nokia SR Linux (parallel branch), FRR, bird, dnsmasq, kind, and
-MikroTik CHR 7.16.2 (built from the free vmdk at
-`~/devel/vrnetlab-work/vrnetlab/mikrotik/routeros/`).
+VyOS, linux, FRR, bird, dnsmasq, kind, MikroTik CHR 7.16.2 (built from the free vmdk at
+`~/devel/vrnetlab-work/vrnetlab/mikrotik/routeros/`), and Nokia SR Linux (parallel branch).
+The IOL image is on the host too, but is no longer used — the platform was withdrawn on
+licensing (§5).
 
 Free and unblocked, no account needed — I can take these whenever you want them:
 **Extreme EXOS** (qcow2s published openly at https://github.com/extremenetworks/Virtual_EXOS)
-and **OpenBSD** (vrnetlab builds from the free install image).
+and **OpenBSD** (vrnetlab builds from the free install image). Both currently sit as parked
+negatives in `results.md`.
 
 ## When something arrives
 
 Hand me the file or tell me it is on the host and I will build it, probe it through Twinlab
 (deploy → config push → protocol state → the link/facts surfaces), record the evidence in
 `results.md`, and — per your standing call that everything tested and supported gets
-admitted — do the three-part admission: catalog, kmods/hostprep, and the runner's Ansible
-collection for that platform's transport.
+admitted — run the full admission in `admitting-a-platform.md`: catalog + frontend fallback,
+kmods/hostprep, the runner's Ansible collection (plus a netmiko `device_type` if its transport
+is SSH), and a connection override if netlab names a plugin ansible no longer ships.
+
+**Two bars, not one** (2026-08-05): a platform must work *and* its image must be one we may
+legitimately run here. IOL cleared the first and failed the second.

@@ -211,7 +211,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   derives from it
   (drag-to-connect via `validateConnect`, palette adds, index-safe deletions), and the
   inspector greys out device×module combinations the catalog says can't run. The
-  mpls-l3vpn.iol example — `groups:` block included — AND campus-lan.yml (dict-form links,
+  mpls-l3vpn example — `groups:` block included — AND campus-lan.yml (dict-form links,
   stub, attributed LAN) are fully buildable visually. Text mode
   is the full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
   `netlab_invalid` renders as a panel with the envelope's `extras.stderr` (`ApiError` carries
@@ -263,7 +263,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   up-parity gaps 2/5/6/7, decisions in `docs/nos-sweep/`); `POST /labs/{name}/deploy` is the ONLY deploy verb —
   from the stored definition, fresh or overwrite-in-place, opt-in `configure`; 409 `no_definition`
   on an unauthored record; the deploy job's first step is an **image pre-flight** (gap 3): a
-  missing image whose device the catalog marks `local_only` (iol) fails fast with a friendly
+  missing image whose device the catalog marks `local_only` (routeros7, the daemons) fails fast with a friendly
   `image_missing` job error, missing-but-pullable images only warn (`DeployResponse.warnings`),
   and a runner outage skips the check. **The four long operations (deploy/configure/destroy/suite-run) are
   ASYNC JOBS** (contract delta 12): pre-accept checks stay synchronous, then the route returns
@@ -380,8 +380,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   2026-08-03 — Twinlab's own validation, not `netlab validate`, see ROADMAP item 15): declarative
   assertions stored on the lab record (never sent to `netlab create`), each test a **render →
   execute → parse → assert pipeline**, all data, no user code. A test's `run` is one `TestCase`
-  `{command, expect, parse, interactive}` or a DEVICE-KEYED dict of cases (one suite serves the
-  VyOS and IOL flavors; a node whose device has no case reports `skip`). Commands and expectation
+  `{command, expect, parse, interactive}` or a DEVICE-KEYED dict of cases (one suite serves
+  several NOS flavors; a node whose device has no case reports `skip`). Commands and expectation
   strings carry Jinja2 templates rendered per node against the lab's **fact namespace** — netlab's
   RAW node dicts from the expanded topology (PROVISIONAL, pinning is a pre-v1.0 decision), served
   by `GET /labs/{name}/facts` (lazy-backfilled JSONB cache like the link table) with one `address`
@@ -400,8 +400,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   deliberate no-op over docker exec. Suite `stage` semantics are unchanged (`config-time` gates a
   configure, skip RETAINS the prior gate, failure = deployed + `validation_failed`); the pipeline
   lives in `services/validation.py`, results persist per-suite in `last_validation`, and
-  `examples/mpls-l3vpn.test-suites.json` is ONE device-keyed file serving both MPLS labs with every
-  address rendered from facts (verified live: 25/25 + interactive VRF pings on IOL). Local
+  `examples/mpls-l3vpn.test-suites.json` keeps the device-keyed shape with every
+  address rendered from facts — the IOL flavor left with the platform on 2026-08-05, so its
+  worked example of `textfsm` + `compare`-over-parsed-output and of two live device keys is
+  gone until the sweep admits another flavor (verified live while it lasted: 25/25 +
+  interactive VRF pings on IOL). Local
   `typings/` stubs give the untyped napalm/textfsm/ntc imports precise types. **HTTP errors mean
   "could not run"**: a config push that ran but failed on ≥1 node is a 2xx `status="config_failed"`
   with per-node results.
@@ -511,8 +514,9 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   a well-known secret), so revoking a key/grant/user bites on the next connection — no per-user
   provisioning in the container. Host keys persist on the `jump_hostkeys` volume (a recreate must
   not look like a MITM). Sits on the plain compose network: containerlab's iptables rules make lab
-  mgmt bridges reachable without host networking (same mechanism the runner's IOL SSH push relies
-  on). Users connect with plain `ssh -J jump@host:2222 <node-user>@<mgmt_ip>` — Ansible-ready.
+  mgmt bridges reachable without host networking (the same mechanism the runner's SSH config push
+  to a `network_cli` device relies on). Users connect with plain
+  `ssh -J jump@host:2222 <node-user>@<mgmt_ip>` — Ansible-ready.
 - **`clab-api`** — the containerlab API server (`srl-labs/clab-api-server`, Apache-2.0), host-coupled
   (host network + PID, Docker socket and PAM databases mounted); it deploys lab nodes as sibling
   containers on the host daemon and authenticates a host user in the `clab_api` group.
@@ -523,7 +527,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
 Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner + hostprep quality gates: `ruff
 format` + `ruff check`, basedpyright (strict), pytest.
 
-**Supported NOS platforms are VyOS, Cisco IOL, FRR and MikroTik RouterOS 7 (CHR), plus the
+**Supported NOS platforms are VyOS, FRR and MikroTik RouterOS 7 (CHR), plus the
 bird and dnsmasq daemons and `linux` as the host/endpoint device — the tested set** (the
 2026-07-31 vyos+iol call, widened 2026-08-04 by the sweep's rule that everything probed green
 gets admitted; per-platform evidence in `docs/nos-sweep/results.md`). The builder's device
@@ -534,9 +538,25 @@ tree onto the host-shared `LAB_FILES_DIR` and rewrites the binds absolute** (sam
 invariant: one path on the host and in the backend and clab-api mounts; see compose), so
 bind-delivered config works — which is what unblocked FRR and the daemons. A definition naming
 another device is not rejected — it edits as text and may even deploy — but nothing about it is
-promised. **`kind` is deliberately NOT admitted**: containerlab's `k8s-kind` names the
-container `<node>-control-plane`, outside clab's `clab-<lab>-<node>` convention, so the
-live-state merge cannot see it (missing from the node list, links `unknown`).
+promised.
+
+Two devices are deliberately NOT admitted, for reasons worth remembering because neither is a
+quality problem. **`kind`**: containerlab's `k8s-kind` names the container
+`<node>-control-plane`, outside clab's `clab-<lab>-<node>` convention, so the live-state merge
+cannot see it (missing from the node list, links `unknown`). **Cisco IOL — admitted, then
+WITHDRAWN 2026-08-05 on LICENSING, not behaviour**: it deployed, configured and passed 25/25 of
+its suite, but its only legitimate source is Cisco's CML reference-platform set, which Cisco
+licenses for use *inside CML only* ("using them outside Cisco Modeling Labs without a proper
+license is prohibited"). The maintainer chose the conservative stance for now, with a
+post-v1.0 item to revisit it (ROADMAP 17.1 and item 20). Generic mechanisms that merely happen
+to cover IOS stayed on purpose — the config-import IOS parser (`POST /import/*` still accepts
+`device: iol`), the `textfsm`/`cisco_ios` map with Twinlab's own LDP template, and the
+`mpls_te`/`ip_sla` built-in custom-config templates, which ARE the built-in library. So an IOL
+lab still PUTs and may still deploy; it just edits as text and is promised nothing. **Nokia
+SR-SIM and SR Linux are PARKED** the same day (ROADMAP 17.1) — SR Linux is free and already
+proven on the parallel `nokia/` tree, but none of that tree's runner plumbing
+(`nokia.grpc`/`nokia.srlinux`, `grpcio`/`protobuf`, the pure-Python protobuf env var) has ever
+reached `dev`.
 
 **Admitting a platform is FOUR coordinated changes, not a catalog edit** (the full procedure,
 with every trap's failure signature, is `docs/nos-sweep/admitting-a-platform.md`): (1)
@@ -546,11 +566,15 @@ static fallback; (2) backend `DEVICE_KMODS` **and** hostprep's fixed module allo
 that platform's transport** — the Dockerfile installs one per transport, and a missing one
 fails as `network os <x> is not supported` + UNREACHABLE *after* netlab has rendered the config
 fine, so it reads like a device fault and is not. Docker-exec platforms (vyos, frr, linux,
-daemons) need no collection; `network_cli` ones do (cisco.ios for IOL, community.routeros for
-CHR); and (4) a connection override in `netlab-runner/netlab-defaults.yml`
+daemons) need no collection; `network_cli` ones do (community.routeros for CHR — plus
+`ansible.netcommon`, network_cli's own home, and a netmiko `device_type` in the runner's
+`_NETMIKO_DEVICE_TYPES` if `interactive: true` cases are to work on it); and (4) a connection
+override in `netlab-runner/netlab-defaults.yml`
 (`/etc/netlab/defaults.yml`, merged over netlab's device data at create time) where netlab
 names a plugin ansible-core no longer ships — it removed `paramiko` in 2.21, which netlab still
-uses for openbsd/srlinux/sros. Widening the set is a maintainer decision that starts with testing —
+uses for openbsd/srlinux/sros. **Withdrawing** a platform is the same four in reverse, plus its
+example, its builtin network template and its suite cases (the IOL withdrawal of 2026-08-05 is
+the worked example). Widening the set is a maintainer decision that starts with testing —
 a pre-v1.0 **NOS platform sweep** (ROADMAP item 17, added 2026-08-03, opened 2026-08-04 — the
 three analyses, the decision log and the probe results live in `docs/nos-sweep/`) is exactly
 that testing: obtain and exercise as many containerlab-kind NOSes as possible (images are used,
@@ -560,8 +584,8 @@ never distributed) to confirm or deny support and shake out bugs before the rele
 /labs/{name}/deploy` with `configure: true` (202 + job) → poll the job to `succeeded` → nodes
 deployed *and* configured via clab-api deploy + the netlab-runner, config-time gate green —
 exercised continuously by the black-box suite's `deploy`-marked tests (linux nodes, incl. the
-multi-access-LAN bridge path) and verified on VyOS (OSPF adjacency reaches Full), cisco IOL,
-FRR, bird and MikroTik CHR (all reaching OSPF Full).
+multi-access-LAN bridge path) and verified on VyOS (OSPF adjacency reaches Full), FRR, bird and
+MikroTik CHR (all reaching OSPF Full) — and, before its licensing withdrawal, on cisco IOL.
 Needs a host user in the `clab_api` group, node images pulled, and clab-api running. Keep this
 section current as the project evolves.
 

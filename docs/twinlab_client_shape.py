@@ -127,8 +127,9 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     no parse stage, no interactive mode, no facts endpoint.)
 18. Device/image catalog (APPROVED 2026-08-03): ``GET /catalog`` serves what THIS
     deployment can actually run — the server-curated supported device set
-    (the tested platforms of CLAUDE.md's Current State: vyos + iol, plus
-    the linux host/endpoint device). Per device: a display label, its
+    (whatever CLAUDE.md's Current State names as the tested platforms; that
+    list is POLICY and moves in both directions — Cisco IOL was admitted and
+    then withdrawn 2026-08-05 on licensing). Per device: a display label, its
     ``role`` (router | host), the netlab config modules it supports (the
     FULL netlab matrix, mirrored with a drift-guard test — consumers
     intersect it with whatever module set they can author), netlab's
@@ -243,9 +244,13 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     running configs over the exec transport and classifies every source
     line against them — stateless (sources ride the request; a lab never
     remembers its import origin), the interface map recomputed by joining
-    the sources' pinned addresses against the lab's facts. Scope is the
-    import-capable subset of the catalog (``CatalogDevice.config_import``:
-    vyos + iol — linux has no config-dump concept). A raw-containerlab
+    the sources' pinned addresses against the lab's facts. Scope is the set of
+    devices with a PARSER (vyos + iol — linux has no config-dump concept);
+    ``CatalogDevice.config_import`` is its queryable form, so a device with a
+    parser but no catalog entry is simply unadvertised — which is the state
+    iol landed in when it was withdrawn 2026-08-05 (the parser stayed on
+    purpose: it parses a config format, not a supported platform). A
+    raw-containerlab
     SECOND DEPLOYMENT MODEL was considered and REJECTED — interface
     renaming and link inference are needed either way, and a second lab
     species forks the whole downstream stack (docs/config-import.md).
@@ -634,10 +639,10 @@ class CatalogDevice:
     name. A definition naming an uncataloged device is not rejected; it is
     simply unpromised (text authoring stays the escape hatch)."""
 
-    device: str  # netlab device slug ("vyos", "iol", "linux") — the value a
+    device: str  # netlab device slug ("vyos", "frr", "linux") — the value a
     #              definition's `device:` takes. Deliberately NOT a Literal:
     #              the set widens as platforms get tested (the NOS sweep).
-    label: str  # display name, e.g. "Cisco IOL"
+    label: str  # display name, e.g. "FRRouting"
     role: DeviceRole  # "router" = configurable NOS; "host" = plain container
     modules: list[str]  # netlab config modules the device can run — the FULL
     #                     netlab support matrix ("ospf", "bgp", …; passthrough,
@@ -1372,8 +1377,8 @@ class ValidationTest:
     """Run a case on each node; poll until it passes.
 
     `run` is ONE case for every node, or a DEVICE-KEYED dict (netlab device
-    names: "vyos", "iol", "linux", ...) — the multi-vendor mechanism, so a
-    single suite serves the VyOS and IOL flavors of a topology: each node
+    names: "vyos", "frr", "linux", ...) — the multi-vendor mechanism, so a
+    single suite serves several NOS flavors of one topology: each node
     picks its device's case, and a node whose device has none reports
     "skip", not an error. APPROVED (delta 17): keying is CASE-level (one
     atomic command/parse/expect recipe per device), not netlab's
@@ -2493,11 +2498,18 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 #   lab_operator    lab    — lab:read, lab:configure, lab:validate, lab:terminal
 #   lab_viewer      lab    — lab:read
 #
-# Shipped builtin custom-config templates: mpls_te, ip_sla.
+# Shipped builtin custom-config templates: mpls_te, ip_sla. Both ship an
+# `ios.j2` variant only, so since IOL's withdrawal (2026-08-05) neither
+# targets a catalogued device; they remain because they ARE this library and
+# the mechanism is device-agnostic (netlab picks the variant matching a node's
+# declared device).
 #
 # Shipped builtin library templates (delta 21, APPROVED) — the repo examples,
 # all in the NETWORK collection: example-mpls-l3vpn (VyOS),
-# example-mpls-l3vpn-iol, example-campus-lan. The `example-` prefix is
+# example-campus-lan. (example-mpls-l3vpn-iol was seeded with delta 21 and
+# REMOVED 2026-08-05 with the platform — a builtin is a first-class "start
+# from" offer, so keeping one for an unsupported device would keep promising
+# it.) The `example-` prefix is
 # deliberate (revised at first use, 2026-08-04): a builtin name reserves
 # itself against lab publication, and the BARE example names are exactly what
 # real labs deployed from these examples get called — unprefixed builtins
@@ -2505,6 +2517,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 # EMPTY: bare devices are the catalog's job; a shipped preconfigured motif
 # (e.g. a PE-router preset) must earn its way in later.
 #
-# Import-capable devices (delta 22, APPROVED): vyos, iol. The catalog's
-# config_import flag is the queryable form; widening requires a per-device
-# parser, so it is a code change and therefore a contract change here.
+# Import-capable devices (delta 22, APPROVED): vyos, iol — the PARSER set,
+# which since 2026-08-05 is no longer a subset of the catalog (iol kept its
+# parser and lost its catalog entry, so `config_import` cannot advertise it).
+# The catalog's config_import flag is the queryable form; widening requires a
+# per-device parser, so it is a code change and therefore a contract change
+# here.

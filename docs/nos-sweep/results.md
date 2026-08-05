@@ -6,6 +6,13 @@ the supported set starts with testing, not a catalog edit).
 > **Standing rule, 2026-08-04: everything probed green gets admitted.** FRR, MikroTik CHR,
 > bird and dnsmasq joined the catalog on this evidence; `kind` did not (reason below). Later
 > platforms follow the same rule as their probes land.
+>
+> **The rule is about behaviour, and behaviour is not the only gate (2026-08-05).** Cisco IOL
+> probed green throughout and was still WITHDRAWN, because its only legitimate image source is
+> Cisco's CML reference-platform set and Cisco licenses those images for use inside CML only.
+> A platform must clear **both** bars — it works, *and* we may legitimately run its image
+> here. See "Cisco IOL — withdrawn on licensing" below; the decision, its full framing and the
+> post-v1.0 revisit are ROADMAP 17.1 and item 20.
 
 Probe protocol per platform: obtain the image → `POST /labs` → `PUT` the definition (the dry
 `netlab create` is the first gate) → `POST /deploy` with `configure: true` → poll the job →
@@ -26,14 +33,16 @@ inside a nested VM — this host is bare metal, so that constraint does not bite
 | **MikroTik CHR** (`routeros7`) | `vrnetlab/mikrotik_routeros:7.16.2`, built locally from the free `chr-7.16.2.vmdk` | OK | OK once the runner ships `community.routeros` — see below | **OSPF Full both ways**, addressing exactly as netlab expanded it (10.1.0.1/30 ↔ .2/30, loopbacks 10.0.0.x/32) | interfaces / links / facts all correct | **ADMITTED** — re-probed green on a rebuilt stack |
 | **bird** (daemon tier) | `netlab/bird:latest`, `netlab clab build bird` | OK | OK (`status="configured"`) | **OSPF Full/PtP both ways** | links `up`, addresses correct | **ADMITTED** |
 | **FRR** | `quay.io/frrouting/frr:10.6.1` | OK | OK | OSPF Full (probed 2026-08-04, gap-4 verification) | — | **ADMITTED** |
-| **dnsmasq** (daemon tier) | `netlab/dnsmasq:latest`, built | OK | OK (`status="configured"`) | dnsmasq running as PID 1 from `/etc/dnsmasq.conf`; addressing applied and the peer pings | links `up` | **ADMITTED** (the `dhcp` module path itself is untested — it needs a dhcp-capable client, i.e. IOL) |
+| **dnsmasq** (daemon tier) | `netlab/dnsmasq:latest`, built | OK | OK (`status="configured"`) | dnsmasq running as PID 1 from `/etc/dnsmasq.conf`; addressing applied and the peer pings | links `up` | **ADMITTED** (the `dhcp` module path itself is untested — it needs a dhcp-capable client, and the admitted set no longer has one: IOL was the candidate) |
 | **kind** (k8s host role) | `kindest/node:v1.34.3`, pulled | OK (needs `plugin: [kind]` in the definition, which netlab says loudly) | OK | node reachable from the linux peer | **BROKEN**: container is named `k1-control-plane`, not `clab-<lab>-<node>`, so the live-state merge cannot see it — absent from the lab's node list, link `oper_state` "unknown" | **NOT admitted** — destroy does clean it up |
 | **Extreme EXOS** | `vrnetlab/extreme_exos:32.7.2.19` and `:33.1.1.31`, both built from the free GitHub qcow2s | OK (containers run) | **NEVER REACHED** — SSH never opens | — | link table correct; nodes running | **NOT admitted** — see below |
 | **OpenBSD** | `vrnetlab/openbsd_openbsd:7.7` (the version netlab targets) — `:7.9` is what `make download` fetches and it fails earlier | OK — both nodes boot and pass readiness | **FAILS** — netlab asks for a connection plugin ansible removed; with that overridden, the config script then hangs | — | links `up`, addresses correct | **NOT admitted** — got much further on 7.7; see below |
+| **Cisco IOL** (`iol`) | `vrnetlab/cisco_iol:17.16.01a`, from the CML refplat set | OK | OK (`network_cli` over SSH, once the runner shipped `cisco.ios`) | OSPF Full, LDP operational, VPNv4 Established; MPLS L3VPN end to end | interfaces / links (the `Ethernet0/1` ↔ `eth1` alias join) / facts all correct; suite 25/25 incl. interactive VRF pings | **WITHDRAWN 2026-08-05 — licensing, not behaviour**; see below |
 
 ## The finding that generalizes: the runner ships one Ansible collection per platform
 
-`netlab-runner/Dockerfile` installs exactly `community.docker cisco.ios ansible.netcommon`.
+At the time of the probe `netlab-runner/Dockerfile` installed exactly
+`community.docker cisco.ios ansible.netcommon` (`cisco.ios` left with IOL on 2026-08-05).
 CHR's config push failed with
 
 ```
@@ -63,6 +72,13 @@ No new licensing question, but each addition should be confirmed the same way.
 `community.routeros` is now in `netlab-runner/Dockerfile`, and CHR was **re-probed on a
 freshly built stack** — deploy, config push and OSPF Full both ways, with no hand-patched
 container involved.
+
+**A fourth step surfaced 2026-08-05, from the same transport fact:** a `network_cli` platform
+also needs an entry in the runner's `_NETMIKO_DEVICE_TYPES`, or `interactive: true` test cases
+return `no interactive CLI driver for network_os '<x>'`. CHR was admitted without one — the
+gap was found while withdrawing IOL and closed with `routeros: mikrotik_routeros`. The failure
+is a clean typed error rather than a wrong driver, which is exactly why it went unnoticed:
+nothing else in the probe protocol exercises interactive mode.
 
 ## Other observations
 
@@ -137,7 +153,7 @@ resolver keeps all four upstreams; only clab-created nodes are affected.
 
 So this is not transient and not a Twinlab defect — it is the interaction of a CGNAT resolver
 with containerlab's DNS propagation. But it does mean **FRR's config push is the only admitted
-platform that is not hermetic** (vyos/bird/dnsmasq/linux/iol/CHR all configure with no egress).
+platform that is not hermetic** (vyos/bird/dnsmasq/linux/CHR all configure with no egress).
 It is why the mixed-NOS blackbox test deliberately pairs **VyOS + bird**: a test must not depend
 on the lab node reaching the internet.
 
@@ -155,3 +171,41 @@ DNS still broken**. That makes FRR hermetic like the rest, and it is the same cl
 netlab already does for the daemon tier (`netlab clab build bird`). The cost is that the
 catalog's `image` would no longer be netlab's default, which the drift guard asserts — so it
 needs a deliberate decision, not a quiet edit.
+
+### Cisco IOL — withdrawn on licensing
+
+**The only platform so far removed from the supported set after passing every behavioural
+test.** IOL probed green on everything the protocol asks for: deploy, `network_cli` config push
+over SSH, OSPF Full, LDP operational, VPNv4 Established, a full MPLS L3VPN, the
+`Ethernet0/1` ↔ `eth1` alias join in the link table, facts, and 25/25 on its device-keyed suite
+including interactive VRF pings through the netmiko channel. None of that is in doubt and none
+of it is why it left.
+
+**The reason is the image's licence.** IOL is distributed only inside Cisco's CML
+reference-platform set, and Cisco states plainly that those images *"are only licensed for use
+within Cisco Modeling Labs"* and that *"downloading these VM images and using them outside
+Cisco Modeling Labs without a proper license is prohibited"*
+([DevNet](https://developer.cisco.com/docs/modeling-labs/vm-images-for-cml-labs/)). Extracting
+them for containerlab is common community practice; it is still outside that grant. Note this
+is NOT Twinlab's own open-source constraint — Twinlab ships, mirrors and links no images, so
+nothing we distribute is affected. It is a question about what the maintainer runs on their own
+host while testing, which is why it was theirs to answer.
+
+**The maintainer chose the conservative stance on 2026-08-05**, "for now", with a post-v1.0
+item to revisit (ROADMAP item 20). Two things follow that are worth writing down:
+
+- **Withdrawal is the admission procedure in reverse**, and it reaches further than admission
+  does: catalog + frontend fallback, the runner's collection, *and* the platform's example, its
+  builtin network template, its suite cases, and every doc claim. `DEVICE_KMODS`/hostprep
+  needed nothing (iol carries no netlab kmods key). What stayed, deliberately, is every
+  mechanism that is device-agnostic and merely happens to cover IOS — the config-import IOS
+  parser, the `textfsm`/`cisco_ios` map with Twinlab's own LDP template, and the
+  `mpls_te`/`ip_sla` built-ins, which ARE the built-in custom-config library.
+- **The dnsmasq `dhcp` module path lost its only candidate client**, and the example suite lost
+  its second live device flavor — so `textfsm` and `compare`-over-parsed-output now have no
+  worked example in the repo. Both are sweep follow-ups, recorded rather than quietly dropped.
+
+**Cisco is not entirely closed.** XRd Control Plane and the Cisco 8000 emulator ship under
+separate entitlements, not the CML SEULA, so they stay acquirable independently of this
+decision — XRd being the attractive one (native container, ~2 GB, no KVM, needs a Cisco service
+contract).

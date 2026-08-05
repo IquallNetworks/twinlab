@@ -55,16 +55,19 @@ async def test_device_catalog_serves_supported_set(admin: TwinlabClient) -> None
     catalog = await admin.device_catalog()
     by_device = {device.device: device for device in catalog.devices}
     # The tested platforms (CLAUDE.md Current State) plus the linux host.
-    assert set(by_device) == {"vyos", "iol", "frr", "routeros7", "bird", "dnsmasq", "linux"}
+    # Cisco IOL was admitted and then withdrawn 2026-08-05 on CML licensing
+    # (ROADMAP 17.1), so it is deliberately absent.
+    assert set(by_device) == {"vyos", "frr", "routeros7", "bird", "dnsmasq", "linux"}
 
     # The builder's proven module set must be advertised by the full routers.
-    for router in ("vyos", "iol", "frr", "routeros7"):
+    for router in ("vyos", "frr", "routeros7"):
         assert by_device[router].role == "router"
         assert set(by_device[router].modules) >= {"ospf", "bgp", "mpls", "vrf"}, router
     # bird routes but has no MPLS in netlab's clab matrix; the daemon serving
     # DHCP and the plain container are hosts.
     assert by_device["bird"].role == "router"
-    assert set(by_device["bird"].modules) >= {"ospf", "bgp"}
+    assert set(by_device["bird"].modules) >= {"ospf", "bgp", "vrf"}
+    assert "mpls" not in set(by_device["bird"].modules)
     for host in ("dnsmasq", "linux"):
         assert by_device[host].role == "host"
 
@@ -89,7 +92,6 @@ async def test_device_catalog_visible_without_admin_roles(
     catalog = await plain.device_catalog()
     assert {device.device for device in catalog.devices} == {
         "vyos",
-        "iol",
         "frr",
         "routeros7",
         "bird",

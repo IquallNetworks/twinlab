@@ -88,13 +88,14 @@ function gates(yaml, needle, devices) {
     : `expected a reason containing "${needle}", got: ${result.reasons.join(' | ')}`
 }
 
-const DEV = ['vyos', 'iol', 'linux', 'frr']
+// The known-device list the parse gate uses — mirrors the supported set.
+const DEV = ['vyos', 'linux', 'frr', 'routeros7']
 
 
 // ---------------------------------------------------------------- regression
 // The repo's own examples must keep round-tripping.
 const EXAMPLES = fileURLToPath(new URL('../../examples/', import.meta.url))
-for (const file of ['mpls-l3vpn.yml', 'mpls-l3vpn.iol.yml', 'campus-lan.yml']) {
+for (const file of ['mpls-l3vpn.yml', 'campus-lan.yml']) {
   check(`example ${file}`, () => roundTrip(readFileSync(`${EXAMPLES}${file}`, 'utf8'), DEV))
 }
 
@@ -126,7 +127,7 @@ check('16-char name is fine', () =>
 
 // ------------------------------------------------------------- nodes forms
 check('nodes as a list of dicts', () =>
-  roundTrip(`nodes:\n- name: r1\n  device: vyos\n- name: r2\n  device: iol\n  mtu: 1500\nlinks:\n- r1-r2\n`, DEV),
+  roundTrip(`nodes:\n- name: r1\n  device: vyos\n- name: r2\n  device: frr\n  mtu: 1500\nlinks:\n- r1-r2\n`, DEV),
 )
 
 check('nodes list-of-dicts keeps attributes', () => {

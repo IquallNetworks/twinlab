@@ -112,6 +112,13 @@ character-for-character verbatim.
   supplied in the request, because the lab does not remember its origin.
 - **Scope: the supported device set only** (VyOS + Cisco IOS/IOL) — the same policy
   boundary as the catalog; the NOS platform sweep (item 17) widens both together.
+  **Amended 2026-08-05:** the two sets are no longer identical. Cisco IOL was withdrawn from
+  the catalog on licensing (ROADMAP 17.1) while the **IOS parser deliberately stayed** — it
+  parses a config *format*, and importing an IOS config to a text-mode-only lab is still
+  useful, so `POST /import/*` still accepts `device: iol` and still 422s
+  `unsupported_device` off the PARSER set. The visible consequence: `config_import` is a field
+  on a catalog entry, so with no entry for iol nothing advertises the capability. If the
+  licensing stance reverses (ROADMAP item 20) the sets line up again with no code change here.
 - **Batfish set aside, not rejected**: if its topology inference ever earns its infra
   weight, it slots behind the same normalized facts model.
 

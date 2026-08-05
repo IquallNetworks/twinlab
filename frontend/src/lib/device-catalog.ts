@@ -29,16 +29,12 @@ export interface CatalogDevice {
 
 // Used only until `GET /catalog` answers: the last-known supported set (the
 // tested platforms + linux host), with image presence unknown. The server
-// catalog is authoritative the moment it resolves.
+// catalog is authoritative the moment it resolves. Mirror the backend's
+// SUPPORTED_DEVICES here — Cisco IOL was withdrawn from both 2026-08-05 on
+// CML licensing (ROADMAP 17.1), so an iol node now fails the builder's
+// unknown-device gate and its lab edits as text.
 export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
   { device: 'vyos', label: 'VyOS', kind: 'router', modules: BUILDER_MODULES, imagePresent: null },
-  {
-    device: 'iol',
-    label: 'Cisco IOL',
-    kind: 'router',
-    modules: BUILDER_MODULES,
-    imagePresent: null,
-  },
   {
     device: 'frr',
     label: 'FRRouting',
@@ -53,12 +49,12 @@ export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
     modules: BUILDER_MODULES,
     imagePresent: null,
   },
-  // bird carries no MPLS or VRF in netlab's clab module matrix.
+  // bird carries no MPLS in netlab's clab module matrix.
   {
     device: 'bird',
     label: 'BIRD routing daemon',
     kind: 'router',
-    modules: ['ospf', 'bgp'],
+    modules: ['ospf', 'bgp', 'vrf'],
     imagePresent: null,
   },
   {

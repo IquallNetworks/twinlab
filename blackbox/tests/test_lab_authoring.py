@@ -37,7 +37,10 @@ _SUITES = {
                         command="echo {{ node.name }}",
                         expect=TestExpectation(contains="n1"),
                     ),
-                    "iol": TestCase(
+                    # A second flavor that never RUNS here (the lab has no
+                    # such node) — it is what proves every TestCase field
+                    # survives the round trip, parse and interactive included.
+                    "routeros7": TestCase(
                         command="show version",
                         expect=TestExpectation(compare={"list": [{"version": ".+"}]}),
                         parse="textfsm",

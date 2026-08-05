@@ -15,9 +15,7 @@ from _config import LAN_LAB_DEFINITION, LINUX_LAB_DEFINITION, LabFactory, UserCl
 # collection is the repo examples, `example-`-prefixed so the builtin
 # namespace never blocks publishing a lab called by the bare example name.
 # A seed change is a contract + suite change.
-_BUILTIN_NETWORK_NAMES = frozenset(
-    {"example-mpls-l3vpn", "example-mpls-l3vpn-iol", "example-campus-lan"}
-)
+_BUILTIN_NETWORK_NAMES = frozenset({"example-mpls-l3vpn", "example-campus-lan"})
 
 _FRAGMENT = "device: vyos\nmodule: [ospf, bgp]\nbgp.as: 65001\n"
 
@@ -153,10 +151,10 @@ async def test_node_template_crud_roundtrip(
 
     # Full replace — description AND content; the device follows the fragment.
     updated = await admin.update_node_template(
-        created.name, description="now iol", content="device: iol\nmodule: [ospf]\n"
+        created.name, description="now frr", content="device: frr\nmodule: [ospf]\n"
     )
-    assert updated.description == "now iol"
-    assert updated.device == "iol"
+    assert updated.description == "now frr"
+    assert updated.device == "frr"
 
     # The name is a per-collection namespace.
     with pytest.raises(TwinlabApiError) as raised:

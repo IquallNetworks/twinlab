@@ -33,12 +33,6 @@ _BUILTIN_SPECS: tuple[tuple[str, str], ...] = (
         "OSPF area-0 core, LDP transport, one customer VPN over MP-BGP VPNv4.",
     ),
     (
-        "example-mpls-l3vpn-iol",
-        "The same MPLS L3VPN core on Cisco IOL. Requires your own licensed "
-        "vrnetlab/cisco_iol image on the host — Cisco IOL is proprietary and "
-        "not distributed with Twinlab.",
-    ),
-    (
         "example-campus-lan",
         "A small campus on VyOS routers and linux hosts: a redundant OSPF "
         "backbone, multi-access LAN segments, and a stub drop — exercises "

@@ -487,15 +487,54 @@ def _config_fileset(library: BuiltinLibrary, lab: Lab) -> dict[str, str]:
     return library.fileset | _user_fileset(lab)
 
 
-def link_oper_state(states: list[str | None]) -> LinkOperState:
-    """Roll a link's endpoint interface states up into the derived link state
-    (contract delta 14): all "up" -> up; all known-not-up -> down; a mix of
-    known states -> degraded; any unknown endpoint -> unknown."""
-    if not states or any(state is None for state in states):
+# How ONE endpoint reads. Not the link vocabulary: an endpoint is never
+# "degraded" — that word only means "this link's endpoints disagree".
+EndpointLinkState = Literal["up", "down", "unknown"]
+
+# Interface states that POSITIVELY mean not-forwarding, in the Linux/RFC 2863
+# IF_OPER_* vocabulary clab-api passes through. Deliberately a closed set: the
+# endpoint vocabulary is unpinned upstream, so anything absent from here is
+# reported "unknown" rather than assumed down. Claiming a link is down is a
+# strong statement and a wrong one teaches users to ignore the signal.
+_DOWN_INTERFACE_STATES: frozenset[str] = frozenset({"down", "lowerlayerdown", "notpresent"})
+
+# Interface kinds with no carrier to report. The kernel leaves operstate
+# UNKNOWN on a dummy device however healthy it is — `ip link` shows
+# `<UP,LOWER_UP> state UNKNOWN` — because dummy drivers never drive carrier.
+# netlab realizes every stub link as one of these: VyOS configures `dum1`
+# itself, every other supported device gets a containerlab `type: dummy` link,
+# and both come back state="unknown" kind="dummy". Reading that as down marked
+# working stubs down on every platform.
+_CARRIERLESS_INTERFACE_KINDS: frozenset[str] = frozenset({"dummy"})
+
+
+def endpoint_link_state(state: str | None, kind: str | None) -> EndpointLinkState:
+    """Classify one endpoint's live interface state (contract delta 14).
+
+    `state` None means Twinlab could not resolve the interface at all — a
+    different thing from a device REPORTING the string "unknown", which is why
+    the two are not collapsed. `kind` is clab-api's interface type, needed
+    because operstate is meaningless on a carrier-less device."""
+    if state is None:
+        return "unknown"
+    if state == "up":
+        return "up"
+    if state == "unknown" and kind in _CARRIERLESS_INTERFACE_KINDS:
+        return "up"
+    if state in _DOWN_INTERFACE_STATES:
+        return "down"
+    return "unknown"
+
+
+def link_oper_state(states: list[EndpointLinkState]) -> LinkOperState:
+    """Roll classified endpoint states up into the link state (contract delta
+    14): any unknown endpoint -> unknown (we cannot speak for the whole link);
+    then all up -> up; all down -> down; a mix -> degraded."""
+    if not states or "unknown" in states:
         return "unknown"
     if all(state == "up" for state in states):
         return "up"
-    if all(state != "up" for state in states):
+    if all(state == "down" for state in states):
         return "down"
     return "degraded"
 
@@ -515,6 +554,9 @@ def merge_links(
     links: list[LabLink] = []
     for link in stored:
         endpoints: list[LinkEndpoint] = []
+        # Classified alongside the endpoints: the roll-up needs each interface's
+        # `kind`, which is live-only and deliberately not on the wire.
+        endpoint_states: list[EndpointLinkState] = []
         for endpoint in link.endpoints:
             live = None
             if inventory is not None:
@@ -547,6 +589,12 @@ def merge_links(
                     impairment=impairment,
                 )
             )
+            endpoint_states.append(
+                endpoint_link_state(
+                    live.state if live is not None else None,
+                    live.kind if live is not None else None,
+                )
+            )
         links.append(
             LabLink(
                 index=link.index,
@@ -556,7 +604,7 @@ def merge_links(
                 prefix_ipv6=link.prefix_ipv6,
                 bandwidth=link.bandwidth,
                 mtu=link.mtu,
-                oper_state=link_oper_state([e.state for e in endpoints]),
+                oper_state=link_oper_state(endpoint_states),
                 endpoints=endpoints,
             )
         )

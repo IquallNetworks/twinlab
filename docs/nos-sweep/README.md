@@ -132,8 +132,14 @@ collection** change, not a catalog edit.
   had no routeros7, and ntc-templates cannot parse RouterOS 7 at all, so Twinlab packages its
   own template), one real Twinlab bug (a resolved-but-mismatched TextFSM template raised through
   the boundary and failed the whole suite run instead of erroring one check), and one **open
-  contract question for the maintainer**: a stub link reports `oper_state="down"` while
-  forwarding, because a dummy interface's live state is the literal string `"unknown"` and the
-  pinned delta-14 roll-up treats known-not-"up" as down. Not changed unilaterally.
+  contract question for the maintainer** — since DECIDED and SHIPPED the same day: a stub link
+  reported `oper_state="down"` while forwarding, because a dummy interface's live state is the
+  literal string `"unknown"` and the pinned delta-14 roll-up treated known-not-"up" as down. It
+  hit every stub on every platform (two realizations, both landing on a dummy interface) and
+  nobody had decided it — the roll-up's table test has no row for that string. **Maintainer's
+  call: use the interface `kind` as proposed, AND make unknown the default rather than down.** So
+  down is now a closed set (down/lowerlayerdown/notpresent), anything unrecognized reads unknown,
+  and a carrier-less `dummy` reporting "unknown" reads up. Contract wording amended, no shape
+  change, no new wire field — clab-api already reports the kind.
 
 Gaps 2–7 verified live 2026-08-04: blackbox **140/140** with the `deploy` marker.

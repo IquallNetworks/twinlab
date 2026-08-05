@@ -211,15 +211,17 @@ the platform has no JSON output):
    ntc-templates' does not fit the release) — only when the platform has no JSON output and
    suites should assert on parsed data. See the trap section above.
 
-Two of these five were missed when CHR was admitted on 2026-08-04 and only found later (the
-netmiko driver on 08-05, the TextFSM path the same day, while building the mixed-NOS lab).
-**Both failures were clean typed errors on paths §2's probe never walks** — so if you have just
+CHR tripped **three of these five**: step 4's collection surfaced during its own probe on
+2026-08-04 (so it was fixed before admission), while two were missed at admission and only found
+later — the netmiko driver on 08-05, the TextFSM path the same day, while building the mixed-NOS
+lab.
+**Both of those failures were clean typed errors on paths §2's probe never walks** — so if you have just
 admitted a platform, exercise an `interactive: true` case and a `parse:` case against it before
 calling it done, not only a deploy and a protocol check.
 
 ## 4b. Withdrawing a platform
 
-Same four edits in reverse, and it reaches **further** than admission did, because admission
+Same five edits in reverse, and it reaches **further** than admission did, because admission
 also seeds artifacts that keep advertising the platform:
 
 - its `examples/` definition **and** the packaged builtin network template mirroring it (a

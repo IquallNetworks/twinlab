@@ -577,10 +577,13 @@ should assert on parsed data — `services/validation.py` `TEXTFSM_PLATFORMS`, *
 Twinlab-packaged template in `services/textfsm_templates/` when ntc-templates' own does not fit
 the release**: both its `mikrotik_routeros` OSPF templates are RouterOS 6-shaped and cannot parse
 7 at all, so CHR needs ours (indexed for the `terse` spelling, since plain `print` wraps one
-record over several lines). **CHR's admission missed steps 3, 4-netmiko and 5 in turn**, each
-found weeks apart, so the rule now is: after admitting a platform, exercise an `interactive:
-true` case and a `parse:` case against it — the probe protocol walks neither path and both
-failures are clean typed errors that hide. **Withdrawing** a platform is the same edits in
+record over several lines). **CHR tripped THREE of these five** — the Ansible collection during
+its own probe (2026-08-04, so it was fixed before admission), then the netmiko `device_type` and
+the TextFSM path only later (both 2026-08-05, while building the mixed-NOS lab). Hence the rule:
+after admitting a platform, exercise an `interactive: true` case and a `parse:` case against it —
+the probe protocol walks neither path and both failures are clean typed errors that hide.
+(The procedure doc's checklist is file-by-file, so its five are numbered differently from these
+five; follow the names, not the numbers.) **Withdrawing** a platform is the same edits in
 reverse, plus its
 example, its builtin network template and its suite cases (the IOL withdrawal of 2026-08-05 is
 the worked example). Widening the set is a maintainer decision that starts with testing —

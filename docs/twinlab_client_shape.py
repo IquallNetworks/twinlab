@@ -1154,12 +1154,32 @@ class NetemImpairment:
 
 
 # Delta 14 (APPROVED 2026-07-30). Pinned as a Literal — unlike the interface `state`
-# passthrough — because Twinlab DERIVES this value itself. Roll-up over the
-# link's endpoint states: all "up" -> "up"; all known-not-up -> "down"; a mix
-# of known states -> "degraded" (a p2p with one side down reads degraded — the
-# per-endpoint states disambiguate; in practice a veth pair drops both sides);
-# any endpoint unknown (lab not deployed, inventory unavailable, interface not
-# found) -> "unknown".
+# passthrough — because Twinlab DERIVES this value itself.
+#
+# Derivation is TWO stages (wording AMENDED 2026-08-05; no shape change):
+#
+# 1. Classify each endpoint into up / down / unknown. "up" is "up". **Down is a
+#    CLOSED set** of positively-not-forwarding values from the Linux/RFC 2863
+#    IF_OPER_* vocabulary — down, lowerlayerdown, notpresent — and everything
+#    else, including a value we have never seen, classifies **"unknown", not
+#    "down"**. An endpoint Twinlab could not resolve at all (lab not deployed,
+#    inventory unavailable, interface absent from it) is unknown too.
+#    One refinement needs data that is not on this wire: operstate is
+#    MEANINGLESS on an interface with no carrier, so an endpoint whose live
+#    interface kind is carrier-less (a `dummy`) and whose state is the string
+#    "unknown" classifies **up**. That is not a special case for its own sake —
+#    netlab realizes every stub link as a dummy interface, so without it every
+#    stub in every lab reported "down" while forwarding perfectly.
+# 2. Roll the classes up: any unknown endpoint -> "unknown" (we cannot speak for
+#    the link); then all up -> "up"; all down -> "down"; a mix -> "degraded" (a
+#    p2p with one side down reads degraded — the per-endpoint states
+#    disambiguate; in practice a veth pair drops both sides).
+#
+# The original wording said "all known-not-up -> down", whose parenthetical
+# listed only resolution failures as "unknown" — so it never contemplated a
+# device REPORTING the literal string "unknown", and classified that as down.
+# Twinlab is now conservative on purpose: claiming a link is down is a strong
+# statement, and a wrong one teaches users to ignore the signal.
 LinkOperState = Literal["up", "degraded", "down", "unknown"]
 
 
@@ -1182,6 +1202,13 @@ class LinkEndpoint:
     ipv6: str | None
     # Live oper state passthrough for this interface ("up"/"down"/... — the
     # same unpinned vocabulary QUIRK as NodeInterface.state); None = unknown.
+    # CONSUMER OBLIGATION (2026-08-05): because the vocabulary is unpinned, code
+    # deriving anything from this must treat only a KNOWN not-forwarding value as
+    # down and default everything else to unknown — never `state != "up"` means
+    # down. Note the values are not self-describing: an interface with no
+    # carrier reports the string "unknown" while being perfectly healthy, and
+    # this wire carries no interface `kind` to tell you which those are. Prefer
+    # the server's `oper_state`, which already accounts for it.
     state: str | None
     # Active netem impairment on this interface (reuses NetemImpairment — its
     # `interface` field is redundant here but keeps one shape). None = not

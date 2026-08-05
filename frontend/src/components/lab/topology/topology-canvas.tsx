@@ -68,6 +68,27 @@ interface LinkEdgeData extends Record<string, unknown> {
   impaired: boolean
 }
 
+/** Interface states that POSITIVELY mean not-forwarding (Linux/RFC 2863
+ * IF_OPER_*, as the server passes them through). Mirrors the backend's
+ * `_DOWN_INTERFACE_STATES`: anything absent is reported unknown, never assumed
+ * down, because the endpoint `state` vocabulary is an unpinned passthrough. */
+const DOWN_INTERFACE_STATES = new Set(['down', 'lowerlayerdown', 'notpresent'])
+
+/** Classify ONE endpoint for a LAN spoke's styling. The server already did this
+ * for whole-link `oper_state`; a spoke needs its own member's state, so the rule
+ * lives here too — keep the two in step.
+ *
+ * The backend has one refinement this cannot: it also reads the interface
+ * `kind`, so a carrier-less `dummy` reporting "unknown" counts as up. That kind
+ * is not on the wire, but it cannot arise here either — a spoke belongs to a
+ * 3+-endpoint LAN, whose members are always veths attached to a bridge. Dummies
+ * only appear on one-endpoint stub links, which are table-only and never drawn. */
+function endpointLinkState(state: string | null): LinkOperState {
+  if (state === null) return 'unknown'
+  if (state === 'up') return 'up'
+  return DOWN_INTERFACE_STATES.has(state) ? 'down' : 'unknown'
+}
+
 /** Stroke/animation for a link's state. Unknown reads muted-dashed, down reads
  * destructive; an impairment tints toward primary and animates — deliberately
  * distinct from health (an impaired link is doing what was asked). */
@@ -184,8 +205,7 @@ function buildGraph(
         })
         for (const endpoint of link.endpoints) {
           // Each spoke carries ITS member's interface state, not the roll-up.
-          const spokeState: LinkOperState =
-            endpoint.state === null ? 'unknown' : endpoint.state === 'up' ? 'up' : 'down'
+          const spokeState = endpointLinkState(endpoint.state)
           edges.push({
             id: `link:${link.index}~${endpoint.node}`,
             source: `link:${link.index}`,

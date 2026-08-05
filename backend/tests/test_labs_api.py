@@ -6,7 +6,9 @@ import pydantic
 import pytest
 
 from twinlab_backend.api.labs import (
+    EndpointLinkState,
     apply_runtime_actions,
+    endpoint_link_state,
     image_preflight_report,
     lab_detail,
     lab_summary,
@@ -344,7 +346,7 @@ def _stored_link(*endpoints: TopologyLinkEndpoint) -> TopologyLink:
     )
 
 
-def _iface(name: str, alias: str = "", state: str = "up") -> NodeInterface:
+def _iface(name: str, alias: str = "", state: str = "up", kind: str = "veth") -> NodeInterface:
     return NodeInterface(
         name=name,
         alias=alias,
@@ -352,18 +354,47 @@ def _iface(name: str, alias: str = "", state: str = "up") -> NodeInterface:
         mac="aa:bb:cc:dd:ee:01",
         mtu=1500,
         state=state,
-        kind="veth",
+        kind=kind,
     )
 
 
+def test_endpoint_link_state_classification() -> None:
+    table: list[tuple[str | None, str | None, str]] = [
+        ("up", "veth", "up"),
+        # Positively-down vocabulary only.
+        ("down", "veth", "down"),
+        ("lowerlayerdown", "veth", "down"),
+        ("notpresent", "veth", "down"),
+        # Unresolved endpoint (interface not found / lab not deployed).
+        (None, None, "unknown"),
+        # A carrier-less device: the kernel leaves operstate UNKNOWN on a dummy
+        # however healthy it is, so reading it as down marks working stubs down.
+        ("unknown", "dummy", "up"),
+        # The same string on a device that DOES have a carrier says nothing.
+        ("unknown", "veth", "unknown"),
+        # Anything outside the known vocabulary is NOT assumed down — the
+        # endpoint vocabulary is an unpinned upstream passthrough.
+        ("dormant", "veth", "unknown"),
+        ("testing", "veth", "unknown"),
+        ("something-new-from-clab-api", "veth", "unknown"),
+    ]
+    for state, kind, expected in table:
+        assert endpoint_link_state(state, kind) == expected, (state, kind)
+
+
 def test_link_oper_state_rollup() -> None:
-    table: list[tuple[list[str | None], str]] = [
+    table: list[tuple[list[EndpointLinkState], str]] = [
         (["up", "up"], "up"),
         (["up", "down"], "degraded"),
-        (["down", "lowerlayerdown"], "down"),
-        (["up", None], "unknown"),
-        ([None, None], "unknown"),
+        (["down", "down"], "down"),
+        # An endpoint we cannot speak for makes the whole link unspeakable.
+        (["up", "unknown"], "unknown"),
+        (["down", "unknown"], "unknown"),
+        (["unknown", "unknown"], "unknown"),
         ([], "unknown"),
+        # A LAN: three up endpoints agree, one dissenter degrades it.
+        (["up", "up", "up"], "up"),
+        (["up", "up", "down"], "degraded"),
     ]
     for states, expected in table:
         assert link_oper_state(states) == expected, states
@@ -386,6 +417,28 @@ def test_merge_links_live_states_roll_up() -> None:
     (link,) = merged.links
     assert link.oper_state == "degraded"
     assert [e.state for e in link.endpoints] == ["up", "down"]
+
+
+def test_merge_links_stub_on_a_dummy_interface_reads_up() -> None:
+    # The regression this classification exists for. A one-endpoint stub link
+    # realizes as a dummy interface on every supported platform (VyOS
+    # configures `dum1` itself; the rest get a containerlab `type: dummy` link),
+    # and a dummy reports operstate "unknown" no matter how healthy it is. The
+    # link forwards — proven live on examples/mixed-nos.yml — so it must not
+    # read "down".
+    stored = _stored_link(_endpoint("vyos1", clab_name="dum1"))
+    inventory = {"vyos1": [_iface("dum1", state="unknown", kind="dummy")]}
+    (link,) = merge_links([stored], inventory, {}).links
+    assert link.oper_state == "up"
+    # The endpoint still reports the raw upstream string — the passthrough is
+    # untouched; only the DERIVED roll-up interprets it.
+    assert [e.state for e in link.endpoints] == ["unknown"]
+
+
+def test_merge_links_unrecognized_state_is_unknown_not_down() -> None:
+    inventory = {"n1": [_iface("eth1")], "n2": [_iface("eth1", state="dormant")]}
+    (link,) = merge_links([_stored_link(_endpoint("n1"), _endpoint("n2"))], inventory, {}).links
+    assert link.oper_state == "unknown"
 
 
 def test_merge_links_matches_alias_and_reports_live_name() -> None:

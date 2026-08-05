@@ -6,8 +6,36 @@ record of the agreed sequence, the grounded API facts behind it, and the
 decisions already locked — so the plan survives context loss and implementation
 doesn't need to re-research the endpoints.
 
-Status legend: **planned** (agreed, not started) · **deferred** (explicitly
-parked) · **candidate** (proposed, not yet decided).
+Status legend: **done** (shipped) · **in progress** · **planned** (agreed, not
+started) · **deferred** (explicitly parked) · **candidate** (proposed, not yet
+decided).
+
+## Road to v1.0 — the whole remainder, in order
+
+Everything else in this file is either shipped or explicitly post-tag. Kept here
+because the remainder had grown scattered across four items and no single place
+said what was left.
+
+1. **`tc:` baseline impairment — gap 1 / contract delta 25** (item 17.2). The only
+   thing keeping the sweep item open besides Tier B. Sketched 2026-08-04 and then
+   **DEFERRED to the end of item 17 for maintainer re-analysis — the sketch is NOT
+   an approved design**, so this does not start on its own.
+2. **Tier B builder promotions** (item 17.3). Its own review, after the sweep work:
+   the extras→typed promotions (module presence, subkey splits, field promotions,
+   vlans, …) deliberately held back from the Tier A batch.
+3. **Pin the fact-namespace subset** (item 16's tail). The delta 17 resolution left
+   the namespace as netlab's RAW node dict, provisional on purpose;
+   `GET /labs/{name}/facts` is the insulation layer. Independent of everything
+   above — it can land whenever.
+4. **Playwright e2e UX suite** (item 14). Sequenced last-but-one on purpose: the
+   surfaces it pins down must be final first.
+5. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
+   **LAST**, and it must not ship without item 14.
+
+Explicitly NOT in v1.0: the CML licensing revisit (item 20), the acquisition-blocked
+platform tail (item 21), validation-gate parallelization (item 10), packet capture +
+metrics (Phase 6), i18n, and the 2026-07-23 API-review deferrals at the end of this
+file.
 
 ## Locked decisions
 
@@ -234,7 +262,13 @@ config-time-failed badge and the deploy/redeploy skip options. Backend + fronten
 gates green (70 backend tests). **Deferred (noted for later):** device-keyed
 per-test commands (v1 is a single command string), the netlab-style expression
 matcher, and a config-time status column in the labs *list* table (the detail-page
-badge already marks a failed config).
+badge already marks a failed config). **Two of those three have since shipped and
+this whole phase is SUPERSEDED by item 15** (test-suites v2, contract delta 17):
+device-keyed `TestCase`s are the v2 model, and `config_time_status` rides both the
+list and the detail payload. Only the netlab-style expression matcher is still
+deferred — and v2's `compare` grammar over parsed data covers most of what it was
+wanted for. The text below is the as-built record of v1, kept for its research and
+rationale.
 
 **Research (verified against netlab 26.06 + netlab's published integration tests):**
 - netlab's semantic validation plugins (`plugin: ospf_neighbor(...)`, `bgp_*`,
@@ -515,7 +549,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     16.5) and the
     NOS platform sweep with its two companion reviews (item 17) so the surfaces
     it pins down are final, and before the v1.0
-    release train, which must not ship without it. The black-box suite already proves the API contract through the
+    release train (item 22), which must not ship without it. The black-box suite already proves the API contract through the
     client; this suite covers what that cannot — the browser layer: login/auth
     flows, role-gated affordances actually hidden/shown, the dashboard → lab
     tabs → builder → deploy → operate journeys, dialogs/toasts/empty states,
@@ -576,8 +610,11 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     overlay templates), assert with napalm-validate's `compare` grammar
     over parsed data (raw contains/not_contains/matches stay for unparsed
     output — regex fallback is a user decision, always available).
-    Device-keyed `TestCase`s let one suite serve VyOS + IOL (missing device
-    → `skip`, the reserved status finally used). `interactive: true` routes
+    Device-keyed `TestCase`s let one suite serve several NOS flavours —
+    VyOS + IOL being the pair that motivated it; since IOL's withdrawal the
+    worked example is `examples/mixed-nos.test-suites.json` with FOUR — and a
+    node whose device has no case reports `skip`, the reserved status finally
+    used. `interactive: true` routes
     a case through netmiko's persistent channel where transport is SSH
     (in scope NOW — fixes IOS truncating `ping ... repeat` on one-shot
     exec; no-op over docker exec). Comparator: IMPORT napalm and use
@@ -706,7 +743,9 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        case addressing could never see — and mixed wires spell `ipv4:
        false` on their unaddressed endpoints, since netlab otherwise
        invents an address (live-proven). Blackbox 133 green, the flagship
-       round trip now carrying an L2 wire end to end. Next: scenarios.
+       round trip now carrying an L2 wire end to end. Next was scenarios —
+       which were then SHELVED at the opening of their design discussion; see
+       16.5 for what shipped in their place.
     5. **Scenario definition** — **SHELVED until after v1.0** (maintainer's
        call 2026-08-04, at the opening of its design discussion). What shipped
        for v1.0 instead is the minimal primitive the discussion surfaced:
@@ -753,7 +792,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     the raw netlab node dict is provisional; `GET /labs/{name}/facts` is the
     insulation layer).
 
-### NOS platform sweep — and the two reviews it informs · **in progress; 17.1 and 17.3 CLOSED for v1.0, only gap 1 / delta 25 remains** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
+### NOS platform sweep — and the two reviews it informs · **in progress; 17.1 CLOSED for v1.0 and 17.3's Tier A shipped — TWO items remain: gap 1 / delta 25 and 17.3's Tier B review** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
 
 17. **One work item with three strands, run in parallel.** The sweep is the
     driver; the two reviews were previously carried as unsequenced items 18 and
@@ -763,7 +802,8 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     falls short. They run alongside the sweep, not after it.
     **Numbering note: 18 and 19 are RETIRED, not missing.** They were exactly
     those two reviews, and they live on as 17.2 and 17.3; nothing was dropped.
-    Do not reuse either number — the next new item takes **22**.
+    Do not reuse either number — the next new item takes **23** (22 is the release
+    train).
 
     **Opened 2026-08-04 with three parallel analyses, recorded in
     `docs/nos-sweep/`** (acquisition matrix, full up-parity audit, builder
@@ -825,11 +865,17 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     Consequences worth knowing: an iol definition still PUTs and may still
     deploy (nothing rejects an uncatalogued device), but it edits as TEXT only
     (the builder's unknown-device gate) and its missing image degrades from a
-    fast `image_missing` job failure to a warning plus a late clab-api error;
-    and the example suite lost its second live flavor, so the device-keyed
-    mechanism, the `textfsm` parse mode and `compare`-over-parsed-output have
-    no worked example until the sweep admits another flavor for it (**sweep
-    follow-up**). Everything below the CML line is now out of reach too:
+    fast `image_missing` job failure to a warning plus a late clab-api error.
+    It also cost coverage, and the two halves have since diverged: the example
+    suite's loss of its second live flavour — leaving device-keyed cases, the
+    `textfsm` parse mode and `compare`-over-parsed-output with no worked
+    example — was **CLOSED 2026-08-05** by `examples/mixed-nos.test-suites.json`,
+    which restores all three across FOUR flavours. **Still open** is the
+    dnsmasq `dhcp` module path: IOL was its only candidate client, and under the
+    clab provider `linux` has no `dhcp` support (netlab lists it libvirt-only),
+    so nothing in the admitted six can exercise it — it needs a future platform,
+    and is the one live sweep follow-up from this withdrawal.
+    Everything below the CML line is now out of reach too:
     CML-Free's extra IOL versions and ASAv, and CML Personal's IOSv/IOSv-L2/
     CSR1000v/cat8000v/n9kv. **Cisco is not entirely closed** — XRd Control
     Plane and the Cisco 8000 emulator ship under separate entitlements, not
@@ -877,7 +923,8 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     coherent, tested six. **What remained in 17.1 for v1.0 was exactly one thing:
     the large mixed-NOS topology** over that set, which needed nothing from
     anyone — and it **LANDED 2026-08-05, so 17.1 IS CLOSED for v1.0** (below).
-    Only gap 1 (delta 25, further down) keeps item 17 open at all.
+    Two items keep item 17 open: gap 1 (delta 25, in 17.2) and 17.3's Tier B
+    review, which is still a pre-v1.0 item.
 
     **The mixed-NOS lab — DONE 2026-08-05, closing strand 17.1 for v1.0.** Every
     platform above was admitted on its own two-node probe;
@@ -897,6 +944,15 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     flavours, `parse: json` + compare, and `parse: textfsm` + compare — 9/9 live
     with nothing hardcoded, and it gave `interactive: true` on CHR its first live
     verification. Full evidence in `docs/nos-sweep/results.md`.
+    **One caveat on that verification, because it is the parked FRR item biting:**
+    the verified run gave frr1 a locally-built image carrying gnupg+curl. FRR's
+    config push is the one non-hermetic push in the admitted set and it cannot
+    succeed on this host with netlab's default image (below). The committed
+    example deliberately keeps netlab's default — it is the portable choice and
+    works wherever lab nodes have DNS — and documents the two-line workaround in
+    its header. Every other node ran exactly the image the example names. So
+    `examples/mixed-nos.yml` deploys as-written on a normal host, and needs that
+    one override HERE until the FRR image question is settled.
     It paid for itself as a bug hunt, which was the point:
     **two more CHR admission gaps** (`TEXTFSM_PLATFORMS` had no routeros7 — on
     the one admitted platform with no JSON output — and ntc-templates cannot
@@ -909,18 +965,33 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     netlab semantics documented rather than worked around (a daemon-role node's
     links type `lan` while OSPF still runs point-to-point on them, and it gets a
     router ID but no loopback INTERFACE, so that ID is deliberately not
-    pingable). Since CHR's admission has now missed three separate steps, the
+    pingable). Since CHR has now tripped three of the five admission steps — the
+    Ansible collection during its own probe, then the netmiko driver and the
+    TextFSM path only after it was admitted — the
     procedure doc gained a rule: after admitting a platform, exercise an
     `interactive: true` case and a `parse:` case against it — the probe protocol
     walks neither path, and both failures are clean typed errors that hide.
-    **One open question is left with the maintainer, deliberately unfixed:** a
-    stub link reports `oper_state="down"` while forwarding perfectly, because a
-    dummy interface's live state is the literal string `"unknown"` and the pinned
-    delta-14 roll-up treats known-not-"up" as down. The implementation matches
-    the contract exactly, so this is a contract decision, not a bug fix
-    (reproducible on `campus-lan.yml` too).
+    **One finding was raised as a contract question rather than fixed, then
+    DECIDED AND SHIPPED the same day:** a stub link reported
+    `oper_state="down"` while forwarding perfectly, because a dummy interface's
+    live state is the literal string `"unknown"` and the pinned delta-14 roll-up
+    treated known-not-"up" as down. It affected every stub on every supported
+    platform (two different realizations, both landing on a dummy interface) and
+    `campus-lan.yml` too, and nobody had ever decided it — the roll-up's table
+    test has rows for `None`, `"down"` and `"lowerlayerdown"` but none for that
+    string. **Maintainer's call: read the interface `kind` as proposed, AND make
+    `unknown` the reporting default instead of `down`.** So endpoint
+    classification is now two stages — down is a CLOSED set
+    (down/lowerlayerdown/notpresent), anything unrecognized reads unknown rather
+    than being assumed down, and a carrier-less `dummy` reporting "unknown" reads
+    up. Delta 14's WORDING is amended with no shape change and no new wire field
+    (clab-api already reports the kind, and `merge_links` already holds the
+    matched interface), plus a consumer obligation on `LinkEndpoint.state`: never
+    read `state != "up"` as down.
 
-    **Parked out of 17.1, to reconsider later (2026-08-05):**
+    **Parked out of 17.1, to reconsider later (2026-08-05)** — the diagnoses
+    live here; **item 21 is the pickup list** that carries them past the tag, so
+    read this for the "why" and item 21 for the "when":
     - **FRR's config push is not hermetic.** netlab's FRR initial script
       installs gnupg+curl (`linux/packages.j2` installs whatever is missing)
       and the official `quay.io/frrouting/frr` image ships neither, so every
@@ -1053,6 +1124,39 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     remains open in this strand is Tier B and the unknown-device policy gate,
     which moves with 17.1.
 
+### The v1.0 release train · **planned, LAST** (after item 14; nothing ships without it)
+
+22. **Publish `twinlab-client` to PyPI and tag v1.0.** Referenced as a sequencing
+    anchor throughout this file since the contract work began but never written
+    down as an item — recorded here 2026-08-05 so "the release train" names
+    something concrete. It is deliberately last: item 14 (Playwright) must land
+    first, and the four items above it in the Road-to-v1.0 list close the surfaces
+    the tag freezes.
+
+    **What is already true:** `client/` is the distributable artifact
+    (`twinlab-client`, PyPI-ready, versioned 1.0), the `blackbox/` suite is the
+    contract's enforcement against a live stack, and `docs/twinlab_client_shape.py`
+    is the reviewed contract the tag pins. Nothing in the stack itself is
+    distributed — Twinlab is deployed from this tree by `docker compose`.
+
+    **What the train actually does**, to be confirmed when picked up:
+    - all gates green on a clean tree — backend / client / netlab-runner / hostprep
+      (`ruff format` + `ruff check` + basedpyright strict + pytest) and frontend
+      (`pnpm typecheck` + `pnpm build` + `pnpm check:build-doc`);
+    - the full blackbox suite, `deploy` marker included, against a freshly built
+      stack — not an incrementally-patched one (the CHR re-probe is the precedent);
+    - build + publish `twinlab-client` (its own version, independent of the stack's
+      tag);
+    - tag the repo and write release notes.
+
+    **Undecided, and all of it is the maintainer's call:** the PyPI account and
+    whether to use trusted publishing; whether the stack carries its own version
+    number distinct from the client's; whether a CHANGELOG is introduced; and
+    whether the tag is cut on `dev` or after a merge to `main`. **Pushing,
+    merging, tagging and publishing are maintainer actions** — the standing
+    convention in `CLAUDE.md` — so this item is prepared, never executed,
+    unattended.
+
 ### Post-v1.0 · reconsider the CML licensing stance (stance 1) · **planned, after the v1.0 tag**
 
 20. **Revisit whether test-only use of legitimately obtained Cisco CML
@@ -1064,7 +1168,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     becoming an accident.
 
     **What reversing to stance 1 would restore**, in rough order of value:
-    Cisco IOL itself (re-admission is the four-part procedure plus the example,
+    Cisco IOL itself (re-admission is the up-to-five-part procedure plus the example,
     the builtin network template and the suite's device-keyed second flavor —
     all of it is in git history at the 2026-08-05 withdrawal commits, so it is
     a revert, not a rebuild); then CML-Free's extra IOL *versions* and ASAv,
@@ -1126,7 +1230,11 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
       which ansible-core 2.21 removed). No licensing question at all.
     - **FRR's non-hermetic config push** — fix proven (an image carrying
       gnupg+curl), cost is leaving netlab's default image, which a drift guard
-      asserts on purpose.
+      asserts on purpose. **Promote this one if any of the list gets picked up
+      early:** since 2026-08-05 it is the single reason
+      `examples/mixed-nos.yml` — the canonical every-NOS lab — does not deploy
+      as-written on THIS host, so it is the only park that costs us something
+      every time that lab is exercised.
     - **OpenBSD** — boots, authenticates and renders config now; hangs at
       `/tmp/config.sh` past 500s, most likely a pty expectation.
     - **Nokia SR-SIM** — the better long-term Nokia target (native container, no
@@ -1141,7 +1249,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
 
     **When picked up:** each platform runs the standing procedure in
     `docs/nos-sweep/admitting-a-platform.md` (probe → evidence in `results.md` →
-    the four-or-five coordinated admission changes), against the **two bars**
+    the up-to-five coordinated admission changes), against the **two bars**
     settled 2026-08-05 — a platform must work *and* its image must be one we may
     legitimately run.
 

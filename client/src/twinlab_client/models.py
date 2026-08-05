@@ -59,8 +59,12 @@ NodeConfigStatus = Literal["configured", "failed"]
 NODE_CONFIG_STATUSES: Final[tuple[NodeConfigStatus, ...]] = ("configured", "failed")
 
 # The derived per-link oper state (delta 14) — pinned because Twinlab computes
-# it: all endpoints "up" -> "up"; all known-not-up -> "down"; a mix of known
-# states -> "degraded"; any endpoint unknown -> "unknown".
+# it. Two stages (wording amended 2026-08-05): each endpoint classifies up /
+# down / unknown, where DOWN IS A CLOSED SET (down, lowerlayerdown, notpresent)
+# and anything else — an unresolved endpoint, an unrecognized value, or a
+# carrier-less interface reporting the string "unknown" — is unknown, never
+# assumed down. Then: any unknown endpoint -> "unknown"; all up -> "up"; all
+# down -> "down"; a mix -> "degraded".
 LinkOperState = Literal["up", "degraded", "down", "unknown"]
 LINK_OPER_STATES: Final[tuple[LinkOperState, ...]] = ("up", "degraded", "down", "unknown")
 
@@ -749,7 +753,11 @@ class LinkEndpoint:
     ipv4: str | None  # netlab-assigned CIDR; None on unnumbered/L2-only links
     ipv6: str | None
     # Live oper state passthrough (the same unpinned vocabulary QUIRK as
-    # NodeInterface.state); None = unknown.
+    # NodeInterface.state); None = unknown. Do NOT read `state != "up"` as down:
+    # the vocabulary is unpinned, and an interface with no carrier (a dummy —
+    # which is how netlab realizes every stub link) reports the string "unknown"
+    # while forwarding perfectly. Prefer the server's `oper_state`, which knows
+    # the interface kind this wire does not carry.
     state: str | None
     # Active netem impairment; None = not impaired OR unknown (only meaningful
     # on a live read). Deliberately not folded into oper_state.

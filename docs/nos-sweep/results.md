@@ -80,6 +80,11 @@ gap was found while withdrawing IOL and closed with `routeros: mikrotik_routeros
 is a clean typed error rather than a wrong driver, which is exactly why it went unnoticed:
 nothing else in the probe protocol exercises interactive mode.
 
+**A fifth step surfaced later the same day** (the TextFSM path — see the mixed-NOS section
+below), so the count in this dated finding is superseded: the standing procedure is **up to
+five** coordinated changes, and `admitting-a-platform.md` is the authoritative list. This
+section is kept as the evidence for how the generalization was reached.
+
 ## Other observations
 
 - **vrnetlab kinds report the WRAPPER's interfaces.** `GET /labs/{name}/interfaces` on CHR
@@ -201,9 +206,14 @@ item to revisit (ROADMAP item 20). Two things follow that are worth writing down
   mechanism that is device-agnostic and merely happens to cover IOS — the config-import IOS
   parser, the `textfsm`/`cisco_ios` map with Twinlab's own LDP template, and the
   `mpls_te`/`ip_sla` built-ins, which ARE the built-in custom-config library.
-- **The dnsmasq `dhcp` module path lost its only candidate client**, and the example suite lost
-  its second live device flavor — so `textfsm` and `compare`-over-parsed-output now have no
-  worked example in the repo. Both are sweep follow-ups, recorded rather than quietly dropped.
+- **The dnsmasq `dhcp` module path lost its only candidate client** — STILL OPEN, and the only
+  live sweep follow-up from this withdrawal. Under the clab provider `linux` has no `dhcp`
+  support (netlab lists it libvirt-only), so nothing in the admitted set can exercise it; it
+  needs a future platform that can.
+- ~~The example suite lost its second live device flavor, so `textfsm` and
+  `compare`-over-parsed-output have no worked example.~~ **CLOSED 2026-08-05** by
+  `examples/mixed-nos.test-suites.json`, which restores device-keyed dispatch across FOUR
+  flavours plus both parse modes — see the mixed-NOS section below.
 
 **Cisco is not entirely closed.** XRd Control Plane and the Cisco 8000 emulator ship under
 separate entitlements, not the CML SEULA, so they stay acquirable independently of this
@@ -225,7 +235,19 @@ host behind CHR, and a stub. Seven nodes, nine links, three config-push paths at
 dnsmasq, the linux hosts).
 
 **Result: green on the first attempt.** `POST /deploy` with `configure: true` → job `succeeded`,
-`status="configured"`, all 7 nodes up. Evidence:
+`status="configured"`, all 7 nodes up.
+
+**One caveat on the images, stated up front because it is the parked FRR item biting.** The
+verified run gave `frr1` a locally-built `quay.io/frrouting/frr:10.6.1` + `apk add gnupg curl`
+image (the proven fix from the FRR section above). FRR's config push is the only non-hermetic one
+in the admitted set, and on this host — CGNAT resolvers, so containerlab propagates no usable
+IPv4 nameserver — it cannot succeed on netlab's default image. The COMMITTED example deliberately
+keeps netlab's default, because that is the portable choice and works wherever lab nodes have DNS,
+with the two-line workaround documented in its header. Every other node ran exactly the image the
+example names, CHR's pinned `7.16.2` included. So the example deploys as-written on a normal host
+and needs that single override here until the FRR image question is settled.
+
+Evidence:
 
 - **All six adjacencies Full.** Each of the four routers holds exactly three: vyos1 and frr1
   report `Full/-` (FRR), bird1 `Full/PtP`, chr1 `state=Full` ×3.
@@ -308,15 +330,61 @@ marking ONE check `error`. Pre-existing and reachable on any device whose ntc te
 different NOS release; the new RouterOS 7 template merely made it cheap to hit. Now translated at
 the boundary.
 
-### An open question for the maintainer, not a bug
+### A stub link read "down" while forwarding — RESOLVED 2026-08-05
 
-**A stub link always reports `oper_state="down"` while forwarding perfectly.** `customer-drop`
-(one endpoint, `vyos1:dum1`) reads `oper=down` even though `172.16.5.1` pings. The chain is
-sound at every step: Linux gives dummy interfaces operstate UNKNOWN, clab-api passes the literal
-string `"unknown"` through, and the delta-14 roll-up — `all "up" -> up; all known-not-up ->
-down; any endpoint None -> unknown` — correctly classifies a known-but-not-"up" state as down.
-So the implementation matches the pinned contract exactly; it is the contract's treatment of the
-string `"unknown"` that reads wrong here, and `oper_state` is pinned, so changing it is a
-contract decision. Reproducible on `campus-lan.yml` too, which also carries a stub. Options if
-picked up: treat the literal `"unknown"` as unresolved rather than not-up; special-case
-single-endpoint/loopback links; or leave it and let the UI explain. **Not changed unilaterally.**
+Found here, raised as a contract question rather than fixed, then **decided and shipped the same
+day.** Worth keeping in full because the diagnosis is the interesting part: every step of the
+chain was individually correct.
+
+`customer-drop` (one endpoint, `vyos1:dum1`) read `oper=down` even though `172.16.5.1` pings.
+
+1. **The kernel declines to answer.** Dummy drivers never drive carrier, so the device reports
+   `IF_OPER_UNKNOWN` while fully up: `4: dum1: <BROADCAST,NOARP,UP,LOWER_UP> ... state UNKNOWN
+   ... dummy`. `IFF_UP` *and* `IFF_LOWER_UP` are both set.
+2. clab-api passes the literal string `"unknown"` through as the interface state.
+3. `merge_links` stores it on the endpoint — `state=None` means something different, namely that
+   Twinlab could not resolve the interface at all.
+4. The delta-14 roll-up (`all "up" -> up; all known-not-up -> down; any None -> unknown`)
+   classified a *known* value that is not `"up"` as **down**.
+
+**The blast radius was every stub on every supported platform**, via two different realizations
+that converge on the same interface type — worth knowing independently of this bug:
+
+| Device | netlab `type` | Interface | clab link | Live state | `kind` |
+|---|---|---|---|---|---|
+| vyos | `loopback` | `dum1` | **none** — the node configures it itself | `unknown` | `dummy` |
+| frr | `stub` | `eth2` | `type: dummy` | `unknown` | `dummy` |
+| routeros7 | `stub` | `ether3`→`eth2` | `type: dummy` | `unknown` | `dummy` |
+| bird / linux / dnsmasq | `lan` | `eth2` | `type: dummy` | `unknown` | `dummy` |
+
+`campus-lan.yml` carries a stub too, so it was affected as well. Not affected: real links (veth
+→ `up`), LANs, undeployed labs (unknown by design), stopped nodes (`None` → unknown, correct).
+
+**Nobody had decided it.** The roll-up's table test has rows for `None`, `"down"` and
+`"lowerlayerdown"` — so `None`-vs-known-string was thought about — and no row for the literal
+`"unknown"`. The contract had the same gap: its parenthetical listed only resolution failures as
+"unknown", so one word was doing two jobs, *"we could not find out"* and *"the device said
+unknown"*.
+
+**The fix (maintainer-decided, contract wording amended, no shape change).** Two pure stages:
+
+- Each endpoint classifies up / down / unknown, and **down is now a CLOSED set** — `down`,
+  `lowerlayerdown`, `notpresent`. Anything else, including a value we have never seen, reads
+  **unknown rather than assumed-down**. That was the maintainer's addition to the original
+  proposal and it is the better default in general: claiming a link is down is a strong
+  statement, and a wrong one teaches users to ignore the signal.
+- Plus the refinement that fixes the stub: operstate is *meaningless* without a carrier, so an
+  endpoint whose interface `kind` is carrier-less (`dummy`) and whose state is `"unknown"` reads
+  **up**. clab-api already reports `kind` and `merge_links` already holds the matched interface,
+  so this cost no new wire field.
+- The endpoint `state` passthrough is untouched — only the derived roll-up changed. A consumer
+  obligation went into the contract: never read `state != "up"` as down.
+
+The frontend reimplements this rule for LAN spoke styling and got the conservative half; it
+cannot do the `kind` refinement (kind is not on the wire) but a spoke belongs to a 3+-endpoint
+LAN whose members are always veths, so a dummy cannot appear there.
+
+Verified live: the stub flipped to `up` with its endpoint still reporting raw `"unknown"`, every
+other link unchanged, and admin-downing a real link still reads `down` — **both sides drop
+together**, which is why `degraded` did not appear and is exactly the veth-pair behaviour the
+contract comment already predicted.

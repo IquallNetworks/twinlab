@@ -1,0 +1,111 @@
+{
+  "convergence": {
+    "stage": "config-time",
+    "description": "Gate config-done on the whole cross-vendor fabric converging. PUTs onto examples/mixed-nos.yml. This is also the suite that carries the WORKED EXAMPLES of test-suites v2 (contract delta 17), which the Cisco IOL withdrawal of 2026-08-05 had left without a live second flavor: `ospf_adjacency` dispatches ONE test across FOUR device keys, `ospf_peers_json` shows parse=json + compare with peer router IDs rendered from the lab's facts, and `ospf_peers_textfsm` shows parse=textfsm + compare over parsed records. Nothing is hardcoded — every address and router ID comes from the fact namespace.",
+    "tests": {
+      "ospf_adjacency": {
+        "nodes": ["vyos1", "frr1", "chr1", "bird1"],
+        "wait": 240,
+        "description": "Each of the four routing platforms holds THREE Full adjacencies — i.e. the full cross-vendor mesh is up, asserted in each platform's own idiom. Deliberately node-agnostic (three Full states, not named peers) so one test serves all four device keys; the named-peer assertions live in the two tests below.",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show ip ospf neighbor\"",
+            "expect": { "matches": "(?s)Full.*Full.*Full" }
+          },
+          "frr": {
+            "command": "vtysh -c \"show ip ospf neighbor\"",
+            "expect": { "matches": "(?s)Full.*Full.*Full" }
+          },
+          "routeros7": {
+            "command": "/routing ospf neighbor print terse",
+            "expect": { "matches": "(?s)Full.*Full.*Full" }
+          },
+          "bird": {
+            "command": "birdc show ospf neighbors",
+            "expect": { "matches": "(?s)Full.*Full.*Full" }
+          }
+        }
+      },
+      "ospf_peers_json": {
+        "nodes": ["vyos1", "frr1"],
+        "wait": 240,
+        "description": "parse=json + compare, on the two FRR-based platforms. Asserts the two peers vyos1 and frr1 have in COMMON — chr1 and bird1 — are converged Full, with both router IDs rendered from facts. (Their third neighbour is each other, which is why only these two are named: it keeps one case correct for both nodes.)",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show ip ospf neighbor json\"",
+            "parse": "json",
+            "expect": {
+              "compare": {
+                "neighbors": {
+                  "{{ nodes.chr1.ospf.router_id }}": { "list": [{ "converged": "Full" }] },
+                  "{{ nodes.bird1.ospf.router_id }}": { "list": [{ "converged": "Full" }] }
+                }
+              }
+            }
+          },
+          "frr": {
+            "command": "vtysh -c \"show ip ospf neighbor json\"",
+            "parse": "json",
+            "expect": {
+              "compare": {
+                "neighbors": {
+                  "{{ nodes.chr1.ospf.router_id }}": { "list": [{ "converged": "Full" }] },
+                  "{{ nodes.bird1.ospf.router_id }}": { "list": [{ "converged": "Full" }] }
+                }
+              }
+            }
+          }
+        }
+      },
+      "ospf_peers_textfsm": {
+        "nodes": ["chr1"],
+        "wait": 240,
+        "description": "parse=textfsm + compare on MikroTik CHR: asserts all three of its peers are Full, by router ID from facts. RouterOS has no JSON output, so this is the platform that genuinely needs TextFSM — and it needs the `terse` spelling plus a Twinlab-packaged template, because both ntc-templates mikrotik_routeros OSPF templates were written for RouterOS 6 and cannot parse 7 (see the template's own header). The parsed value is a LIST, hence the root-level `list` compare.",
+        "run": {
+          "routeros7": {
+            "command": "/routing ospf neighbor print terse",
+            "parse": "textfsm",
+            "expect": {
+              "compare": {
+                "list": [
+                  { "router_id": "{{ nodes.vyos1.ospf.router_id }}", "state": "Full" },
+                  { "router_id": "{{ nodes.frr1.ospf.router_id }}", "state": "Full" },
+                  { "router_id": "{{ nodes.bird1.ospf.router_id }}", "state": "Full" }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "fabric_forwarding": {
+        "nodes": ["vyos1"],
+        "wait": 240,
+        "description": "The control plane agreeing is not the data plane working: ping CHR's loopback from VyOS, which is only reachable if OSPF programmed the FIB on both. bird1 is deliberately NOT a target here — netlab gives a daemon-role node a router ID but no loopback INTERFACE, so its ID is not an address (see the definition's header).",
+        "run": {
+          "vyos": {
+            "command": "ping -c 3 -W 2 {{ nodes.chr1.loopback.ipv4 | address }}",
+            "expect": { "contains": "3 packets transmitted, 3 received, 0% packet loss" }
+          }
+        }
+      }
+    }
+  },
+  "interactive_transport": {
+    "stage": "runtime",
+    "description": "Proves the runner's persistent netmiko channel works on MikroTik CHR — the `interactive: true` path, which needs a netmiko device_type for the platform's ansible_network_os or it returns `no interactive CLI driver for network_os 'routeros'`. CHR was admitted (2026-08-04) without one; the entry `routeros: mikrotik_routeros` was added 2026-08-05 and this is what verifies it against a live box. Runtime stage, so it never gates a configure.",
+    "tests": {
+      "chr_interactive_ping": {
+        "nodes": ["chr1"],
+        "wait": 60,
+        "description": "Ping VyOS's loopback from CHR over the netmiko channel rather than a one-shot exec.",
+        "run": {
+          "routeros7": {
+            "command": "/ping address={{ nodes.vyos1.loopback.ipv4 | address }} count=3",
+            "interactive": true,
+            "expect": { "contains": "sent=3 received=3 packet-loss=0%" }
+          }
+        }
+      }
+    }
+  }
+}

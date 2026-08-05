@@ -27,7 +27,7 @@ import jinja2
 import jinja2.sandbox
 from napalm.base import validate as napalm_validate
 from napalm.base.exceptions import ValidationException
-from textfsm import clitable
+from textfsm import TextFSMError, clitable
 
 from twinlab_backend.models import (
     SuiteReport,
@@ -58,10 +58,13 @@ _MAX_OUTPUT_CHARS = 4000
 
 # netlab device -> TextFSM platform (the ntc-templates index key). Pinned to
 # the supported set; parsing a device outside it is an authoring error, not a
-# guess. iol/ioll2 run classic IOS — ntc's deepest platform.
+# guess. iol/ioll2 run classic IOS — ntc's deepest platform; they stay mapped
+# after IOL's 2026-08-05 licensing withdrawal because the map is a generic
+# mechanism, not a support claim.
 TEXTFSM_PLATFORMS: dict[str, str] = {
     "iol": "cisco_ios",
     "ioll2": "cisco_ios",
+    "routeros7": "mikrotik_routeros",
     "vyos": "vyos",
     "linux": "linux",
 }
@@ -281,6 +284,13 @@ def _parse_textfsm(platform: str, command: str, stdout: str) -> Result[object, s
             table.ParseCmd(stdout, attributes)
         except clitable.CliTableError:
             continue  # no template in this directory; try the next
+        except TextFSMError as exc:
+            # The template resolved but the output does not fit it — a real
+            # mismatch (a template written for another NOS release is the usual
+            # cause). It is a typed error, not an exception to propagate: the
+            # caller turns this into ONE `error` check, whereas an escaping
+            # exception would fail the whole suite run.
+            return Err(f"TextFSM template for {command!r} does not fit the output: {exc}")
         header = [str(name).lower() for name in table.header]
         return Ok([dict(zip(header, row, strict=True)) for row in table])
     return Err(f"no TextFSM template for platform {platform!r}, command {command!r}")

@@ -1,0 +1,149 @@
+# Every supported platform, in one lab.
+#
+# The NOS sweep (ROADMAP item 17.1) admitted six devices one probe at a time,
+# each on its own two-node topology. This lab is the opposite exercise: put all
+# six in ONE network and make them interoperate, because that is where the
+# interesting failures live — a platform that configures fine alone can still
+# get its interface names, its addressing or its adjacencies wrong next to a
+# different vendor.
+#
+# What it covers deliberately:
+#
+#   - **All six admitted devices**: vyos, frr, routeros7 (MikroTik CHR), bird,
+#     dnsmasq and linux. Every node names its own `device` — no
+#     `defaults.device` — because in this lab the device IS the subject.
+#   - **Every cross-vendor OSPF pair.** The four routing platforms form a FULL
+#     MESH, so all six pairings (vyos-frr, vyos-chr, vyos-bird, frr-chr,
+#     frr-bird, chr-bird) are proven by one deploy rather than six labs.
+#   - **Both config-push transports at once.** vyos, frr and bird configure over
+#     Ansible's `docker` connection; CHR is `network_cli` over SSH (which is why
+#     the runner ships `community.routeros`); dnsmasq and the linux hosts are
+#     plain containers configured by host-side `ip netns exec` scripts. One
+#     `netlab initial` drives all three paths.
+#   - **Every link kind**: six p2p links, a three-endpoint LAN (which needs a
+#     host bridge from the hostprep sidecar), a router-to-host p2p behind the
+#     VM-in-a-container platform, and a stub.
+#
+# Routing is deliberately OSPF-only. mpls would have been tempting, but bird has
+# no mpls module — and a lab that quietly drops a platform to fit a protocol is
+# not the lab this is meant to be. BGP over the same mesh is a fair follow-up.
+#
+# Two things about bird will look wrong and are not. Both come from the same
+# fact: netlab classifies the bird daemon `role: host`, not router.
+#
+#   1. **The mesh is asymmetric in the link table.** netlab types a two-node link
+#      `p2p` only when BOTH ends are routers, so vyos-frr, vyos-chr and frr-chr
+#      expand to p2p /30s while the three bird links expand to `lan` /24s. It
+#      makes no difference to the protocol — netlab still configures OSPF
+#      point-to-point on every one of them (verified on all four platforms: bird
+#      reports Full/PtP, FRR and VyOS report Full/- with no DR election, CHR
+#      reports network-type=ptp) — and a two-endpoint `lan` still renders as a
+#      direct veth pair with no bridge. Which is exactly why Twinlab
+#      discriminates on ENDPOINT COUNT and treats netlab's `type` as a
+#      passthrough, never a rendering signal.
+#   2. **bird1 has no loopback interface, so its router ID is not pingable.**
+#      netlab draws bird1 a router ID from the loopback pool (10.0.0.4 here) and
+#      its neighbors duly see that ID, but it creates a loopback INTERFACE only
+#      for role-router nodes. So `10.0.0.4/32` never appears in anyone's OSPF
+#      table and pinging it fails — correctly, because the address exists
+#      nowhere. Expect a reachable loopback from vyos1, frr1 and chr1 only, and
+#      do not write a test that pings a daemon node's router ID.
+#
+# Images this needs on the host (none are distributed with Twinlab — see the
+# licensing stance in CLAUDE.md):
+#   - vyos and frr pull from public registries;
+#   - `netlab clab build bird` and `netlab clab build dnsmasq` build the daemons;
+#   - CHR is built by vrnetlab from MikroTik's free `chr-<ver>.vmdk`. The tag
+#     below is what we built; netlab's own default is a newer one. **Adjust
+#     `image:` to the tag you built** — for vrnetlab platforms generally, the
+#     version you can build is rarely the version netlab defaults to.
+#
+# One host-dependent caveat, worth knowing before you deploy: netlab's FRR
+# initial config includes `linux/packages.j2`, which `apk add`s gnupg+curl when
+# they are missing — and the official FRR image ships neither, so FRR's config
+# push (alone among these six) needs working DNS and egress FROM INSIDE the lab
+# node. Where containerlab cannot propagate usable resolvers into lab nodes (a
+# CGNAT resolver on the host is one real cause), the push fails. It is not a
+# Twinlab defect and the workaround is two lines —
+#
+#     FROM quay.io/frrouting/frr:10.6.1
+#     RUN apk add --no-cache gnupg curl
+#
+# — then point frr1's `image:` at it; `packages.j2` installs only what it finds
+# missing, so the push goes hermetic. Full diagnosis in
+# docs/nos-sweep/results.md.
+
+provider: clab
+
+nodes:
+  # --- The routing platforms: a full cross-vendor OSPF mesh ---------------
+  vyos1:
+    device: vyos
+    module: [ ospf ]
+  frr1:
+    device: frr
+    module: [ ospf ]
+  chr1:
+    device: routeros7
+    module: [ ospf ]
+    # netlab defaults to a newer tag than vrnetlab built here; see the header.
+    image: vrnetlab/mikrotik_routeros:7.16.2
+  bird1:
+    device: bird
+    module: [ ospf ]
+
+  # --- Services and endpoints: plain containers, no routing module --------
+  # Configured by host-side `ip netns exec` scripts, not over Ansible.
+  dns1:
+    device: dnsmasq
+  host1:
+    device: linux
+  host2:
+    device: linux
+
+links:
+  # --- The mesh: every cross-vendor pair, one p2p link each ---------------
+  - name: vyos-frr
+    vyos1:
+    frr1:
+
+  - name: vyos-chr
+    vyos1:
+    chr1:
+
+  - name: vyos-bird
+    vyos1:
+    bird1:
+
+  - name: frr-chr
+    frr1:
+    chr1:
+
+  - name: frr-bird
+    frr1:
+    bird1:
+
+  - name: chr-bird
+    chr1:
+    bird1:
+
+  # --- A three-endpoint LAN: one router plus the service segment ----------
+  # 3+ endpoints means netlab wants a host Linux bridge, which the hostprep
+  # sidecar creates before deploy (and removes after destroy).
+  - name: services
+    vyos1:
+    dns1:
+    host1:
+
+  # --- A host behind the VM-in-a-container platform -----------------------
+  # Proves CHR's datapath end to end: the veth pair reaches the qemu guest's
+  # ether interface, not just the wrapper container.
+  - name: chr-access
+    chr1:
+    host2:
+
+  # --- A stub: one endpoint, so there is nothing to connect to -----------
+  # netlab realizes it as a dummy interface (vyos1:dum1). It is a real row in
+  # the link table with nothing for the canvas to draw.
+  - name: customer-drop
+    vyos1:

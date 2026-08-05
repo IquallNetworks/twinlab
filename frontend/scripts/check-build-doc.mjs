@@ -88,14 +88,16 @@ function gates(yaml, needle, devices) {
     : `expected a reason containing "${needle}", got: ${result.reasons.join(' | ')}`
 }
 
-// The known-device list the parse gate uses — mirrors the supported set.
-const DEV = ['vyos', 'linux', 'frr', 'routeros7']
+// The known-device list the parse gate uses — mirrors the supported set, i.e.
+// FALLBACK_DEVICE_CATALOG in src/lib/device-catalog.ts. It had drifted: bird and
+// dnsmasq were admitted 2026-08-04 and never added here.
+const DEV = ['vyos', 'linux', 'frr', 'routeros7', 'bird', 'dnsmasq']
 
 
 // ---------------------------------------------------------------- regression
 // The repo's own examples must keep round-tripping.
 const EXAMPLES = fileURLToPath(new URL('../../examples/', import.meta.url))
-for (const file of ['mpls-l3vpn.yml', 'campus-lan.yml']) {
+for (const file of ['mpls-l3vpn.yml', 'campus-lan.yml', 'mixed-nos.yml']) {
   check(`example ${file}`, () => roundTrip(readFileSync(`${EXAMPLES}${file}`, 'utf8'), DEV))
 }
 

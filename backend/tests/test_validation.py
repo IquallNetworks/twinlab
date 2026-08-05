@@ -153,6 +153,71 @@ def test_parse_textfsm_twinlab_ldp_template() -> None:
     )
 
 
+def test_parse_textfsm_twinlab_routeros7_ospf_template() -> None:
+    # The second Twinlab-packaged overlay template. ntc-templates ships two
+    # mikrotik_routeros OSPF-neighbour templates and NEITHER parses RouterOS 7 —
+    # both want v6's `interface=`/`priority=` fields and its field order, so they
+    # raise a TextFSM state error rather than mis-parsing. Fixture captured live
+    # from CHR 7.16.2 in the mixed-NOS lab.
+    case = TestCase(
+        command="/routing ospf neighbor print terse",
+        expect=TestExpectation(compare={"list": [{"state": "Full"}]}),
+        parse="textfsm",
+    )
+    stdout = (
+        "0 D instance=default4 area=main_2_0.0.0.0 address=10.1.0.6 "
+        "router-id=10.0.0.1 state=Full state-changes=5 adjacency=7m3s timeout=37s\n"
+        "1 D instance=default4 area=main_2_0.0.0.0 address=172.16.2.4 "
+        "router-id=10.0.0.4 state=Full state-changes=5 adjacency=7m7s timeout=33s\n"
+    )
+    assert parse_output(case, "routeros7", stdout) == Ok(
+        [
+            {
+                "index": "0",
+                "flags": "D",
+                "instance": "default4",
+                "area": "main_2_0.0.0.0",
+                "address": "10.1.0.6",
+                "router_id": "10.0.0.1",
+                "state": "Full",
+                "state_changes": "5",
+                "adjacency": "7m3s",
+                "timeout": "37s",
+            },
+            {
+                "index": "1",
+                "flags": "D",
+                "instance": "default4",
+                "area": "main_2_0.0.0.0",
+                "address": "172.16.2.4",
+                "router_id": "10.0.0.4",
+                "state": "Full",
+                "state_changes": "5",
+                "adjacency": "7m7s",
+                "timeout": "33s",
+            },
+        ]
+    )
+
+
+def test_parse_textfsm_template_mismatch_is_a_typed_error_not_an_exception() -> None:
+    # A RESOLVED template that does not fit the output raises TextFSMError from
+    # deep inside the library. It must come back as a value: _run_check turns an
+    # Err into ONE `error` check, where an escaping exception would fail the
+    # entire suite run. (Reachable on any device whose ntc template was written
+    # for a different NOS release — this is just the cheapest way to trigger it:
+    # RouterOS's plain `print` wraps a record over several lines, which no
+    # line-oriented template can follow, hence the `terse`-only packaging.)
+    case = TestCase(
+        command="/routing ospf neighbor print",
+        expect=TestExpectation(compare={"list": [{"state": "Full"}]}),
+        parse="textfsm",
+    )
+    result = parse_output(case, "routeros7", "0 D instance=default4 area=x\n")
+    assert isinstance(result, Err)
+    assert "does not fit the output" in result.error
+
+
 def test_parse_textfsm_missing_template_is_an_error() -> None:
     case = TestCase(
         command="show nonexistent thing",

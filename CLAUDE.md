@@ -558,8 +558,8 @@ proven on the parallel `nokia/` tree, but none of that tree's runner plumbing
 (`nokia.grpc`/`nokia.srlinux`, `grpcio`/`protobuf`, the pure-Python protobuf env var) has ever
 reached `dev`.
 
-**Admitting a platform is FOUR coordinated changes, not a catalog edit** (the full procedure,
-with every trap's failure signature, is `docs/nos-sweep/admitting-a-platform.md`): (1)
+**Admitting a platform is up to FIVE coordinated changes, not a catalog edit** (the full
+procedure, with every trap's failure signature, is `docs/nos-sweep/admitting-a-platform.md`): (1)
 `services/device_catalog.py` `SUPPORTED_DEVICES` + the frontend's `use-device-catalog.ts`
 static fallback; (2) backend `DEVICE_KMODS` **and** hostprep's fixed module allowlist together
 (the drift guard only covers the netlab side); (3) **the netlab-runner's Ansible collection for
@@ -572,7 +572,16 @@ daemons) need no collection; `network_cli` ones do (community.routeros for CHR �
 override in `netlab-runner/netlab-defaults.yml`
 (`/etc/netlab/defaults.yml`, merged over netlab's device data at create time) where netlab
 names a plugin ansible-core no longer ships — it removed `paramiko` in 2.21, which netlab still
-uses for openbsd/srlinux/sros. **Withdrawing** a platform is the same four in reverse, plus its
+uses for openbsd/srlinux/sros; and (5) — only for a platform with NO JSON output whose suites
+should assert on parsed data — `services/validation.py` `TEXTFSM_PLATFORMS`, **plus a
+Twinlab-packaged template in `services/textfsm_templates/` when ntc-templates' own does not fit
+the release**: both its `mikrotik_routeros` OSPF templates are RouterOS 6-shaped and cannot parse
+7 at all, so CHR needs ours (indexed for the `terse` spelling, since plain `print` wraps one
+record over several lines). **CHR's admission missed steps 3, 4-netmiko and 5 in turn**, each
+found weeks apart, so the rule now is: after admitting a platform, exercise an `interactive:
+true` case and a `parse:` case against it — the probe protocol walks neither path and both
+failures are clean typed errors that hide. **Withdrawing** a platform is the same edits in
+reverse, plus its
 example, its builtin network template and its suite cases (the IOL withdrawal of 2026-08-05 is
 the worked example). Widening the set is a maintainer decision that starts with testing —
 a pre-v1.0 **NOS platform sweep** (ROADMAP item 17, added 2026-08-03, opened 2026-08-04 — the
@@ -586,6 +595,14 @@ deployed *and* configured via clab-api deploy + the netlab-runner, config-time g
 exercised continuously by the black-box suite's `deploy`-marked tests (linux nodes, incl. the
 multi-access-LAN bridge path) and verified on VyOS (OSPF adjacency reaches Full), FRR, bird and
 MikroTik CHR (all reaching OSPF Full) — and, before its licensing withdrawal, on cisco IOL.
+**Proven for ALL SIX platforms TOGETHER since 2026-08-05:** `examples/mixed-nos.yml` is the
+every-NOS lab — vyos/frr/routeros7/bird in a full OSPF mesh (so every cross-vendor pairing is
+proven by one deploy) plus dnsmasq and two linux hosts, a three-endpoint LAN, a host behind CHR
+and a stub; one deploy drives all three config-push paths at once and reached
+`status="configured"` with all six adjacencies Full and forwarding end to end.
+`examples/mixed-nos.test-suites.json` asserts it (9/9 live) and is also the worked example of
+device-keyed cases across FOUR flavours, `parse: json` + compare, `parse: textfsm` + compare, and
+`interactive: true`. Evidence in `docs/nos-sweep/results.md`; this closed strand 17.1 for v1.0.
 Needs a host user in the `clab_api` group, node images pulled, and clab-api running. Keep this
 section current as the project evolves.
 

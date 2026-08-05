@@ -16,7 +16,7 @@ implementation.
 
 **`admitting-a-platform.md` (added 2026-08-05) is the procedure** — what "supported" means,
 how to probe, every trap the sweep has hit with the failure signature that identifies it, the
-four coordinated changes admission takes, and the verification gate. Read it before probing a
+up-to-five coordinated changes admission takes, and the verification gate. Read it before probing a
 new platform; it is where the expensive lessons live.
 
 `acquisition-checklist.md` (added 2026-08-04) is the actionable form of the availability
@@ -119,5 +119,21 @@ collection** change, not a catalog edit.
   only remaining v1.0 item is the large mixed-NOS topology over that set**, which needs
   nothing from anyone. `acquisition-checklist.md` keeps every URL and build path for the
   post-v1.0 pickup.
+
+- **The mixed-NOS lab — strand 17.1's v1.0 work is DONE (2026-08-05).** All six admitted
+  platforms in ONE network (`examples/mixed-nos.yml`), the four routing ones in a full mesh so
+  every cross-vendor OSPF pairing is proven by one deploy. Green first attempt: all six
+  adjacencies Full, forwarding end to end, the link/interfaces/facts/netem/batch surfaces correct
+  across four NOS families, and the config-time gate passing 8/8 on a mixed lab.
+  `examples/mixed-nos.test-suites.json` restores the worked examples the IOL withdrawal had cost
+  us — device-keyed dispatch across FOUR flavours, `parse: json` + compare, `parse: textfsm` +
+  compare — 9/9 live, and it gave `interactive: true` on CHR its first live verification.
+  Three findings, all recorded in `results.md`: two more CHR admission gaps (`TEXTFSM_PLATFORMS`
+  had no routeros7, and ntc-templates cannot parse RouterOS 7 at all, so Twinlab packages its
+  own template), one real Twinlab bug (a resolved-but-mismatched TextFSM template raised through
+  the boundary and failed the whole suite run instead of erroring one check), and one **open
+  contract question for the maintainer**: a stub link reports `oper_state="down"` while
+  forwarding, because a dummy interface's live state is the literal string `"unknown"` and the
+  pinned delta-14 roll-up treats known-not-"up" as down. Not changed unilaterally.
 
 Gaps 2–7 verified live 2026-08-04: blackbox **140/140** with the `deploy` marker.

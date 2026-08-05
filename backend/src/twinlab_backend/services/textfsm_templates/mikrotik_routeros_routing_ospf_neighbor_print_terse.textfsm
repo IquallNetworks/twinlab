@@ -1,0 +1,27 @@
+# RouterOS 7 `/routing ospf neighbor print terse`.
+#
+# ntc-templates ships two mikrotik_routeros OSPF-neighbour templates and NEITHER
+# parses RouterOS 7: both were written against v6, which emits
+# `instance= router-id= address= interface= priority=` in that order. v7 dropped
+# `interface=`/`priority=` entirely, added `area=`, moved `router-id=` after
+# `address=`, and prefixes each row with the flag column (`D` = dynamic). So the
+# ntc templates fail with a TextFSM State Error rather than mis-parsing —
+# verified live against CHR 7.16.2.
+#
+# `terse` matters: the plain `print` wraps one record across several lines at the
+# terminal width, which no line-oriented TextFSM template can follow.
+Value Required INDEX (\d+)
+Value FLAGS (\S*)
+Value INSTANCE (\S+)
+Value AREA (\S+)
+Value ADDRESS (\S+)
+Value ROUTER_ID (\S+)
+Value STATE (\S+)
+Value STATE_CHANGES (\d+)
+Value ADJACENCY (\S+)
+Value TIMEOUT (\S+)
+
+Start
+  ^\s*${INDEX}\s+${FLAGS}\s+instance=${INSTANCE}\s+area=${AREA}\s+address=${ADDRESS}\s+router-id=${ROUTER_ID}(\s+state=${STATE})?(\s+state-changes=${STATE_CHANGES})?(\s+adjacency=${ADJACENCY})?(\s+timeout=${TIMEOUT})?\s*$$ -> Record
+  ^\s*$$
+  ^. -> Error

@@ -102,6 +102,32 @@ exercises interactive mode and the failure is a clean typed error rather than a 
 Read the value off the inventory rather than guessing it — `ansible-inventory --host <node>` in
 the runner, or netlab's device YAML `group_vars.ansible_network_os`.
 
+### Its structured-output route, if suites are to assert on parsed data
+
+A platform whose CLI has **no JSON mode** can only be asserted structurally through TextFSM, and
+that needs *two* things — the second is the one that bites:
+
+1. an entry in the backend's `TEXTFSM_PLATFORMS` (`netlab device` → ntc-templates platform key),
+   or `parse: textfsm` is rejected as an authoring error;
+2. **a template that actually fits the release.** ntc-templates' coverage tracks whatever release
+   its contributor had. Both its `mikrotik_routeros` OSPF-neighbour templates were written for
+   RouterOS **6** and cannot parse **7** at all (v7 dropped `interface=`/`priority=`, added
+   `area=`, reordered `router-id=`, and prefixes rows with the flag column). Twinlab therefore
+   packages its own in `backend/src/twinlab_backend/services/textfsm_templates/` — that directory
+   is resolved BEFORE ntc's — with an index entry per command.
+
+> **Signature (1):** `no TextFSM platform mapping for device '<x>'`.
+> **Signature (2):** `TextFSM template for '<cmd>' does not fit the output: State Error raised.
+> Rule Line: N. Input Line: …` — i.e. a template WAS found and the data does not match it.
+
+Watch for line wrapping while you are here: a CLI that wraps one record across several lines at
+the terminal width cannot be parsed by any line-oriented template, so prefer the spelling that
+emits one record per line (`terse` on RouterOS) and index the template for exactly that.
+
+CHR needed all of §"The Ansible collection", §"The netmiko driver" and this one. **That is the
+real lesson: admitting a platform touches more places than the catalog, and the probe protocol
+in §2 exercises none of them.**
+
 ### The connection plugin
 
 ansible-core 2.21 removed `paramiko` outright. netlab still names it for `openbsd`, `srlinux`
@@ -166,7 +192,8 @@ That one is honest and self-correcting; no action beyond documenting it for user
 
 ## 4. The coordinated changes
 
-Once probed green, admission is **four** edits that must land together:
+Once probed green, admission is up to **five** edits that must land together (1–4 always; 5 when
+the platform has no JSON output):
 
 1. **`backend/.../services/device_catalog.py`** — a `CatalogDeviceSpec` with `modules` and
    `image` mirrored from the installed netlab (`netlab show module-support --format yaml`, and
@@ -180,6 +207,15 @@ Once probed green, admission is **four** edits that must land together:
 4. **`netlab-runner/Dockerfile`** — the Ansible collection for its transport, plus
    `netlab-defaults.yml` if it needs a connection override and
    `runner.py`'s `_NETMIKO_DEVICE_TYPES` if that transport is SSH.
+5. **`backend/.../services/validation.py` `TEXTFSM_PLATFORMS`** (+ a packaged template if
+   ntc-templates' does not fit the release) — only when the platform has no JSON output and
+   suites should assert on parsed data. See the trap section above.
+
+Two of these five were missed when CHR was admitted on 2026-08-04 and only found later (the
+netmiko driver on 08-05, the TextFSM path the same day, while building the mixed-NOS lab).
+**Both failures were clean typed errors on paths §2's probe never walks** — so if you have just
+admitted a platform, exercise an `interactive: true` case and a `parse:` case against it before
+calling it done, not only a deploy and a protocol check.
 
 ## 4b. Withdrawing a platform
 
@@ -225,3 +261,12 @@ Backend `ruff format` + `ruff check` + basedpyright + pytest; frontend `pnpm typ
 `pnpm build` + `pnpm check:build-doc`; **the full blackbox suite against a rebuilt stack** —
 rebuilt matters: a collection installed by hand into a running container proves nothing about
 what a fresh stack does. Then re-probe the platform on that rebuilt stack.
+
+## 7. Then put it in the mixed lab
+
+A two-node probe of one platform is necessary and not sufficient — the interesting failures are
+cross-vendor. `examples/mixed-nos.yml` holds every admitted platform in one network with a full
+OSPF mesh between the routing ones, and `examples/mixed-nos.test-suites.json` asserts it; a newly
+admitted routing platform should join both, which also grows the mesh by one node's worth of new
+pairings. That lab is what surfaced bird's `role: host` semantics and two of CHR's three missed
+admission steps.

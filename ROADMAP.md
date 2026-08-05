@@ -753,7 +753,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     the raw netlab node dict is provisional; `GET /labs/{name}/facts` is the
     insulation layer).
 
-### NOS platform sweep — and the two reviews it informs · **in progress** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
+### NOS platform sweep — and the two reviews it informs · **in progress; 17.1 and 17.3 CLOSED for v1.0, only gap 1 / delta 25 remains** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
 
 17. **One work item with three strands, run in parallel.** The sweep is the
     driver; the two reviews were previously carried as unsequenced items 18 and
@@ -874,10 +874,51 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     hunt (seven up-parity gaps found, six shipped; the runner-collection trap;
     CHR's missing netmiko driver; two wrong catalog module mirrors), and the
     supported set it settled — VyOS, FRR, CHR, bird, dnsmasq, linux — is a
-    coherent, tested six. **What remains in 17.1 for v1.0 is exactly one thing:
-    the large mixed-NOS topology** over that set, which needs nothing from
-    anyone. When it lands, 17.1 closes for v1.0 and only gap 1 (delta 25,
-    below) keeps item 17 open.
+    coherent, tested six. **What remained in 17.1 for v1.0 was exactly one thing:
+    the large mixed-NOS topology** over that set, which needed nothing from
+    anyone — and it **LANDED 2026-08-05, so 17.1 IS CLOSED for v1.0** (below).
+    Only gap 1 (delta 25, further down) keeps item 17 open at all.
+
+    **The mixed-NOS lab — DONE 2026-08-05, closing strand 17.1 for v1.0.** Every
+    platform above was admitted on its own two-node probe;
+    `examples/mixed-nos.yml` puts all six in ONE network, because a platform that
+    configures fine alone can still get its interface names, addressing or
+    adjacencies wrong beside another vendor. The four routing platforms sit in a
+    **full mesh**, so all six cross-vendor OSPF pairings are proven by one deploy
+    instead of six labs, next to a three-endpoint services LAN (so the hostprep
+    bridge path is in play), a host behind CHR, and a stub — seven nodes, nine
+    links, and all three config-push paths at once (Ansible `docker`,
+    `network_cli` over SSH, host-side netns scripts). **Green on the first
+    attempt:** `status="configured"`, all six adjacencies Full, forwarding end to
+    end across two platforms, the link/interfaces/facts/netem/batch surfaces
+    correct across four NOS families, and the config-time gate passing 8/8 on a
+    mixed lab. `examples/mixed-nos.test-suites.json` also **restores the worked
+    examples the IOL withdrawal cost us** — device-keyed dispatch across FOUR
+    flavours, `parse: json` + compare, and `parse: textfsm` + compare — 9/9 live
+    with nothing hardcoded, and it gave `interactive: true` on CHR its first live
+    verification. Full evidence in `docs/nos-sweep/results.md`.
+    It paid for itself as a bug hunt, which was the point:
+    **two more CHR admission gaps** (`TEXTFSM_PLATFORMS` had no routeros7 — on
+    the one admitted platform with no JSON output — and ntc-templates cannot
+    parse RouterOS 7 at all, both its templates being v6-shaped, so Twinlab now
+    packages its own); **one real Twinlab bug** (a resolved-but-mismatched
+    TextFSM template raised through the boundary and failed the whole suite run
+    instead of erroring one check — pre-existing, reachable on any device whose
+    ntc template targets a different NOS release); a stale device list in the
+    frontend's build-doc harness (bird and dnsmasq were never added); and two
+    netlab semantics documented rather than worked around (a daemon-role node's
+    links type `lan` while OSPF still runs point-to-point on them, and it gets a
+    router ID but no loopback INTERFACE, so that ID is deliberately not
+    pingable). Since CHR's admission has now missed three separate steps, the
+    procedure doc gained a rule: after admitting a platform, exercise an
+    `interactive: true` case and a `parse:` case against it — the probe protocol
+    walks neither path, and both failures are clean typed errors that hide.
+    **One open question is left with the maintainer, deliberately unfixed:** a
+    stub link reports `oper_state="down"` while forwarding perfectly, because a
+    dummy interface's live state is the literal string `"unknown"` and the pinned
+    delta-14 roll-up treats known-not-"up" as down. The implementation matches
+    the contract exactly, so this is a contract decision, not a bug fix
+    (reproducible on `campus-lan.yml` too).
 
     **Parked out of 17.1, to reconsider later (2026-08-05):**
     - **FRR's config push is not hermetic.** netlab's FRR initial script

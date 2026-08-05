@@ -1,2 +1,3 @@
 Template, Hostname, Platform, Command
 cisco_ios_show_mpls_ldp_neighbor.textfsm, .*, cisco_ios, sh[[ow]] mpls ldp nei[[ghbor]]
+mikrotik_routeros_routing_ospf_neighbor_print_terse.textfsm, .*, mikrotik_routeros, [[/]]r[[outing]] o[[spf]] nei[[ghbor]] p[[rint]] t[[erse]]

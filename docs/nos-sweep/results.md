@@ -209,3 +209,114 @@ item to revisit (ROADMAP item 20). Two things follow that are worth writing down
 separate entitlements, not the CML SEULA, so they stay acquirable independently of this
 decision — XRd being the attractive one (native container, ~2 GB, no KVM, needs a Cisco service
 contract).
+
+## The mixed-NOS lab: all six admitted platforms in one network (2026-08-05)
+
+The strand's actual goal, and the last of its v1.0 work. Every platform above was probed on its
+own two-node topology; this puts all six in ONE network, because a platform that configures fine
+alone can still get its interface names, addressing or adjacencies wrong beside another vendor.
+Definition: **`examples/mixed-nos.yml`**; suites: **`examples/mixed-nos.test-suites.json`**.
+
+Shape: the four routing platforms (vyos, frr, routeros7, bird) form a **full mesh**, so all six
+cross-vendor OSPF pairings are proven by one deploy instead of six labs; plus a three-endpoint
+services LAN (vyos + dnsmasq + a linux host, so the hostprep bridge path is in play), a linux
+host behind CHR, and a stub. Seven nodes, nine links, three config-push paths at once — Ansible
+`docker` (vyos), `network_cli` over SSH (CHR), host-side `ip netns exec` scripts (frr, bird,
+dnsmasq, the linux hosts).
+
+**Result: green on the first attempt.** `POST /deploy` with `configure: true` → job `succeeded`,
+`status="configured"`, all 7 nodes up. Evidence:
+
+- **All six adjacencies Full.** Each of the four routers holds exactly three: vyos1 and frr1
+  report `Full/-` (FRR), bird1 `Full/PtP`, chr1 `state=Full` ×3.
+- **Forwarding end to end.** `host1` on the services LAN reaches `host2` behind CHR — two
+  platforms away — plus every router loopback that exists, and the vyos stub on `dum1`.
+- **Surfaces correct across four NOS families.** The link table resolves CHR's alias join
+  (`chr1:eth1` container-side ↔ `ether2` NOS-side) on every CHR link, all endpoints `up`, the
+  3-endpoint LAN is ONE row with three endpoints, and `live=True`. `/interfaces` and `/facts`
+  agree per node.
+- **netem on all four platforms**, singly and as one **batch** (delta 24) mixing four netem sets
+  with a node power event: every item `ok`, impairment surfaced on the right link endpoints, all
+  cleared. On CHR this writes to the wrapper container's veth, which is the correct shaping point.
+- **The config-time gate works on a mixed lab**: a `configure` ran the `convergence` suite
+  automatically, 8/8, and `config_time_status` went `not_run` → `passed`.
+- **Suites: 9/9 across four device flavours** (see the next section).
+
+### Two netlab semantics this surfaced — both correct, both worth knowing
+
+Neither is a defect; both are documented in the definition's header so nobody "fixes" them.
+
+1. **bird's links type `lan`, not `p2p`.** netlab types a two-node link `p2p` only when BOTH ends
+   are routers, and it classifies the bird daemon `role: host`. So the three bird links expand to
+   `lan` /24s while vyos-frr, vyos-chr and frr-chr get p2p /30s. It changes nothing about the
+   protocol — netlab still configures OSPF point-to-point on all of them (bird `Full/PtP`, FRR
+   `Full/-` with no DR election, CHR `network-type=ptp`) — and a two-endpoint `lan` still renders
+   as a direct veth with no bridge. Exactly why Twinlab discriminates on ENDPOINT COUNT and
+   treats `type` as a passthrough.
+2. **A daemon-role node gets a router ID but no loopback INTERFACE.** bird1 was assigned
+   `10.0.0.4` and its neighbours see that ID, but netlab creates the loopback interface only for
+   role-router nodes, so `10.0.0.4/32` appears in nobody's OSPF table and pinging it fails —
+   correctly, the address exists nowhere. Do not write a check that pings a daemon node's
+   router ID.
+
+### Test suites: the worked examples the IOL withdrawal had cost us
+
+The withdrawal left the example suite with one live device flavour, so device-keyed dispatch,
+`parse: textfsm` and `compare`-over-parsed-output had no worked example (logged as a sweep
+follow-up). `examples/mixed-nos.test-suites.json` restores all three with **four** flavours —
+9/9 green live, nothing hardcoded (every router ID and address renders from facts):
+
+- `ospf_adjacency` — ONE test dispatched across FOUR device keys (vyos / frr / routeros7 / bird),
+  each asserting three Full adjacencies in its own idiom. Deliberately node-agnostic so one test
+  serves all four.
+- `ospf_peers_json` — `parse: json` + `compare` on the two FRR-based platforms, naming the two
+  peers they have in common (chr1, bird1) so one case is correct for both nodes.
+- `ospf_peers_textfsm` — `parse: textfsm` + root-level `list` compare on CHR. RouterOS has no
+  JSON output, so it is the platform that genuinely needs TextFSM.
+- `fabric_forwarding` — the control plane agreeing is not the data plane working: a ping across
+  the fabric.
+- `chr_interactive_ping` (runtime suite) — **the first live verification of `interactive: true`
+  on CHR**, i.e. of the netmiko `routeros: mikrotik_routeros` entry added 2026-08-05. It had been
+  fixed on inspection and never exercised.
+
+### Two more admission gaps, same family as the netmiko one
+
+Found while writing that suite; both fixed (commit "Backend: give RouterOS 7 a TextFSM path…").
+
+1. **`routeros7` was missing from `TEXTFSM_PLATFORMS`**, so `parse: textfsm` on CHR was rejected
+   as an authoring error — on the one admitted platform with no JSON alternative. This is the
+   third thing CHR's admission missed, after the Ansible collection and the netmiko driver: the
+   lesson is not "we forgot" but that **admitting a platform touches more places than the
+   catalog**, and the probe protocol exercises none of them.
+2. **Mapping the platform is not enough: ntc-templates cannot parse RouterOS 7.** Both its
+   `mikrotik_routeros` OSPF-neighbour templates were written for v6 — they require
+   `interface=`/`priority=` and v6's field order, where v7 dropped those two, added `area=`,
+   moved `router-id=`, and prefixes rows with the flag column. They raise a TextFSM state error
+   rather than mis-parsing. So Twinlab packages its own template (the second in
+   `services/textfsm_templates/`), indexed for the **`terse`** spelling because plain `print`
+   wraps one record over several lines at the terminal width and no line-oriented template can
+   follow that. **Expect this per vrnetlab-era platform**: ntc's coverage tracks the release its
+   contributor had.
+
+### One bug in Twinlab itself, not in a platform
+
+`_parse_textfsm` caught only `CliTableError` ("no template found") and let **`TextFSMError`**
+("template resolved, output does not fit") escape the boundary. `_run_check` is written to expect
+a value there — its own comment says *"report the check as broken — never silently fall back to
+raw"* — so an escaping exception skipped that and failed the **whole suite run** instead of
+marking ONE check `error`. Pre-existing and reachable on any device whose ntc template targets a
+different NOS release; the new RouterOS 7 template merely made it cheap to hit. Now translated at
+the boundary.
+
+### An open question for the maintainer, not a bug
+
+**A stub link always reports `oper_state="down"` while forwarding perfectly.** `customer-drop`
+(one endpoint, `vyos1:dum1`) reads `oper=down` even though `172.16.5.1` pings. The chain is
+sound at every step: Linux gives dummy interfaces operstate UNKNOWN, clab-api passes the literal
+string `"unknown"` through, and the delta-14 roll-up — `all "up" -> up; all known-not-up ->
+down; any endpoint None -> unknown` — correctly classifies a known-but-not-"up" state as down.
+So the implementation matches the pinned contract exactly; it is the contract's treatment of the
+string `"unknown"` that reads wrong here, and `oper_state` is pinned, so changing it is a
+contract decision. Reproducible on `campus-lan.yml` too, which also carries a stub. Options if
+picked up: treat the literal `"unknown"` as unresolved rather than not-up; special-case
+single-endpoint/loopback links; or leave it and let the UI explain. **Not changed unilaterally.**

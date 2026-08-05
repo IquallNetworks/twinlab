@@ -62,11 +62,14 @@ def test_modules_mirror_matches_installed_netlab() -> None:
 
 
 def test_image_mirror_matches_installed_netlab() -> None:
+    root = _netsim_root()
     for spec in SUPPORTED_DEVICES:
-        device_data = cast(
-            "dict[str, object]",
-            yaml.safe_load((_netsim_root() / "devices" / f"{spec.device}.yml").read_text()),
-        )
+        # netlab splits its catalog in two: real devices and the daemon tier
+        # (bird, dnsmasq, …), which is otherwise identical from here.
+        paths = [root / "devices" / f"{spec.device}.yml", root / "daemons" / f"{spec.device}.yml"]
+        path = next((candidate for candidate in paths if candidate.exists()), None)
+        assert path is not None, f"no netlab definition for {spec.device}"
+        device_data = cast("dict[str, object]", yaml.safe_load(path.read_text()))
         clab = cast("dict[str, object]", device_data["clab"])
         assert clab["image"] == spec.image, spec.device
 
@@ -94,7 +97,7 @@ def test_build_catalog_matches_presence() -> None:
 def test_build_catalog_degrades_without_runner() -> None:
     catalog = build_catalog(None)
     assert not catalog.live
-    assert [d.device for d in catalog.devices] == ["vyos", "iol", "linux"]
+    assert [d.device for d in catalog.devices] == [spec.device for spec in SUPPORTED_DEVICES]
     assert all(d.image_present is None for d in catalog.devices)
 
 

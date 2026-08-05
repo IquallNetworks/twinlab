@@ -523,27 +523,41 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
 Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner + hostprep quality gates: `ruff
 format` + `ruff check`, basedpyright (strict), pytest.
 
-**Supported NOS platforms are VyOS and Cisco IOL — the tested set (maintainer's call
-2026-07-31)** — plus `linux` as the host/endpoint device; the builder's device catalog offers
-exactly these. Other netlab devices are out of scope for now, not merely unpolished. The old
-hard blocker is gone: netlab delivers some config as `node_files/*` clab binds, which inline
-deploy used to strip — since 2026-08-04 the deploy job **materializes that tree onto the
-host-shared `LAB_FILES_DIR` and rewrites the binds absolute** (same-path invariant: one path on
-the host and in the backend and clab-api mounts; see compose), so bind-delivered config works.
-FRR is proven live through that path (deploy + daemons file + sh-mode config push + OSPF Full)
-but stays OUTSIDE the supported set until the sweep formally admits it. A definition naming
+**Supported NOS platforms are VyOS, Cisco IOL, FRR and MikroTik RouterOS 7 (CHR), plus the
+bird and dnsmasq daemons and `linux` as the host/endpoint device — the tested set** (the
+2026-07-31 vyos+iol call, widened 2026-08-04 by the sweep's rule that everything probed green
+gets admitted; per-platform evidence in `docs/nos-sweep/results.md`). The builder's device
+catalog offers exactly these. Other netlab devices are out of scope for now, not merely
+unpolished. The old hard blocker is gone: netlab delivers some config as `node_files/*` clab
+binds, which inline deploy used to strip — since 2026-08-04 the deploy job **materializes that
+tree onto the host-shared `LAB_FILES_DIR` and rewrites the binds absolute** (same-path
+invariant: one path on the host and in the backend and clab-api mounts; see compose), so
+bind-delivered config works — which is what unblocked FRR and the daemons. A definition naming
 another device is not rejected — it edits as text and may even deploy — but nothing about it is
-promised. Widening the set is a maintainer decision that starts with testing, not a catalog edit —
+promised. **`kind` is deliberately NOT admitted**: containerlab's `k8s-kind` names the
+container `<node>-control-plane`, outside clab's `clab-<lab>-<node>` convention, so the
+live-state merge cannot see it (missing from the node list, links `unknown`).
+
+**Admitting a platform is THREE coordinated changes, not a catalog edit:** (1)
+`services/device_catalog.py` `SUPPORTED_DEVICES` + the frontend's `use-device-catalog.ts`
+static fallback; (2) backend `DEVICE_KMODS` **and** hostprep's fixed module allowlist together
+(the drift guard only covers the netlab side); (3) **the netlab-runner's Ansible collection for
+that platform's transport** — the Dockerfile installs one per transport, and a missing one
+fails as `network os <x> is not supported` + UNREACHABLE *after* netlab has rendered the config
+fine, so it reads like a device fault and is not. Docker-exec platforms (vyos, frr, linux,
+daemons) need no collection; `network_cli` ones do (cisco.ios for IOL, community.routeros for
+CHR). Widening the set is a maintainer decision that starts with testing —
 a pre-v1.0 **NOS platform sweep** (ROADMAP item 17, added 2026-08-03, opened 2026-08-04 — the
-three analyses + decision log live in `docs/nos-sweep/`) is exactly that
-testing: obtain and exercise as many containerlab-kind NOSes as possible (images are used, never
-distributed) to confirm or deny support and shake out bugs before the release.
+three analyses, the decision log and the probe results live in `docs/nos-sweep/`) is exactly
+that testing: obtain and exercise as many containerlab-kind NOSes as possible (images are used,
+never distributed) to confirm or deny support and shake out bugs before the release.
 
 **End-to-end deploy + config push is proven:** create → `PUT` the definition → `POST
 /labs/{name}/deploy` with `configure: true` (202 + job) → poll the job to `succeeded` → nodes
 deployed *and* configured via clab-api deploy + the netlab-runner, config-time gate green —
 exercised continuously by the black-box suite's `deploy`-marked tests (linux nodes, incl. the
-multi-access-LAN bridge path) and verified on VyOS (OSPF adjacency reaches Full) and cisco IOL.
+multi-access-LAN bridge path) and verified on VyOS (OSPF adjacency reaches Full), cisco IOL,
+FRR, bird and MikroTik CHR (all reaching OSPF Full).
 Needs a host user in the `clab_api` group, node images pulled, and clab-api running. Keep this
 section current as the project evolves.
 

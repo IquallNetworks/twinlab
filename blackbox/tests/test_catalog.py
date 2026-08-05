@@ -55,13 +55,18 @@ async def test_device_catalog_serves_supported_set(admin: TwinlabClient) -> None
     catalog = await admin.device_catalog()
     by_device = {device.device: device for device in catalog.devices}
     # The tested platforms (CLAUDE.md Current State) plus the linux host.
-    assert set(by_device) == {"vyos", "iol", "linux"}
+    assert set(by_device) == {"vyos", "iol", "frr", "routeros7", "bird", "dnsmasq", "linux"}
 
-    # The builder's proven module set must be advertised by both routers.
-    for router in ("vyos", "iol"):
+    # The builder's proven module set must be advertised by the full routers.
+    for router in ("vyos", "iol", "frr", "routeros7"):
         assert by_device[router].role == "router"
         assert set(by_device[router].modules) >= {"ospf", "bgp", "mpls", "vrf"}, router
-    assert by_device["linux"].role == "host"
+    # bird routes but has no MPLS in netlab's clab matrix; the daemon serving
+    # DHCP and the plain container are hosts.
+    assert by_device["bird"].role == "router"
+    assert set(by_device["bird"].modules) >= {"ospf", "bgp"}
+    for host in ("dnsmasq", "linux"):
+        assert by_device[host].role == "host"
 
     for device in catalog.devices:
         assert device.label
@@ -82,7 +87,15 @@ async def test_device_catalog_visible_without_admin_roles(
 ) -> None:
     _, plain = await make_user_client(None)
     catalog = await plain.device_catalog()
-    assert {device.device for device in catalog.devices} == {"vyos", "iol", "linux"}
+    assert {device.device for device in catalog.devices} == {
+        "vyos",
+        "iol",
+        "frr",
+        "routeros7",
+        "bird",
+        "dnsmasq",
+        "linux",
+    }
 
 
 async def test_principals_visible_to_any_authenticated_user(

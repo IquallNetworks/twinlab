@@ -44,12 +44,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Ansible collections netlab drives:
-#   community.docker  — the `docker` connection (VyOS et al., exec via socket)
+# Ansible collections netlab drives — ONE PER SUPPORTED TRANSPORT, so every
+# device the catalog admits needs its collection here. A missing one does not
+# look like a packaging problem: netlab renders the config fine and Ansible
+# then reports "network os <x> is not supported" + UNREACHABLE per node.
+#   community.docker  — the `docker` connection (VyOS, FRR, bird, dnsmasq et
+#     al., exec via the socket; the daemons need no collection of their own)
 #   cisco.ios + ansible.netcommon — the `network_cli` connection for Cisco
 #     IOS/IOL, whose config push is SSH to the node mgmt IP (see openssh-client
 #     above; the paramiko transport comes from pyproject).
-RUN ansible-galaxy collection install community.docker cisco.ios ansible.netcommon
+#   community.routeros — `network_cli` for MikroTik RouterOS 7 (CHR), same SSH
+#     path as IOL.
+RUN ansible-galaxy collection install \
+      community.docker cisco.ios ansible.netcommon community.routeros
 
 # netlab validates the vyos /lib/modules bind path at `create` time in this
 # container's filesystem (the real mount is the host's, at deploy time).

@@ -39,6 +39,35 @@ export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
     modules: BUILDER_MODULES,
     imagePresent: null,
   },
+  {
+    device: 'frr',
+    label: 'FRRouting',
+    kind: 'router',
+    modules: BUILDER_MODULES,
+    imagePresent: null,
+  },
+  {
+    device: 'routeros7',
+    label: 'MikroTik RouterOS 7 (CHR)',
+    kind: 'router',
+    modules: BUILDER_MODULES,
+    imagePresent: null,
+  },
+  // bird carries no MPLS or VRF in netlab's clab module matrix.
+  {
+    device: 'bird',
+    label: 'BIRD routing daemon',
+    kind: 'router',
+    modules: ['ospf', 'bgp'],
+    imagePresent: null,
+  },
+  {
+    device: 'dnsmasq',
+    label: 'dnsmasq DHCP/DNS server',
+    kind: 'host',
+    modules: [],
+    imagePresent: null,
+  },
   { device: 'linux', label: 'Linux host', kind: 'host', modules: [], imagePresent: null },
 ]
 

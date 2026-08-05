@@ -14,6 +14,14 @@ implementation.
   netlab topology syntax vs the Build tab's Visual mode: 17 structural gates (9 promotable),
   the typed surface, and per-gap promotion assessments.
 
+`acquisition-checklist.md` (added 2026-08-04) is the actionable form of the availability
+matrix: exactly what to register for, where, and in what order.
+
+`results.md` (added 2026-08-04) is the strand-17.1 evidence log: host readiness, per-platform
+probe outcomes, and the packaging finding that generalizes — the runner ships ONE Ansible
+collection per platform, so admitting a NOS is a catalog + kmods/hostprep + **runner
+collection** change, not a catalog edit.
+
 ## Decision log (maintainer, 2026-08-04)
 
 - **Gap 1 (`tc:`)** — honor it, with ONE unified application method for baseline (deploy-time
@@ -68,6 +76,16 @@ implementation.
   Live finding recorded: both ends of a self-link draw the SAME pool address, so netlab
   refuses one unless the link is `prefix: false` or each end carries an `ipv4` — the link
   inspector warns, the server's dry create stays the judge.
-- **Strand 17.1 acquisition waves** — agreed as proposed.
+- **Strand 17.1 acquisition waves** — agreed as proposed. **Wave 1 started 2026-08-04**
+  (`results.md`): host confirmed KVM- and nested-virt-capable; bird + dnsmasq built, kind
+  pulled, and the **vrnetlab/KVM pipeline proven** by building MikroTik CHR from the free
+  vmdk. Probed green through Twinlab: **bird** (OSPF Full/PtP) as-is, and **CHR** (OSPF Full
+  both ways, addressing exactly as netlab expanded it) once `community.routeros` was
+  installed — the finding that generalizes. **Maintainer's call the same day: everything
+  tested and supported gets ADMITTED** — FRR, MikroTik CHR, bird and dnsmasq joined the
+  catalog (three-part admission: catalog, kmods/hostprep, runner collection; blackbox
+  140/140, CHR re-probed on a rebuilt stack). `kind` was NOT admitted: containerlab's
+  k8s-kind names the container outside clab's convention, so the live-state merge cannot see
+  it. `acquisition-checklist.md` is the maintainer's shopping list for the rest.
 
 Gaps 2–7 verified live 2026-08-04: blackbox **140/140** with the `deploy` marker.

@@ -1,0 +1,42 @@
+# netlab SYSTEM defaults (`/etc/netlab/defaults.yml` in the runner image).
+#
+# netlab merges this over its packaged device data, so an entry here changes
+# what `netlab create` WRITES into `group_vars/<device>/topology.json` — the
+# override lands at the source, for every lab, with nothing for a definition or
+# a user to know. Do NOT try to do this from a topology `groups:` entry
+# instead: netlab writes device defaults into `group_vars/<device>/`, and
+# Ansible resolves same-precedence groups ALPHABETICALLY, so an overriding
+# group only wins when its name happens to sort after the device's.
+#
+# This file is POLICY over netlab's own data, so it carries the same obligation
+# as DEVICE_KMODS and the device catalog: every entry names the netlab version
+# it was written against and the reason it exists, and a netlab upgrade is an
+# occasion to re-check it. An entry that silently outlives its cause would mask
+# an upstream fix.
+#
+# Written against netlab 26.07 / ansible-core 2.21.
+#
+# --------------------------------------------------------------------------
+# ansible-core 2.21 REMOVED the `paramiko` connection plugin outright (no
+# redirect in ansible_builtin_runtime.yml; not in ansible.posix,
+# community.general or ansible.netcommon either — core now ships only local,
+# psrp, ssh and winrm). netlab still names it, so any device whose effective
+# clab connection is paramiko fails config push with
+#
+#   [ERROR]: Task failed: the connection plugin 'paramiko' was not found
+#
+# AFTER netlab has rendered the config fine, which reads like a device fault.
+# Under the clab provider that is exactly openbsd, srlinux and sros (every
+# other device already uses docker or network_cli).
+#
+# Only devices we have actually PROBED get an entry: the right replacement is
+# per-device (a plain host wants `ssh`; a network OS more likely
+# `ansible.netcommon.libssh`, Red Hat's stated successor), and guessing on a
+# platform's behalf is how a silent misconfiguration ships. srlinux and sros
+# get theirs when their probes run.
+devices:
+  openbsd:
+    group_vars:
+      # A plain BSD host with stock sshd — the native connection is the honest
+      # replacement, and it is what got config deployment running in the probe.
+      ansible_connection: ssh

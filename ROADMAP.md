@@ -790,6 +790,44 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     what "supported" formally requires (deploy? config push? facts? suites?)
     are designed when picked up.
 
+    **Parked out of 17.1, to reconsider later (2026-08-05):**
+    - **FRR's config push is not hermetic.** netlab's FRR initial script
+      installs gnupg+curl (`linux/packages.j2` installs whatever is missing)
+      and the official `quay.io/frrouting/frr` image ships neither, so every
+      FRR config push needs working egress AND DNS *from inside the lab node*.
+      On this host it fails outright: containerlab fills each node's DNS from
+      the host's `/etc/resolv.conf` and drops the two IPv4 resolvers because
+      they sit in the CGNAT range (100.64.0.0/10), leaving IPv6-only
+      nameservers an IPv4-only node cannot reach. FRR is the ONLY admitted
+      platform with this property. The fix is proven and is NOT a DNS change:
+      an image carrying gnupg+curl (`FROM quay.io/frrouting/frr:10.6.1` +
+      `apk add --no-cache gnupg curl`) deploys, configures and reaches OSPF
+      Full on this host **with DNS still broken**, because the script only
+      installs what it finds missing. The cost is that the catalog's `image`
+      would stop being netlab's default, which
+      `test_image_mirror_matches_installed_netlab` asserts — so it needs a
+      deliberate "ours on purpose" guard rather than a quiet edit. Full
+      evidence in `docs/nos-sweep/results.md`.
+    - **ansible-core 2.21 removed the `paramiko` connection plugin**, which
+      netlab still names for openbsd, srlinux and sros under the clab provider
+      (verified by reading every device profile — everything else already uses
+      docker or network_cli). It is gone from core with no redirect and is not
+      in ansible.posix, community.general or ansible.netcommon. **RESOLVED
+      2026-08-05** by `netlab-runner/netlab-defaults.yml` →
+      `/etc/netlab/defaults.yml`, which netlab merges over its packaged device
+      data so the override lands at create time; only openbsd has an entry, as
+      the right replacement is per-device (`ssh` for a plain host,
+      `ansible.netcommon.libssh` for a network OS). srlinux and sros get theirs
+      when their probes run — both matter to the `nokia/` branch.
+    - **OpenBSD, PARKED 2026-08-05.** Pinning `vrnetlab/openbsd_openbsd:7.7`
+      (the version netlab targets) fixed 7.9's two failures, which shared one
+      cause — vrnetlab's launcher never waits for its `cloud-localds` before
+      starting qemu. Both nodes now boot, pass readiness and authenticate, and
+      with the connection override above the config push runs. ONE blocker
+      left: `netlab initial` reaches "Execute /tmp/config.sh to deploy initial
+      config" and hangs there past 500s, most likely a TTY/pty expectation over
+      the plain `ssh` connection. Evidence in `docs/nos-sweep/results.md`.
+
     **17.2 — The honest remainder of the `netlab up` parity audit
     (2026-07-31).** The audit found `netlab up`'s clab pre/post hooks have
     exactly two members — host bridges and kernel modules — both since owned by

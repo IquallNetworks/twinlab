@@ -41,10 +41,16 @@ _INITIAL_TIMEOUT_SECONDS = 600
 _EXEC_TIMEOUT_SECONDS = 60
 # `docker image ls` is a local daemon query; generous headroom for a busy host.
 _IMAGES_TIMEOUT_SECONDS = 30
-# `netlab initial --ready` polls each node's SSH/console until the NOS has booted;
-# netlab's default budget is 20 retries x 5s = 100s per node (concurrent), so give
-# it headroom for a slow IOL boot.
-_READY_TIMEOUT_SECONDS = 200
+# `netlab initial --ready` polls each node's SSH/console until the NOS has booted.
+# netlab bounds that itself: each node gets `netlab_check_retries *
+# netlab_check_delay` seconds of wall clock (default 20 x 5 = 100s) and the nodes
+# are polled CONCURRENTLY, so the command's own runtime is the LARGEST per-node
+# budget, not their sum. Devices declare their own: routeros7 250s, exos 200s,
+# junos 300s, iosxr 600s — the biggest netlab 26.07 ships. This timeout is only a
+# backstop against a hung subprocess and must stay well ABOVE those, or it
+# silently truncates a wait netlab was willing to make (a 200s cap turned exos's
+# 200s budget into a coin flip it always lost).
+_READY_TIMEOUT_SECONDS = 900
 # Cached netlab inventories for validation execs, one workdir per lab name so a
 # suite's many checks don't re-run `netlab create` each time.
 _EXEC_CACHE_ROOT = Path("/tmp/netlab-exec-cache")

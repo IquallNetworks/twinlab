@@ -24,9 +24,12 @@ _CONFIGURE_TIMEOUT_SECONDS = 600.0
 # One validation exec is a single show command; keep headroom for a cold-cache
 # `netlab create` on the first check of a lab, then it is quick.
 _EXEC_TIMEOUT_SECONDS = 120.0
-# Readiness polls each node's SSH/console until the NOS boots (netlab budget ~100s
-# per node); allow more than the runner's own 200s cap so the HTTP call outlives it.
-_READY_TIMEOUT_SECONDS = 240.0
+# Readiness polls each node's SSH/console until the NOS boots. netlab bounds the
+# wait per device (`netlab_check_retries * netlab_check_delay`, nodes concurrent —
+# up to 600s for the slowest device it ships); the runner caps the subprocess at
+# 900s as a backstop. This must stay above that cap so the HTTP call outlives it
+# and the runner's own error is what surfaces.
+_READY_TIMEOUT_SECONDS = 960.0
 # A local docker CLI read; outlive the runner's own 30s subprocess cap.
 _IMAGES_TIMEOUT_SECONDS = 40.0
 

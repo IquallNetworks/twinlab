@@ -14,6 +14,11 @@ implementation.
   netlab topology syntax vs the Build tab's Visual mode: 17 structural gates (9 promotable),
   the typed surface, and per-gap promotion assessments.
 
+**`admitting-a-platform.md` (added 2026-08-05) is the procedure** — what "supported" means,
+how to probe, every trap the sweep has hit with the failure signature that identifies it, the
+four coordinated changes admission takes, and the verification gate. Read it before probing a
+new platform; it is where the expensive lessons live.
+
 `acquisition-checklist.md` (added 2026-08-04) is the actionable form of the availability
 matrix: exactly what to register for, where, and in what order.
 

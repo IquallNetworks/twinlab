@@ -35,7 +35,13 @@ from twinlab_client import (
     ValidationTest,
 )
 
-from _config import LAN_LAB_DEFINITION, LINUX_LAB_DEFINITION, LabFactory, UserClientFactory
+from _config import (
+    LAN_LAB_DEFINITION,
+    LINUX_LAB_DEFINITION,
+    MIXED_NOS_LAB_DEFINITION,
+    LabFactory,
+    UserClientFactory,
+)
 
 pytestmark = pytest.mark.deploy
 
@@ -532,3 +538,63 @@ async def test_configure_and_validation_pipeline(
     suites_state = await admin.get_test_suites(lab.name)
     assert suites_state.last_validation["manual"].passed >= 1
     assert suites_state.config_time_status == "failed"
+
+
+async def test_mixed_nos_lab_configures_and_converges(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Two DIFFERENT NOSes in one topology (NOS sweep, ROADMAP 17.1): VyOS and
+    bird are both admitted platforms on the docker-exec transport, and bird
+    delivers its config as a node_files/ bind — the path the host-shared lab
+    files fixed. Asserts the whole chain: one deploy configures both platforms,
+    and a DEVICE-KEYED suite (delta 17 — one test, a case per device) sees the
+    OSPF adjacency come up between them.
+
+    Needs the vyos and bird images on the host; bird is built locally with
+    `netlab clab build bird` (see blackbox/README.md)."""
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, MIXED_NOS_LAB_DEFINITION)
+    job = await admin.deploy_lab(lab.name, configure=True)
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+    assert isinstance(done.result, DeployResponse)
+    assert done.result.status == "configured", done.result.configuration
+
+    # Every link is up, across all three device kinds.
+    table = await admin.links(lab.name)
+    assert table.live is True
+    assert {link.oper_state for link in table.links} == {"up"}
+
+    suites = {
+        "adjacency": TestSuite(
+            description="FRR and bird agree the shared link's adjacency is Full.",
+            tests={
+                "ospf_full": ValidationTest(
+                    nodes=["v1", "b1"],
+                    # Neither command has a packaged TextFSM template and both
+                    # platforms spell the state "Full", so contains is enough.
+                    run={
+                        "vyos": TestCase(
+                            command='vtysh -c "show ip ospf neighbor"',
+                            expect=TestExpectation(contains="Full"),
+                        ),
+                        "bird": TestCase(
+                            command="birdc show ospf neighbors",
+                            expect=TestExpectation(contains="Full"),
+                        ),
+                    },
+                    wait=120,
+                )
+            },
+        )
+    }
+    _ = await admin.put_test_suites(lab.name, suites)
+    run = await admin.run_test_suite(lab.name, "adjacency")
+    run_done = await admin.wait_job(lab.name, run.id, timeout=JOB_WAIT)
+    assert run_done.status == "succeeded", run_done.error
+    report = run_done.result
+    assert isinstance(report, SuiteReport)
+    # One result per node, both passing — a device-keyed case that missed
+    # would report "skip" rather than fail, so assert the passes explicitly.
+    assert report.failed == 0, report
+    assert report.passed == 2, report

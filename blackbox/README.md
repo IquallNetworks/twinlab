@@ -46,6 +46,11 @@ it unset until the guard is implemented.
   live in `test_labs_deploy.py` behind the `deploy` marker — deselect with `-m "not deploy"` for
   the cheap contract run. Everything else (including lab lifecycle, authoring, and grants) works on
   lab *records* only and never deploys.
+- Most deploy-marked tests need only the `linux` node image. **One needs two more**: the
+  mixed-NOS test deploys VyOS + bird + linux together, so the host also needs the vyos image
+  (pullable) and `netlab/bird:latest` (built locally — `netlab clab build bird`). The pair is
+  deliberate: both configure over docker exec with no egress from the lab node, unlike FRR,
+  whose netlab initial script installs packages (see `docs/nos-sweep/results.md`).
 - One deviation from client-only: the LAN test asserts the host bridge's existence (and its
   removal after destroy) by reading `/sys/class/net` directly — bridge leak-checking is host
   kernel state invisible through the API. It therefore assumes the suite runs on the stack's
@@ -98,6 +103,6 @@ permission/existence split, the deploy slice one batch shaping BOTH endpoints of
 alongside a deliberately unknown node, proving the batch still RUNS with only that item
 ok=false),
 and the suite is
-**entirely green** (140/140 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+**entirely green** (141/141 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

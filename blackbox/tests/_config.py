@@ -52,6 +52,28 @@ nodes: [n1, n2]
 links: [n1-n2]
 """
 
+# Two DIFFERENT NOSes in one topology, both on the docker-exec transport, so a
+# mixed-platform deploy stays cheap. VyOS and bird speak plain OSPFv2 to each
+# other; the linux host is the third device class.
+#
+# Deliberately NOT frr here: netlab's FRR initial script installs gnupg+curl,
+# which the official FRR image lacks, so its config push needs working egress
+# and DNS FROM THE LAB NODE — a test must not depend on that.
+MIXED_NOS_LAB_DEFINITION: Final = """\
+provider: clab
+module: [ospf]
+nodes:
+  v1:
+    device: vyos
+  b1:
+    device: bird
+  h1:
+    device: linux
+links:
+- v1-b1
+- v1-h1
+"""
+
 # A multi-access (3-endpoint) segment: netlab's clab provider references a
 # host bridge for it, so deploying exercises the hostprep path end-to-end.
 LAN_LAB_DEFINITION: Final = """\

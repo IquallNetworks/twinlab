@@ -538,7 +538,8 @@ promised. **`kind` is deliberately NOT admitted**: containerlab's `k8s-kind` nam
 container `<node>-control-plane`, outside clab's `clab-<lab>-<node>` convention, so the
 live-state merge cannot see it (missing from the node list, links `unknown`).
 
-**Admitting a platform is THREE coordinated changes, not a catalog edit:** (1)
+**Admitting a platform is FOUR coordinated changes, not a catalog edit** (the full procedure,
+with every trap's failure signature, is `docs/nos-sweep/admitting-a-platform.md`): (1)
 `services/device_catalog.py` `SUPPORTED_DEVICES` + the frontend's `use-device-catalog.ts`
 static fallback; (2) backend `DEVICE_KMODS` **and** hostprep's fixed module allowlist together
 (the drift guard only covers the netlab side); (3) **the netlab-runner's Ansible collection for
@@ -546,7 +547,10 @@ that platform's transport** — the Dockerfile installs one per transport, and a
 fails as `network os <x> is not supported` + UNREACHABLE *after* netlab has rendered the config
 fine, so it reads like a device fault and is not. Docker-exec platforms (vyos, frr, linux,
 daemons) need no collection; `network_cli` ones do (cisco.ios for IOL, community.routeros for
-CHR). Widening the set is a maintainer decision that starts with testing —
+CHR); and (4) a connection override in `netlab-runner/netlab-defaults.yml`
+(`/etc/netlab/defaults.yml`, merged over netlab's device data at create time) where netlab
+names a plugin ansible-core no longer ships — it removed `paramiko` in 2.21, which netlab still
+uses for openbsd/srlinux/sros. Widening the set is a maintainer decision that starts with testing —
 a pre-v1.0 **NOS platform sweep** (ROADMAP item 17, added 2026-08-03, opened 2026-08-04 — the
 three analyses, the decision log and the probe results live in `docs/nos-sweep/`) is exactly
 that testing: obtain and exercise as many containerlab-kind NOSes as possible (images are used,

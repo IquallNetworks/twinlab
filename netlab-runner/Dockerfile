@@ -58,6 +58,11 @@ ENV PATH="/app/.venv/bin:$PATH"
 RUN ansible-galaxy collection install \
       community.docker cisco.ios ansible.netcommon community.routeros
 
+# netlab system defaults: policy overrides of netlab's packaged device data,
+# applied at `netlab create` time. Currently the connection-plugin fixups that
+# ansible-core's paramiko removal forces — see the file for the reasoning.
+COPY netlab-defaults.yml /etc/netlab/defaults.yml
+
 # netlab validates the vyos /lib/modules bind path at `create` time in this
 # container's filesystem (the real mount is the host's, at deploy time).
 RUN mkdir -p /lib/modules

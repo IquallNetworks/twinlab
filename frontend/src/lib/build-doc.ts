@@ -18,9 +18,11 @@ import { BUILDER_MODULES, FALLBACK_DEVICE_CATALOG, type BuilderModule } from './
 // extras — the string, list, dict, and interfaces forms all parse, list
 // members may be records, an endpoint may repeat (a self-link), and the
 // dict-of-lists form keeps its list names; dict and interfaces are equivalent
-// in netlab's expansion), groups (members + config templates), the proven
-// module set (ospf/bgp/mpls/vrf) with bgp.as, mpls.ldp, mpls.vpn and vrf
-// membership, the curated device catalog, and the keys the backend itself
+// in netlab's expansion), groups (members + config templates), netlab's whole
+// module vocabulary (presence for all of them; bgp.as, mpls.ldp, mpls.vpn and
+// vrf membership are the ones with controls of their own — every other
+// module's attributes ride the extras), the curated device catalog, and the
+// keys the backend itself
 // injects on save (name, addressing.mgmt). Emission is canonical; the
 // round-trip invariant is: for any doc emitBuildDoc accepts,
 // parseBuildDoc(emit(doc)) equals doc (up to LAN/stub ids, which are session
@@ -35,19 +37,77 @@ export type Extras = Record<string, unknown>
 
 export interface BuildNodeVrf {
   loopback?: boolean
+  // Everything else this node says about the vrf, verbatim.
+  extras?: Extras
 }
+
+/** A top-level vrf declaration: the name is typed, its attributes (rd, rt,
+ * import/export, …) ride alongside it. They live TOGETHER rather than the
+ * name being typed and the attributes landing in doc.extras, so a vrf can
+ * never exist in one half and not the other. */
+export interface BuildDocVrf {
+  name: string
+  extras?: Extras
+}
+
+/** A node's loopback addressing. The `{pool: …}` and boolean spellings are
+ * not typed — a value that is not a mapping rides the node extras whole. */
+export interface BuildNodeLoopback {
+  ipv4?: string
+  ipv6?: string
+  extras?: Extras
+}
+
+// netlab's node roles. `router` is the default and the only one that gets a
+// loopback interface (augment/nodes.py:224); the allowed set is per-device,
+// which the dry create judges.
+export const NODE_ROLES = ['router', 'host', 'bridge', 'gateway'] as const
+export type NodeRole = (typeof NODE_ROLES)[number]
 
 export interface BuildNode {
   name: string
   device?: string
+  // The container image. netlab spells this `box` OR `image` and `box` WINS
+  // (augment/nodes.py:335 returns early on box, before moving image into it),
+  // so both are ONE field here — typing only `image` left a document setting
+  // `box:` showing an empty, editable Image control that decided nothing.
   image?: string
+  // Which spelling the document used, so a save does not rewrite it. Absent
+  // means `image`.
+  imageKey?: 'box'
+  role?: NodeRole
   // undefined → the node inherits the global module list; [] → explicitly none.
   modules?: BuilderModule[]
   bgpAs?: number
   mplsVpn?: boolean
   vrfs?: Record<string, BuildNodeVrf>
+  loopback?: BuildNodeLoopback
+  // Custom-config templates attached to this node (netlab `config: [...]`),
+  // the same list a group broadcasts to its members. Config import writes one
+  // per node: the carry template.
+  config?: string[]
   // Attributes outside the typed set, preserved verbatim.
   extras?: Extras
+}
+
+function loopbackShape(value: unknown): BuildNodeLoopback | null {
+  if (!isRecord(value)) return null
+  const loopback: BuildNodeLoopback = {}
+  const extras: Extras = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if ((key === 'ipv4' || key === 'ipv6') && typeof entry === 'string') loopback[key] = entry
+    else extras[key] = entry
+  }
+  if (Object.keys(extras).length > 0) loopback.extras = extras
+  return loopback
+}
+
+function loopbackYaml(loopback: BuildNodeLoopback): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (loopback.ipv4 !== undefined) out['ipv4'] = loopback.ipv4
+  if (loopback.ipv6 !== undefined) out['ipv6'] = loopback.ipv6
+  for (const [key, value] of Object.entries(loopback.extras ?? {})) out[key] = value
+  return out
 }
 
 export interface BuildGroup {
@@ -61,33 +121,81 @@ export interface BuildGroup {
 
 export interface LinkEndpoint {
   node: string
-  // Per-endpoint attributes (ifname, ipv4, ospf.cost, …), preserved verbatim
-  // — the dict form's node-key value, or an interfaces-form record minus its
-  // `node`. Dict and interfaces forms expand identically in netlab (verified
-  // against netlab create 2026-08-04), so both parse here and emit canonical.
+  // This end's interface name on the NOS side. Imported labs carry it for
+  // interface-name fidelity; netlab derives it otherwise.
+  ifname?: string
+  // This end's address. `false` says "no address here" — netlab INVENTS one
+  // for a bare endpoint on an addressed link (live-proven, delta 23), so the
+  // spelling matters.
+  ipv4?: string | false
+  ipv6?: string | false
+  // Everything else this end carries (ospf.cost, vlan.access, …), preserved
+  // verbatim — the dict form's node-key value, or an interfaces-form record
+  // minus its `node`. Dict and interfaces forms expand identically in netlab
+  // (verified against netlab create 2026-08-04), so both parse here and emit
+  // canonical.
   extras?: Extras
 }
 
+/** Split one endpoint's attributes into the typed fields and the rest — the
+ * single rule the dict form, the interfaces form and list members share. */
+function parseEndpoint(node: string, attrs: Extras): LinkEndpoint {
+  const endpoint: LinkEndpoint = { node }
+  const extras: Extras = {}
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === 'ifname' && typeof value === 'string') endpoint.ifname = value
+    else if ((key === 'ipv4' || key === 'ipv6') && (typeof value === 'string' || value === false)) {
+      endpoint[key] = value
+    } else extras[key] = value
+  }
+  if (Object.keys(extras).length > 0) endpoint.extras = extras
+  return endpoint
+}
+
+/** An endpoint's attributes as YAML: typed fields first, then the rest. */
+function endpointAttrsYaml(endpoint: LinkEndpoint): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (endpoint.ifname !== undefined) out['ifname'] = endpoint.ifname
+  if (endpoint.ipv4 !== undefined) out['ipv4'] = endpoint.ipv4
+  if (endpoint.ipv6 !== undefined) out['ipv6'] = endpoint.ipv6
+  for (const [key, value] of Object.entries(endpoint.extras ?? {})) out[key] = value
+  return out
+}
+
+/** The link-level attributes every kind carries. */
+export interface LinkAttrs {
+  // A label the canvas shows.
+  name?: string
+  // netlab's link prefix: a CIDR, the name of a declared prefix pool, or
+  // `false` for an L2 wire with no addressing (what config import emits for
+  // an all-unaddressed link, and what a self-link needs). The dict spelling
+  // (`{ipv4, ipv6, allocation}`) rides the extras.
+  prefix?: string | false
+  bandwidth?: number
+  mtu?: number
+  // Any other link attribute, verbatim.
+  extras?: Extras
+  // The key of the named sub-list a link came from, when `links:` was written
+  // as netlab's dict-of-lists. netlab flattens those lists (the name only ever
+  // reaches error messages), so it is pure organization — carried here so a
+  // save re-emits the author's grouping instead of flattening it.
+  listName?: string
+}
+
 // Endpoint COUNT decides the kind (netlab's `type` is derived, not authored):
-// 1 → stub, 2 → p2p, 3+ → LAN. Every kind carries the link-level passthrough:
-// `name` (typed — a label the canvas shows) and `extras` (bandwidth, mtu,
-// prefix, and any other link attribute, verbatim).
-// `listName` is the key of the named sub-list a link came from, when `links:`
-// was written as netlab's dict-of-lists. netlab flattens those lists (the name
-// only ever reaches error messages), so it is pure organization — carried here
-// so a save re-emits the author's grouping instead of flattening it.
+// 1 → stub, 2 → p2p, 3+ → LAN.
 export type BuildLink =
-  // Bare (no name, no extras anywhere) emits as the terse "a-b" string form
+  // Bare (no attributes anywhere) emits as the terse "a-b" string form
   // (safe: no hyphen in either endpoint name); attributed links emit dict form.
-  | { kind: 'p2p'; a: LinkEndpoint; b: LinkEndpoint; name?: string; extras?: Extras; listName?: string }
+  | ({ kind: 'p2p'; a: LinkEndpoint; b: LinkEndpoint } & LinkAttrs)
   // 3+ endpoints, emitted as a member list when bare. Ids are `lan:<n>` in
   // document order — the SAME scheme as lib/topology.ts, so manual canvas
   // layouts keyed by these ids carry across the Topology and Build tabs.
-  | { kind: 'lan'; id: string; members: LinkEndpoint[]; name?: string; extras?: Extras; listName?: string }
+  | ({ kind: 'lan'; id: string; members: LinkEndpoint[] } & LinkAttrs)
   // One endpoint — netlab resolves it to a loopback/stub interface. Always
   // emits dict form (`- <node>:`). Ids are `stub:<n>`, session metadata like
   // LAN ids.
-  | { kind: 'stub'; id: string; endpoint: LinkEndpoint; name?: string; extras?: Extras; listName?: string }
+  | ({ kind: 'stub'; id: string; endpoint: LinkEndpoint } & LinkAttrs)
 
 /** The endpoints of any link kind, in document order. */
 export function linkEndpoints(link: BuildLink): LinkEndpoint[] {
@@ -114,7 +222,11 @@ export interface BuildDoc {
   modules: BuilderModule[]
   bgpAs?: number
   mplsLdp?: boolean
-  vrfs: string[]
+  vrfs: BuildDocVrf[]
+  // Keys under `groups:` that are not groups at all (netlab reads a
+  // groups-level `_auto_create`), kept verbatim so one of them can no longer
+  // send every group into extras and empty the Groups UI.
+  groupsExtras?: Extras
   groups: BuildGroup[]
   // Injected by the backend on save (the lab's allocated mgmt subnet);
   // preserved verbatim.
@@ -175,35 +287,98 @@ function modulesShape(value: unknown): BuilderModule[] | null {
   return modules
 }
 
+/** A module mapping split into the ONE subkey a control owns and everything
+ * else, verbatim. The whole-key alternative — demoting `bgp: {as, router_id}`
+ * to extras including the `as` — hid a typed value behind an unrelated
+ * sibling; this is the same per-object partition the fact namespace settled
+ * on (delta 26). `rest` is undefined when nothing else was there, so the
+ * common case still emits the terse dotted key. */
+interface SubkeySplit<T> {
+  typed: T | undefined
+  rest: Extras | undefined
+}
+
+function splitModuleKey<T>(
+  value: unknown,
+  subkey: string,
+  typedShape: (raw: unknown) => T | null,
+): SubkeySplit<T> | null {
+  if (!isRecord(value)) return null
+  const rest: Extras = {}
+  let typed: T | undefined
+  for (const [key, entry] of Object.entries(value)) {
+    const shaped = key === subkey ? typedShape(entry) : null
+    if (shaped !== null) typed = shaped
+    else rest[key] = entry
+  }
+  return { typed, rest: Object.keys(rest).length > 0 ? rest : undefined }
+}
+
+const numberShape = (value: unknown): number | null => (typeof value === 'number' ? value : null)
+const boolShape = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null)
+
+/** The `as` a `bgp:` mapping carries, when it carries one in the typed shape.
+ * Used by the advanced editors; the parser uses the full split. */
 function bgpShape(value: unknown): number | null {
-  return isRecord(value) && Object.keys(value).length === 1 && typeof value['as'] === 'number'
-    ? value['as']
-    : null
+  return splitModuleKey(value, 'as', numberShape)?.typed ?? null
 }
 
 function mplsBoolShape(value: unknown, key: 'ldp' | 'vpn'): boolean | null {
-  return isRecord(value) && Object.keys(value).length === 1 && typeof value[key] === 'boolean'
-    ? value[key]
-    : null
+  return splitModuleKey(value, key, boolShape)?.typed ?? null
 }
 
-/** Top-level vrfs in the typed shape: a mapping of bare declarations (every
- * vrf empty). Any vrf carrying attributes (rd, rt, …) → the whole key is
- * extras territory. */
-function vrfListShape(value: unknown): string[] | null {
+/** Merge a typed subkey back into the extras half for emission. With nothing
+ * else to carry, the terse dotted spelling wins (`bgp.as: 65000`); otherwise
+ * both halves emit as ONE mapping, which is what netlab would have made of
+ * the dotted key anyway. */
+function moduleKeyYaml(
+  out: Record<string, unknown>,
+  key: 'bgp' | 'mpls',
+  subkey: string,
+  typed: unknown,
+  rest: Extras | undefined,
+): void {
+  if (rest === undefined) {
+    if (typed !== undefined) out[`${key}.${subkey}`] = typed
+    return
+  }
+  out[key] = typed === undefined ? { ...rest } : { [subkey]: typed, ...rest }
+}
+
+/** Top-level vrfs: a mapping of declarations, each name typed and its
+ * attributes (rd, rt, …) carried beside it. A vrf whose value is neither a
+ * mapping nor empty keeps that value in its extras — netlab will judge it. */
+function vrfListShape(value: unknown): BuildDocVrf[] | null {
   if (!isRecord(value)) return null
-  const names: string[] = []
+  const vrfs: BuildDocVrf[] = []
   for (const [name, attrs] of Object.entries(value)) {
     if (!EXISTING_NAME_RE.test(name) || name.length > NODE_NAME_MAX) return null
-    if (attrs !== null && !(isRecord(attrs) && Object.keys(attrs).length === 0)) return null
-    names.push(name)
+    if (attrs === null || (isRecord(attrs) && Object.keys(attrs).length === 0)) {
+      vrfs.push({ name })
+    } else if (isRecord(attrs)) {
+      vrfs.push({ name, extras: attrs })
+    } else {
+      vrfs.push({ name, extras: { [VRF_SCALAR_KEY]: attrs } })
+    }
   }
-  return names
+  return vrfs
 }
 
-/** Node vrf membership in the typed shape: each entry empty or exactly
- * `{loopback: bool}`. Declaration against the top-level vrfs is checked at
- * emit (a save blocker), not here — shape and reference are different rules. */
+// A vrf declared with a scalar value (`vpn_a: 5`) is not a shape netlab
+// accepts, but the builder still must not lose it: it round-trips under this
+// private key and emits back as the bare scalar.
+const VRF_SCALAR_KEY = '__scalar__'
+
+function vrfYaml(vrf: BuildDocVrf): unknown {
+  if (vrf.extras === undefined) return null
+  if (VRF_SCALAR_KEY in vrf.extras) return vrf.extras[VRF_SCALAR_KEY]
+  return { ...vrf.extras }
+}
+
+/** Node vrf membership: `loopback` is typed, anything else the node says
+ * about the vrf rides its extras. Declaration against the top-level vrfs is
+ * checked at emit (a save blocker), not here — shape and reference are
+ * different rules. */
 function nodeVrfsShape(value: unknown): Record<string, BuildNodeVrf> | null {
   if (!isRecord(value)) return null
   const vrfs: Record<string, BuildNodeVrf> = {}
@@ -214,13 +389,22 @@ function nodeVrfsShape(value: unknown): Record<string, BuildNodeVrf> | null {
     }
     if (!isRecord(attrs)) return null
     const entry: BuildNodeVrf = {}
+    const extras: Extras = {}
     for (const [key, attr] of Object.entries(attrs)) {
-      if (key !== 'loopback' || typeof attr !== 'boolean') return null
-      entry.loopback = attr
+      if (key === 'loopback' && typeof attr === 'boolean') entry.loopback = attr
+      else extras[key] = attr
     }
+    if (Object.keys(extras).length > 0) entry.extras = extras
     vrfs[vrfName] = entry
   }
   return vrfs
+}
+
+function nodeVrfYaml(attrs: BuildNodeVrf): unknown {
+  const out: Record<string, unknown> = {}
+  if (attrs.loopback !== undefined) out['loopback'] = attrs.loopback
+  for (const [key, value] of Object.entries(attrs.extras ?? {})) out[key] = value
+  return Object.keys(out).length > 0 ? out : null
 }
 
 function mgmtAddressingShape(value: unknown): MgmtAddressing | null {
@@ -265,11 +449,15 @@ export function labExtrasKeyError(key: string, value: unknown): string | null {
     case 'bgp.as':
       return typeof value === 'number' ? 'use the BGP AS control' : null
     case 'bgp':
-      return bgpShape(value) !== null ? 'use the BGP AS control' : null
+      // The mapping itself is fine here — only the subkey a control owns is
+      // not, since emission merges the two halves into one `bgp:`.
+      return bgpShape(value) !== null ? 'the "as" subkey belongs to the BGP AS control' : null
     case 'mpls.ldp':
       return typeof value === 'boolean' ? 'use the LDP transport control' : null
     case 'mpls':
-      return mplsBoolShape(value, 'ldp') !== null ? 'use the LDP transport control' : null
+      return mplsBoolShape(value, 'ldp') !== null
+        ? 'the "ldp" subkey belongs to the LDP transport control'
+        : null
     case 'vrfs':
       return vrfListShape(value) !== null ? 'use the VRFs control' : null
     case 'addressing':
@@ -287,19 +475,35 @@ export function nodeExtrasKeyError(key: string, value: unknown): string | null {
     case 'device':
       return typeof value === 'string' ? 'use the Device control' : null
     case 'image':
+    case 'box':
+      // One setting, two spellings — the control owns both.
       return typeof value === 'string' ? 'use the Image override control' : null
+    case 'role':
+      return typeof value === 'string' && (NODE_ROLES as readonly string[]).includes(value)
+        ? 'use the Role control'
+        : null
+    case 'group':
+      return stringListShape(value) !== null
+        ? 'group membership is edited on the group'
+        : null
     case 'module':
       return modulesShape(value) !== null ? 'use the Modules control' : null
     case 'bgp.as':
       return typeof value === 'number' ? 'use the BGP AS control' : null
     case 'bgp':
-      return bgpShape(value) !== null ? 'use the BGP AS control' : null
+      return bgpShape(value) !== null ? 'the "as" subkey belongs to the BGP AS control' : null
     case 'mpls.vpn':
       return typeof value === 'boolean' ? 'use the MPLS VPN edge control' : null
     case 'mpls':
-      return mplsBoolShape(value, 'vpn') !== null ? 'use the MPLS VPN edge control' : null
+      return mplsBoolShape(value, 'vpn') !== null
+        ? 'the "vpn" subkey belongs to the MPLS VPN edge control'
+        : null
     case 'vrfs':
       return nodeVrfsShape(value) !== null ? 'use the VRF membership controls' : null
+    case 'loopback':
+      return isRecord(value) ? 'use the Loopback fields' : null
+    case 'config':
+      return stringListShape(value) !== null ? 'use the template picker' : null
     default:
       return null
   }
@@ -342,15 +546,23 @@ export function linkExtrasKeyError(
   if (declaredNodes.has(key)) return `"${key}" is a declared node — endpoints are edited on the canvas`
   if (key === 'name' && typeof value === 'string') return 'use the Name field'
   if (key === 'interfaces') return 'endpoint lists are managed by the builder'
+  if (key === 'prefix' && (typeof value === 'string' || value === false)) {
+    return 'use the Prefix field'
+  }
+  if (key === 'bandwidth' && typeof value === 'number') return 'use the Bandwidth field'
+  if (key === 'mtu' && typeof value === 'number') return 'use the MTU field'
   return null
 }
 
-/** The vrf names a node may reference: the typed list plus — when a vrf
- * carries attributes and the whole `vrfs` key rode into extras — the names
+/** The vrf names a node may reference: the typed declarations plus — when
+ * `vrfs:` was not a mapping at all and rode into extras whole — the names
  * declared there. */
 export function declaredVrfs(doc: BuildDoc): string[] {
   const fromExtras = doc.extras['vrfs']
-  return [...doc.vrfs, ...(isRecord(fromExtras) ? Object.keys(fromExtras) : [])]
+  return [
+    ...doc.vrfs.map((vrf) => vrf.name),
+    ...(isRecord(fromExtras) ? Object.keys(fromExtras) : []),
+  ]
 }
 
 /** True when the advanced properties own this key — the matching typed
@@ -386,6 +598,11 @@ function parseNode(
   attrs: unknown,
   reasons: string[],
   knownDevices: readonly string[],
+  // Collects node-side `group:` declarations, which parseBuildDoc folds into
+  // the groups' member lists (netlab's own add_node_level_groups does exactly
+  // that). Absent for a standalone node fragment, which has no document to
+  // fold them into — there the key stays a verbatim extra.
+  memberships?: { node: string; group: string }[],
 ): BuildNode {
   const node: BuildNode = { name }
   if (!EXISTING_NAME_RE.test(name) || name.length > NODE_NAME_MAX) {
@@ -399,6 +616,10 @@ function parseNode(
     return node
   }
   const extras: Extras = {}
+  // Resolved together after the loop — they are one setting with two
+  // spellings, and which one wins does not depend on document order.
+  let rawBox: unknown
+  let rawImage: unknown
   for (const [key, value] of Object.entries(attrs)) {
     switch (key) {
       case 'device': {
@@ -408,9 +629,22 @@ function parseNode(
         break
       }
       case 'image':
-        if (typeof value === 'string') node.image = value
-        else extras[key] = value
+        rawImage = value
         break
+      case 'box':
+        rawBox = value
+        break
+      case 'role':
+        if (typeof value === 'string' && (NODE_ROLES as readonly string[]).includes(value)) {
+          node.role = value as NodeRole
+        } else extras[key] = value
+        break
+      case 'group': {
+        const groups = memberships === undefined ? null : stringListShape(value)
+        if (groups === null) extras[key] = value
+        else for (const group of groups) memberships?.push({ node: name, group })
+        break
+      }
       case 'module': {
         const modules = modulesShape(value)
         if (modules !== null) node.modules = modules
@@ -422,9 +656,12 @@ function parseNode(
         else extras[key] = value
         break
       case 'bgp': {
-        const as = bgpShape(value)
-        if (as !== null) node.bgpAs = as
-        else extras[key] = value
+        const split = splitModuleKey(value, 'as', numberShape)
+        if (split === null) extras[key] = value
+        else {
+          if (split.typed !== undefined) node.bgpAs = split.typed
+          if (split.rest !== undefined) extras[key] = split.rest
+        }
         break
       }
       case 'mpls.vpn':
@@ -432,9 +669,12 @@ function parseNode(
         else extras[key] = value
         break
       case 'mpls': {
-        const vpn = mplsBoolShape(value, 'vpn')
-        if (vpn !== null) node.mplsVpn = vpn
-        else extras[key] = value
+        const split = splitModuleKey(value, 'vpn', boolShape)
+        if (split === null) extras[key] = value
+        else {
+          if (split.typed !== undefined) node.mplsVpn = split.typed
+          if (split.rest !== undefined) extras[key] = split.rest
+        }
         break
       }
       case 'vrfs': {
@@ -443,9 +683,32 @@ function parseNode(
         else extras[key] = value
         break
       }
+      case 'loopback': {
+        const loopback = loopbackShape(value)
+        if (loopback !== null) node.loopback = loopback
+        else extras[key] = value
+        break
+      }
+      case 'config': {
+        const config = stringListShape(value)
+        if (config !== null) node.config = config
+        else extras[key] = value
+        break
+      }
       default:
         extras[key] = value
     }
+  }
+  // `box` wins over `image` in netlab, which then DELETES the image key —
+  // keep the loser verbatim so nothing is lost, and remember the spelling.
+  if (typeof rawBox === 'string') {
+    node.image = rawBox
+    node.imageKey = 'box'
+    if (rawImage !== undefined) extras['image'] = rawImage
+  } else {
+    if (rawBox !== undefined) extras['box'] = rawBox
+    if (typeof rawImage === 'string') node.image = rawImage
+    else if (rawImage !== undefined) extras['image'] = rawImage
   }
   if (Object.keys(extras).length > 0) node.extras = extras
   return node
@@ -496,13 +759,21 @@ export function emitNodeFragment(node: BuildNode): string | null {
  * every other key rides that group's extras. A groups mapping whose VALUES
  * are not all mappings (e.g. a `_auto_create: true` toggle at the groups
  * level) is preserved whole in the doc extras instead. */
-function parseGroups(value: unknown, docExtras: Extras): BuildGroup[] {
-  if (!isRecord(value) || Object.values(value).some((attrs) => attrs !== null && !isRecord(attrs))) {
-    docExtras['groups'] = value
+function parseGroups(value: unknown, doc: BuildDoc): BuildGroup[] {
+  if (!isRecord(value)) {
+    doc.extras['groups'] = value
     return []
   }
   const groups: BuildGroup[] = []
+  const groupsExtras: Extras = {}
   for (const [name, attrs] of Object.entries(value)) {
+    // netlab reads a groups-level `_auto_create` beside the groups
+    // themselves. Only a mapping (or an empty group) is a group; anything
+    // else is a setting, and it used to take every group with it.
+    if (attrs !== null && !isRecord(attrs)) {
+      groupsExtras[name] = attrs
+      continue
+    }
     const group: BuildGroup = { name, members: [] }
     const extras: Extras = {}
     if (attrs !== null && isRecord(attrs)) {
@@ -523,6 +794,7 @@ function parseGroups(value: unknown, docExtras: Extras): BuildGroup[] {
     if (Object.keys(extras).length > 0) group.extras = extras
     groups.push(group)
   }
+  if (Object.keys(groupsExtras).length > 0) doc.groupsExtras = groupsExtras
   return groups
 }
 
@@ -531,8 +803,18 @@ interface ParsedLinkEntry {
   // in the enclosing list.
   where: string
   endpoints: LinkEndpoint[]
-  name?: string
-  extras?: Extras
+  attrs: LinkAttrs
+}
+
+/** Split ONE link-level key into the typed attributes or the extras — the
+ * single rule the dict form, the interfaces form and link groups all use, so
+ * a key can never be typed in one spelling and extras in another. */
+function takeLinkAttr(attrs: LinkAttrs, extras: Extras, key: string, value: unknown): void {
+  if (key === 'name' && typeof value === 'string') attrs.name = value
+  else if (key === 'prefix' && (typeof value === 'string' || value === false)) attrs.prefix = value
+  else if (key === 'bandwidth' && typeof value === 'number') attrs.bandwidth = value
+  else if (key === 'mtu' && typeof value === 'number') attrs.mtu = value
+  else extras[key] = value
 }
 
 /** One link entry in any accepted form. String "a-b" and list forms carry
@@ -547,7 +829,7 @@ function parseLinkEntry(entry: unknown, where: string, declared: DeclaredNodes, 
       reasons.push(`${where} ("${entry}") is not an "a-b" endpoint pair`)
       return null
     }
-    return { where, endpoints: parts.map((node) => ({ node })) }
+    return { where, endpoints: parts.map((node) => ({ node })), attrs: {} }
   }
   if (Array.isArray(entry)) {
     // netlab's adjust_interface_list: a member is a bare node name or an
@@ -558,7 +840,7 @@ function parseLinkEntry(entry: unknown, where: string, declared: DeclaredNodes, 
         endpoints.push({ node: member })
       } else if (isRecord(member) && typeof member['node'] === 'string') {
         const { node, ...rest } = member as { node: string } & Extras
-        endpoints.push(Object.keys(rest).length > 0 ? { node, extras: rest } : { node })
+        endpoints.push(parseEndpoint(node, rest))
       } else {
         reasons.push(`${where}: every list member is a node name or a {node, …} record`)
         return null
@@ -568,14 +850,14 @@ function parseLinkEntry(entry: unknown, where: string, declared: DeclaredNodes, 
       reasons.push(`${where} is an empty endpoint list`)
       return null
     }
-    return { where, endpoints }
+    return { where, endpoints, attrs: {} }
   }
   if (!isRecord(entry)) {
     reasons.push(`${where} (${describe(entry)}) is not a link form the builder knows`)
     return null
   }
 
-  const parsed: ParsedLinkEntry = { where, endpoints: [] }
+  const parsed: ParsedLinkEntry = { where, endpoints: [], attrs: {} }
   const extras: Extras = {}
   const rawInterfaces = entry['interfaces']
   if (rawInterfaces !== undefined) {
@@ -592,7 +874,7 @@ function parseLinkEntry(entry: unknown, where: string, declared: DeclaredNodes, 
         return null
       }
       const { node, ...rest } = record as { node: string } & Extras
-      parsed.endpoints.push(Object.keys(rest).length > 0 ? { node, extras: rest } : { node })
+      parsed.endpoints.push(parseEndpoint(node, rest))
     }
     for (const [key, value] of Object.entries(entry)) {
       if (key === 'interfaces') continue
@@ -600,8 +882,7 @@ function parseLinkEntry(entry: unknown, where: string, declared: DeclaredNodes, 
         reasons.push(`${where} mixes the interfaces form with node keys`)
         return null
       }
-      if (key === 'name' && typeof value === 'string') parsed.name = value
-      else extras[key] = value
+      takeLinkAttr(parsed.attrs, extras, key, value)
     }
   } else {
     // dict form: keys in the declared-node set are endpoints (netlab's own
@@ -609,15 +890,13 @@ function parseLinkEntry(entry: unknown, where: string, declared: DeclaredNodes, 
     for (const [key, value] of Object.entries(entry)) {
       if (declared.has(key)) {
         if (value === null || value === undefined) parsed.endpoints.push({ node: key })
-        else if (isRecord(value)) parsed.endpoints.push({ node: key, extras: value })
+        else if (isRecord(value)) parsed.endpoints.push(parseEndpoint(key, value))
         else {
           reasons.push(`${where}: endpoint "${key}" must be empty or a mapping of attributes`)
           return null
         }
-      } else if (key === 'name' && typeof value === 'string') {
-        parsed.name = value
       } else {
-        extras[key] = value
+        takeLinkAttr(parsed.attrs, extras, key, value)
       }
     }
   }
@@ -627,7 +906,7 @@ function parseLinkEntry(entry: unknown, where: string, declared: DeclaredNodes, 
     )
     return null
   }
-  if (Object.keys(extras).length > 0) parsed.extras = extras
+  if (Object.keys(extras).length > 0) parsed.attrs.extras = extras
   return parsed
 }
 
@@ -648,7 +927,7 @@ function expandLinkGroup(
     reasons.push(`${where} is a link group with no "members" list`)
     return []
   }
-  let name: string | undefined
+  const groupAttrs: LinkAttrs = {}
   const groupExtras: Extras = {}
   for (const [key, value] of Object.entries(entry)) {
     if (key === 'group' || key === 'members') continue
@@ -658,20 +937,22 @@ function expandLinkGroup(
       reasons.push(`${where} is a link group that also declares "${key}" as an endpoint`)
       return []
     }
-    if (key === 'name' && typeof value === 'string') name = value
-    else groupExtras[key] = value
+    takeLinkAttr(groupAttrs, groupExtras, key, value)
   }
   const expanded: ParsedLinkEntry[] = []
   members.forEach((member, index) => {
     const parsed = parseLinkEntry(member, `${where}.members[${index + 1}]`, declared, reasons)
     if (parsed === null) return
-    const extras = { ...groupExtras, ...parsed.extras }
-    const memberName = parsed.name ?? name
+    // Group data first, the member's own data over it — netlab's order.
+    const extras = { ...groupExtras, ...parsed.attrs.extras }
     expanded.push({
       where: parsed.where,
       endpoints: parsed.endpoints,
-      ...(memberName !== undefined && { name: memberName }),
-      ...(Object.keys(extras).length > 0 && { extras }),
+      attrs: {
+        ...groupAttrs,
+        ...parsed.attrs,
+        ...(Object.keys(extras).length > 0 ? { extras } : { extras: undefined }),
+      },
     })
   })
   if (expanded.length > 0) {
@@ -713,10 +994,11 @@ function parseLinkList(
         reasons.push(`${where} references undeclared node "${undeclaredEndpoint.node}"`)
         continue
       }
-      const shared = {
-        ...(parsed.name !== undefined && { name: parsed.name }),
-        ...(parsed.extras !== undefined && { extras: parsed.extras }),
-        ...(listName !== undefined && { listName }),
+      // Undefined-valued keys would survive into the doc and break the
+      // round-trip comparison, so drop them rather than spreading blind.
+      const shared: LinkAttrs = { ...(listName !== undefined && { listName }) }
+      for (const [key, value] of Object.entries(parsed.attrs)) {
+        if (value !== undefined) (shared as Record<string, unknown>)[key] = value
       }
       if (endpoints.length === 1) {
         ids.stub += 1
@@ -852,9 +1134,12 @@ export function parseBuildDoc(
         else doc.extras[key] = value
         break
       case 'bgp': {
-        const as = bgpShape(value)
-        if (as !== null) doc.bgpAs = as
-        else doc.extras[key] = value
+        const split = splitModuleKey(value, 'as', numberShape)
+        if (split === null) doc.extras[key] = value
+        else {
+          if (split.typed !== undefined) doc.bgpAs = split.typed
+          if (split.rest !== undefined) doc.extras[key] = split.rest
+        }
         break
       }
       case 'mpls.ldp':
@@ -862,9 +1147,12 @@ export function parseBuildDoc(
         else doc.extras[key] = value
         break
       case 'mpls': {
-        const ldp = mplsBoolShape(value, 'ldp')
-        if (ldp !== null) doc.mplsLdp = ldp
-        else doc.extras[key] = value
+        const split = splitModuleKey(value, 'ldp', boolShape)
+        if (split === null) doc.extras[key] = value
+        else {
+          if (split.typed !== undefined) doc.mplsLdp = split.typed
+          if (split.rest !== undefined) doc.extras[key] = split.rest
+        }
         break
       }
       case 'vrfs': {
@@ -874,7 +1162,7 @@ export function parseBuildDoc(
         break
       }
       case 'groups':
-        doc.groups = parseGroups(value, doc.extras)
+        doc.groups = parseGroups(value, doc)
         break
       case 'addressing': {
         const addressing = mgmtAddressingShape(value)
@@ -890,6 +1178,7 @@ export function parseBuildDoc(
     }
   }
 
+  const memberships: { node: string; group: string }[] = []
   const rawNodes = raw['nodes']
   if (rawNodes === undefined) {
     // A bare document (fresh lab) is representable; emit blocks an empty save.
@@ -899,21 +1188,43 @@ export function parseBuildDoc(
     // Emit normalizes either to the mapping form — netlab's own model.
     for (const entry of rawNodes) {
       if (typeof entry === 'string') {
-        doc.nodes.push(parseNode(entry, null, reasons, knownDevices))
+        doc.nodes.push(parseNode(entry, null, reasons, knownDevices, memberships))
       } else if (isRecord(entry)) {
         const { name, ...attrs } = entry
-        if (typeof name === 'string') doc.nodes.push(parseNode(name, attrs, reasons, knownDevices))
-        else reasons.push(`node list entry ${describe(entry)} is missing a "name"`)
+        if (typeof name === 'string') {
+          doc.nodes.push(parseNode(name, attrs, reasons, knownDevices, memberships))
+        } else reasons.push(`node list entry ${describe(entry)} is missing a "name"`)
       } else {
         reasons.push(`node list entry ${describe(entry)} is not a name or a mapping`)
       }
     }
   } else if (isRecord(rawNodes)) {
     for (const [name, attrs] of Object.entries(rawNodes)) {
-      doc.nodes.push(parseNode(name, attrs, reasons, knownDevices))
+      doc.nodes.push(parseNode(name, attrs, reasons, knownDevices, memberships))
     }
   } else {
     reasons.push('"nodes" must be a mapping or a list of names')
+  }
+
+  // netlab's add_node_level_groups: a node's own `group:` is appended to that
+  // group's members, so the two spellings are the same fact. The builder
+  // models membership ON the group, so fold them in and re-emit there —
+  // a rewrite, hence a notice.
+  for (const { node, group } of memberships) {
+    let target = doc.groups.find((candidate) => candidate.name === group)
+    if (target === undefined) {
+      // netlab creates the group on demand; so must the builder, or the
+      // membership would name a group that does not exist.
+      target = { name: group, members: [] }
+      doc.groups.push(target)
+    }
+    if (!target.members.includes(node)) target.members.push(node)
+  }
+  if (memberships.length > 0) {
+    const nodes = [...new Set(memberships.map((entry) => entry.node))]
+    notices.push(
+      `${nodes.length === 1 ? `node "${nodes[0]}" declares` : `${nodes.length} nodes declare`} their own group membership — the builder records it on the group, and saving spells it there`,
+    )
   }
 
   doc.links = parseLinks(raw['links'], declaredNodes(doc.nodes), reasons, notices)
@@ -926,22 +1237,37 @@ export function parseBuildDoc(
 // Emit
 // --------------------------------------------------------------------------
 
+/** The extras half of a split module key, when there is one to merge. A
+ * non-mapping value under `bgp:`/`mpls:` was never split, so it stays an
+ * ordinary extra. */
+function moduleRest(extras: Extras | undefined, key: 'bgp' | 'mpls'): Extras | undefined {
+  const value = extras?.[key]
+  return isRecord(value) ? value : undefined
+}
+
 function nodeYaml(node: BuildNode): Record<string, unknown> | null {
   const out: Record<string, unknown> = {}
   if (node.device !== undefined) out['device'] = node.device
-  if (node.image !== undefined) out['image'] = node.image
+  if (node.image !== undefined) out[node.imageKey ?? 'image'] = node.image
+  if (node.role !== undefined) out['role'] = node.role
   if (node.modules !== undefined) out['module'] = [...node.modules]
-  if (node.bgpAs !== undefined) out['bgp.as'] = node.bgpAs
-  if (node.mplsVpn !== undefined) out['mpls.vpn'] = node.mplsVpn
+  const bgpRest = moduleRest(node.extras, 'bgp')
+  const mplsRest = moduleRest(node.extras, 'mpls')
+  moduleKeyYaml(out, 'bgp', 'as', node.bgpAs, bgpRest)
+  moduleKeyYaml(out, 'mpls', 'vpn', node.mplsVpn, mplsRest)
   if (node.vrfs !== undefined && Object.keys(node.vrfs).length > 0) {
     out['vrfs'] = Object.fromEntries(
-      Object.entries(node.vrfs).map(([name, attrs]) => [
-        name,
-        Object.keys(attrs).length > 0 ? { ...attrs } : null,
-      ]),
+      Object.entries(node.vrfs).map(([name, attrs]) => [name, nodeVrfYaml(attrs)]),
     )
   }
-  for (const [key, value] of Object.entries(node.extras ?? {})) out[key] = value
+  if (node.loopback !== undefined) out['loopback'] = loopbackYaml(node.loopback)
+  if (node.config !== undefined) out['config'] = [...node.config]
+  for (const [key, value] of Object.entries(node.extras ?? {})) {
+    if ((key === 'bgp' && bgpRest !== undefined) || (key === 'mpls' && mplsRest !== undefined)) {
+      continue // already merged with its typed subkey
+    }
+    out[key] = value
+  }
   return Object.keys(out).length > 0 ? out : null
 }
 
@@ -954,7 +1280,7 @@ function groupYaml(group: BuildGroup): Record<string, unknown> | null {
 }
 
 function bareEndpoint(endpoint: LinkEndpoint): boolean {
-  return endpoint.extras === undefined || Object.keys(endpoint.extras).length === 0
+  return Object.keys(endpointAttrsYaml(endpoint)).length === 0
 }
 
 /** Canonical link emission: the terse string/list forms when the link carries
@@ -965,6 +1291,9 @@ function linkYaml(link: BuildLink): unknown {
   const endpoints = linkEndpoints(link)
   const bare =
     link.name === undefined &&
+    link.prefix === undefined &&
+    link.bandwidth === undefined &&
+    link.mtu === undefined &&
     (link.extras === undefined || Object.keys(link.extras).length === 0) &&
     endpoints.every(bareEndpoint)
   // netlab splits the terse "a-b" form on '-', so a hyphenated endpoint name
@@ -979,12 +1308,18 @@ function linkYaml(link: BuildLink): unknown {
   if (selfLink) {
     // A node appears twice, which a mapping of node keys cannot spell — the
     // interfaces form is the equivalent netlab expands identically.
-    out['interfaces'] = endpoints.map((endpoint) => ({ node: endpoint.node, ...endpoint.extras }))
+    out['interfaces'] = endpoints.map((endpoint) => ({
+      node: endpoint.node,
+      ...endpointAttrsYaml(endpoint),
+    }))
   } else {
     for (const endpoint of endpoints) {
-      out[endpoint.node] = bareEndpoint(endpoint) ? null : { ...endpoint.extras }
+      out[endpoint.node] = bareEndpoint(endpoint) ? null : endpointAttrsYaml(endpoint)
     }
   }
+  if (link.prefix !== undefined) out['prefix'] = link.prefix
+  if (link.bandwidth !== undefined) out['bandwidth'] = link.bandwidth
+  if (link.mtu !== undefined) out['mtu'] = link.mtu
   for (const [key, value] of Object.entries(link.extras ?? {})) out[key] = value
   return out
 }
@@ -1057,6 +1392,9 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
     // extras key naming any declared node would re-parse as an endpoint.
     const written = new Set(linkEndpoints(link).map((endpoint) => endpoint.node))
     if (link.name !== undefined) written.add('name')
+    if (link.prefix !== undefined) written.add('prefix')
+    if (link.bandwidth !== undefined) written.add('bandwidth')
+    if (link.mtu !== undefined) written.add('mtu')
     for (const [key, value] of Object.entries(link.extras ?? {})) {
       const err = linkExtrasKeyError(key, value, endpointNames)
       if (err !== null) {
@@ -1100,17 +1438,20 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
   if (doc.bgpAs !== undefined) written.add('bgp.as')
   if (doc.mplsLdp !== undefined) written.add('mpls.ldp')
   if (doc.vrfs.length > 0) written.add('vrfs')
-  if (doc.groups.length > 0) written.add('groups')
+  if (doc.groups.length > 0 || doc.groupsExtras !== undefined) written.add('groups')
   if (doc.addressing !== undefined) written.add('addressing')
   extrasCollisions(doc.extras, written, 'lab', problems)
   for (const node of doc.nodes) {
     const nodeWritten = new Set<string>()
     if (node.device !== undefined) nodeWritten.add('device')
-    if (node.image !== undefined) nodeWritten.add('image')
+    if (node.image !== undefined) nodeWritten.add(node.imageKey ?? 'image')
+    if (node.role !== undefined) nodeWritten.add('role')
     if (node.modules !== undefined) nodeWritten.add('module')
     if (node.bgpAs !== undefined) nodeWritten.add('bgp.as')
     if (node.mplsVpn !== undefined) nodeWritten.add('mpls.vpn')
     if (node.vrfs !== undefined && Object.keys(node.vrfs).length > 0) nodeWritten.add('vrfs')
+    if (node.loopback !== undefined) nodeWritten.add('loopback')
+    if (node.config !== undefined) nodeWritten.add('config')
     extrasCollisions(node.extras, nodeWritten, `node "${node.name}"`, problems)
   }
   for (const group of doc.groups) {
@@ -1126,18 +1467,28 @@ export function emitBuildDoc(doc: BuildDoc): EmitResult {
   if (doc.provider !== undefined) out['provider'] = doc.provider
   if (doc.defaultDevice !== undefined) out['defaults.device'] = doc.defaultDevice
   if (doc.modules.length > 0) out['module'] = [...doc.modules]
-  if (doc.bgpAs !== undefined) out['bgp.as'] = doc.bgpAs
-  if (doc.mplsLdp !== undefined) out['mpls.ldp'] = doc.mplsLdp
+  const bgpRest = moduleRest(doc.extras, 'bgp')
+  const mplsRest = moduleRest(doc.extras, 'mpls')
+  moduleKeyYaml(out, 'bgp', 'as', doc.bgpAs, bgpRest)
+  moduleKeyYaml(out, 'mpls', 'ldp', doc.mplsLdp, mplsRest)
   if (doc.vrfs.length > 0) {
-    out['vrfs'] = Object.fromEntries(doc.vrfs.map((name) => [name, null]))
+    out['vrfs'] = Object.fromEntries(doc.vrfs.map((vrf) => [vrf.name, vrfYaml(vrf)]))
   }
-  if (doc.groups.length > 0) {
-    out['groups'] = Object.fromEntries(doc.groups.map((group) => [group.name, groupYaml(group)]))
+  if (doc.groups.length > 0 || doc.groupsExtras !== undefined) {
+    out['groups'] = {
+      ...doc.groupsExtras,
+      ...Object.fromEntries(doc.groups.map((group) => [group.name, groupYaml(group)])),
+    }
   }
   if (doc.addressing !== undefined) {
     out['addressing'] = { mgmt: { ...doc.addressing.mgmt } }
   }
-  for (const [key, value] of Object.entries(doc.extras)) out[key] = value
+  for (const [key, value] of Object.entries(doc.extras)) {
+    if ((key === 'bgp' && bgpRest !== undefined) || (key === 'mpls' && mplsRest !== undefined)) {
+      continue // already merged with its typed subkey
+    }
+    out[key] = value
+  }
   out['nodes'] = Object.fromEntries(doc.nodes.map((node) => [node.name, nodeYaml(node)]))
   out['links'] = linksYaml(doc.links)
   return { ok: true, yaml: stringify(out) }
@@ -1205,37 +1556,61 @@ function canonical(doc: BuildDoc): unknown {
     modules: doc.modules,
     bgpAs: doc.bgpAs ?? null,
     mplsLdp: doc.mplsLdp ?? null,
-    vrfs: [...doc.vrfs].sort(),
+    vrfs: [...doc.vrfs]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((vrf) => ({ name: vrf.name, extras: canonicalExtras(vrf.extras) })),
     groups: doc.groups.map((group) => ({
       name: group.name,
       members: group.members,
       config: group.config ?? null,
       extras: canonicalExtras(group.extras),
     })),
+    groupsExtras: canonicalExtras(doc.groupsExtras),
     addressing: doc.addressing ?? null,
     extras: canonicalExtras(doc.extras),
     nodes: doc.nodes.map((node) => ({
       name: node.name,
       device: node.device ?? null,
       image: node.image ?? null,
+      imageKey: node.imageKey ?? null,
+      role: node.role ?? null,
       modules: node.modules ?? null,
       bgpAs: node.bgpAs ?? null,
       mplsVpn: node.mplsVpn ?? null,
+      loopback:
+        node.loopback === undefined
+          ? null
+          : {
+              ipv4: node.loopback.ipv4 ?? null,
+              ipv6: node.loopback.ipv6 ?? null,
+              extras: canonicalExtras(node.loopback.extras),
+            },
+      config: node.config ?? null,
       vrfs:
         node.vrfs !== undefined && Object.keys(node.vrfs).length > 0
           ? Object.entries(node.vrfs)
               .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, attrs]) => ({ name, loopback: attrs.loopback ?? null }))
+              .map(([name, attrs]) => ({
+                name,
+                loopback: attrs.loopback ?? null,
+                extras: canonicalExtras(attrs.extras),
+              }))
           : null,
       extras: canonicalExtras(node.extras),
     })),
     links: doc.links.map((link) => ({
       kind: link.kind,
       name: link.name ?? null,
+      prefix: link.prefix ?? null,
+      bandwidth: link.bandwidth ?? null,
+      mtu: link.mtu ?? null,
       listName: link.listName ?? null,
       extras: canonicalExtras(link.extras),
       endpoints: linkEndpoints(link).map((endpoint) => ({
         node: endpoint.node,
+        ifname: endpoint.ifname ?? null,
+        ipv4: endpoint.ipv4 ?? null,
+        ipv6: endpoint.ipv6 ?? null,
         extras: canonicalExtras(endpoint.extras),
       })),
     })),

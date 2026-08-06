@@ -1,10 +1,20 @@
-import type { BuildDoc, BuildGroup, BuildLink, BuildNode, Extras, LinkEndpoint } from '@/lib/build-doc'
+import type {
+  BuildDoc,
+  BuildGroup,
+  BuildLink,
+  BuildNode,
+  Extras,
+  LinkAttrs,
+  LinkEndpoint,
+} from '@/lib/build-doc'
 
 // The builder's editing state: the BuildDoc is the single source of truth
 // (canvas nodes/edges and the inspector are pure derivations of it), plus a
 // dirty flag (any mutation sets it, reset clears it) and the current
 // selection. Pure reducer — every action returns a new state and keeps the
 // selection coherent (deleting the selected thing falls back to the lab).
+
+export type EndpointPatch = Partial<Pick<LinkEndpoint, 'ifname' | 'ipv4' | 'ipv6' | 'extras'>>
 
 export type Selection =
   | { kind: 'lab' } // nothing selected → the lab-settings inspector
@@ -31,16 +41,28 @@ export type BuilderAction =
   | { type: 'delete-node'; name: string }
   | { type: 'delete-link'; linkIndex: number }
   | { type: 'remove-member'; linkIndex: number; endpointIndex: number }
-  | { type: 'patch-link'; linkIndex: number; patch: { name?: string; extras?: Extras } }
+  // Typed link attributes; a key present with `undefined` clears it.
+  | {
+      type: 'patch-link'
+      linkIndex: number
+      patch: Partial<Pick<LinkAttrs, 'name' | 'prefix' | 'bandwidth' | 'mtu' | 'extras'>>
+    }
   // Replace one endpoint's attributes (undefined clears them).
-  | { type: 'patch-endpoint'; linkIndex: number; endpointIndex: number; extras: Extras | undefined }
+  | { type: 'patch-endpoint'; linkIndex: number; endpointIndex: number; patch: EndpointPatch }
   | { type: 'rename-node'; from: string; to: string }
   | { type: 'patch-node'; name: string; patch: Partial<Omit<BuildNode, 'name'>> }
   | {
       type: 'patch-lab'
-      patch: Partial<Pick<BuildDoc, 'defaultDevice' | 'modules' | 'bgpAs' | 'mplsLdp' | 'extras'>>
+      patch: Partial<
+        Pick<
+          BuildDoc,
+          'defaultDevice' | 'modules' | 'bgpAs' | 'mplsLdp' | 'extras' | 'groupsExtras'
+        >
+      >
     }
   | { type: 'add-vrf'; name: string }
+  // The vrf's own attributes (rd, rt, …); undefined clears them.
+  | { type: 'patch-vrf'; name: string; extras: Extras | undefined }
   | { type: 'remove-vrf'; name: string }
   | { type: 'add-group'; name: string }
   | { type: 'delete-group'; name: string }
@@ -177,13 +199,33 @@ function renameInLinks(links: readonly BuildLink[], from: string, to: string): B
 
 /** Replace one endpoint's attributes on any link kind, BY POSITION — a
  * self-link's two endpoints share a node name. */
-function patchEndpoint(link: BuildLink, endpointIndex: number, extras: Extras | undefined): BuildLink {
-  const apply = (endpoint: LinkEndpoint, index: number): LinkEndpoint =>
-    index !== endpointIndex
-      ? endpoint
-      : extras === undefined || Object.keys(extras).length === 0
-        ? { node: endpoint.node }
-        : { node: endpoint.node, extras }
+/** Patch one endpoint BY POSITION (a self-link has the same node twice). A
+ * key present with `undefined` clears it; `extras` clears when emptied. */
+function patchEndpoint(
+  link: BuildLink,
+  endpointIndex: number,
+  patch: EndpointPatch,
+): BuildLink {
+  const apply = (endpoint: LinkEndpoint, index: number): LinkEndpoint => {
+    if (index !== endpointIndex) return endpoint
+    const next: LinkEndpoint = { ...endpoint }
+    if ('ifname' in patch) {
+      if (patch.ifname === undefined || patch.ifname === '') delete next.ifname
+      else next.ifname = patch.ifname
+    }
+    for (const key of ['ipv4', 'ipv6'] as const) {
+      if (!(key in patch)) continue
+      const value = patch[key]
+      if (value === undefined || value === '') delete next[key]
+      else next[key] = value
+    }
+    if ('extras' in patch) {
+      const extras = patch.extras
+      if (extras === undefined || Object.keys(extras).length === 0) delete next.extras
+      else next.extras = extras
+    }
+    return next
+  }
   switch (link.kind) {
     case 'p2p':
       return { ...link, a: apply(link.a, 0), b: apply(link.b, 1) }
@@ -297,6 +339,16 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
             if (action.patch.name === undefined || action.patch.name === '') delete next.name
             else next.name = action.patch.name
           }
+          if ('prefix' in action.patch) {
+            if (action.patch.prefix === undefined) delete next.prefix
+            else next.prefix = action.patch.prefix
+          }
+          for (const key of ['bandwidth', 'mtu'] as const) {
+            if (!(key in action.patch)) continue
+            const value = action.patch[key]
+            if (value === undefined) delete next[key]
+            else next[key] = value
+          }
           if ('extras' in action.patch) {
             const extras = action.patch.extras
             if (extras === undefined || Object.keys(extras).length === 0) delete next.extras
@@ -312,7 +364,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         ...state.doc,
         links: state.doc.links.map((link, index) =>
           index === action.linkIndex
-            ? patchEndpoint(link, action.endpointIndex, action.extras)
+            ? patchEndpoint(link, action.endpointIndex, action.patch)
             : link,
         ),
       }
@@ -356,17 +408,28 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
     case 'patch-lab':
       return { ...state, doc: applyPatch<BuildDoc>(state.doc, action.patch), dirty: true }
     case 'add-vrf': {
-      if (state.doc.vrfs.includes(action.name)) return state
+      if (state.doc.vrfs.some((vrf) => vrf.name === action.name)) return state
       return {
         ...state,
-        doc: { ...state.doc, vrfs: [...state.doc.vrfs, action.name] },
+        doc: { ...state.doc, vrfs: [...state.doc.vrfs, { name: action.name }] },
         dirty: true,
       }
+    }
+    case 'patch-vrf': {
+      const doc = {
+        ...state.doc,
+        vrfs: state.doc.vrfs.map((vrf) =>
+          vrf.name === action.name
+            ? { name: vrf.name, ...(action.extras !== undefined && { extras: action.extras }) }
+            : vrf,
+        ),
+      }
+      return { ...state, doc, dirty: true }
     }
     case 'remove-vrf': {
       const doc = {
         ...state.doc,
-        vrfs: state.doc.vrfs.filter((name) => name !== action.name),
+        vrfs: state.doc.vrfs.filter((vrf) => vrf.name !== action.name),
         nodes: state.doc.nodes.map((node) => {
           if (node.vrfs === undefined || !(action.name in node.vrfs)) return node
           const vrfs = { ...node.vrfs }

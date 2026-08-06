@@ -20,9 +20,15 @@ said what was left.
    thing keeping the sweep item open besides Tier B. Sketched 2026-08-04 and then
    **DEFERRED to the end of item 17 for maintainer re-analysis — the sketch is NOT
    an approved design**, so this does not start on its own.
-2. **Tier B builder promotions** (item 17.3). Its own review, after the sweep work:
-   the extras→typed promotions (module presence, subkey splits, field promotions,
-   vlans, …) deliberately held back from the Tier A batch.
+2. ~~**Tier B builder promotions**~~ — **DONE 2026-08-05**, reviewed in
+   `docs/nos-sweep/builder-coverage-gaps.md` §6 and shipped as six frontend
+   commits. Scoped by three findings rather than by size: one unknown module
+   emptied the protocol UI, config import produced labs that were 100 % extras,
+   and one of our own examples used two extras keys. The exclusion list was sent
+   back once and re-derived from netlab's own behaviour — "no demand" read off
+   our repo is one maintainer's usage, not evidence — which moved node
+   `cpu`/`memory` out (libvirt-only, inert under clab) and `box`/`role`/`group`
+   in.
 3. ~~**Pin the fact-namespace subset**~~ — **DONE 2026-08-05 (contract delta 26,
    APPROVED and SHIPPED same day)**, closing delta 17's pre-v1.0 reservation.
    A promised core plus a per-object **`_extras`** holding every unpinned key —
@@ -798,7 +804,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     (contract delta 26: the promised core + per-object `_extras`, closing the
     delta 17 resolution; `docs/fact-namespace.md`).
 
-### NOS platform sweep — and the two reviews it informs · **in progress; 17.1 CLOSED for v1.0 and 17.3's Tier A shipped — TWO items remain: gap 1 / delta 25 and 17.3's Tier B review** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
+### NOS platform sweep — and the two reviews it informs · **in progress; 17.1 CLOSED for v1.0 and 17.3 CLOSED (Tier A 2026-08-04, Tier B 2026-08-05) — ONE item remains: gap 1 / delta 25** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
 
 17. **One work item with three strands, run in parallel.** The sweep is the
     driver; the two reviews were previously carried as unsequenced items 18 and
@@ -929,8 +935,8 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     coherent, tested six. **What remained in 17.1 for v1.0 was exactly one thing:
     the large mixed-NOS topology** over that set, which needed nothing from
     anyone — and it **LANDED 2026-08-05, so 17.1 IS CLOSED for v1.0** (below).
-    Two items keep item 17 open: gap 1 (delta 25, in 17.2) and 17.3's Tier B
-    review, which is still a pre-v1.0 item.
+    One item keeps item 17 open: gap 1 (delta 25, in 17.2). 17.3's Tier B
+    review shipped 2026-08-05.
 
     **The mixed-NOS lab — DONE 2026-08-05, closing strand 17.1 for v1.0.** Every
     platform above was admitted on its own two-node probe;
@@ -1126,8 +1132,31 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     distinct. Live finding: both ends of a self-link draw the SAME pool address
     (netlab derives it from the node id), so netlab refuses one unless the link
     says `prefix: false` or each end carries an explicit `ipv4` — the link
-    inspector warns where the user edits; the dry create stays the judge. What
-    remains open in this strand is Tier B and the unknown-device policy gate,
+    inspector warns where the user edits; the dry create stays the judge.
+
+    **The Tier B batch SHIPPED 2026-08-05**, closing this strand — the review
+    is §6 of `docs/nos-sweep/builder-coverage-gaps.md`, six frontend commits,
+    90 harness checks. The module vocabulary became netlab's whole 18-module
+    set with the checkbox offer derived from the device catalog (so one exotic
+    module can no longer demote the list and take the bgp/mpls/vrf controls
+    with it); the remaining whole-key demotions became per-subkey splits, the
+    same per-object partition delta 26 settled for facts; and the keys config
+    import emits — link `prefix`, endpoint `ifname`/`ipv4`/`ipv6`, node
+    `loopback`/`config` — are typed, so an imported lab is editable without
+    opening Advanced properties once. The re-analysis added node
+    `box`/`role`/`group`.
+
+    Verified by creating BOTH spellings of six documents under netlab 26.07 in
+    the same directory and diffing the expanded topologies: five are
+    byte-identical. The node-`group` fold is not, by exactly one key — netlab
+    keeps a vestigial `group:` on the node's own dict — but the generated
+    Ansible inventory is identical and no netlab code reads that key after
+    expansion, so the fold is inert; its only visible cost is that the key
+    leaves the fact namespace's `_extras`, the tier that promises nothing.
+    **The maintainer accepted that delta 2026-08-05**, so the batch is closed
+    with no follow-up.
+
+    What remains open in this strand is only the unknown-device policy gate,
     which moves with 17.1.
 
 ### The v1.0 release train · **planned, LAST** (after item 14; nothing ships without it)

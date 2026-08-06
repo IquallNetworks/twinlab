@@ -282,3 +282,300 @@ All three definitions in `examples/` are **fully buildable today**: `mpls-l3vpn.
 its `bandwidth`/`mtu` ride link extras — Tier B, not gated). The repo's examples exercise
 none of the Tier A forms — the gated territory is exactly the syntax Twinlab hasn't needed
 yet, consistent with 17.3's promote-deliberately framing.
+
+*(Written before `examples/mixed-nos.yml` landed 2026-08-05. It too is fully buildable:
+per-node `device` + `module`, one `image:` override, p2p/LAN/stub links, no Tier B key at
+all.)*
+
+---
+
+# 6. Tier B review · 2026-08-05
+
+The review ROADMAP 17.3 deferred. Sections 1–5 are the inventory; this is the decision
+pass over §3.2. **Nothing here is decided — every RECOMMEND waits on the maintainer.**
+
+## 6.1 The bar
+
+Tier B costs nothing structural. Every key in it round-trips losslessly, edits as YAML in
+"Advanced properties", and deploys exactly as authored — the Tier A batch removed the last
+forms that could push a document out of Visual mode entirely. So "promote everything" is
+not the goal and neither is a size-ordered shopping list; **the v1.0 question is narrower:
+where does leaving a key in Tier B make something we already ship look broken?** Three
+findings answer that, and they are what the recommended slate is built from. Everything
+else waits, on purpose — a typed control is a promise about a shape, and each one we add
+is a shape we then owe compatibility to.
+
+## 6.2 The three findings
+
+**F1 — one exotic module empties the protocol UI.** `modulesShape` is all-or-nothing
+against `BUILDER_MODULES = {ospf, bgp, mpls, vrf}`, so `module: [ospf, isis]` puts the
+WHOLE list in lab extras. `doc.modules` is then `[]` — and the BGP-AS, LDP-transport and
+VRF controls are all rendered behind `doc.modules.includes(...)` gates
+(`inspector.tsx:640, 660, 683`). The cascade is the finding: adding one module the builder
+doesn't know **removes the visual editing of the four it does know**, on a lab that is
+otherwise entirely typed. The inspector is honest about it ("managed in Advanced
+properties") but the honesty doesn't help — the user came to edit OSPF.
+
+The fix is a vocabulary widening, not new controls, and it is nearly free: `GET /catalog`
+already serves netlab's FULL per-device module matrix and `use-device-catalog.ts` throws
+away everything outside `BUILDER_MODULES` (`:30`). **Zero backend work.** Scope, counted
+against the six admitted devices: netlab 26.07 has 18 user modules
+(`netsim/modules/*.yml` minus `initial`); the union of what our six support is **17 —
+every one except `eigrp`**, which no admitted device runs.
+
+**F2 — config import produces labs that are 100 % Tier B.** `services/configimport/emit.py`
+emits exactly four things beyond node names and link membership, and all four are extras:
+node `loopback: {ipv4}`, node `config: [imported/<n>.j2]`, link `prefix:` (a CIDR or
+`false`), endpoint `{ipv4: <cidr>|false}`. Address fidelity is the entire point of an
+imported twin, so **every meaningful value in a lab produced by yesterday's feature is raw
+YAML in the builder** — and the import wizard hands the user straight to that lab. This is
+the finding that turns "nice to have" into "we ship a seam".
+
+**F3 — one of our own examples is Tier B.** `campus-lan.yml` sets link `bandwidth`/`mtu`
+(and its header calls them out as a thing the example demonstrates). Two typed number
+fields close it.
+
+## 6.3 Recommended slate
+
+Frontend-only, all of it — no contract change, no backend change, no migration.
+
+### Class 1 · Widen the module vocabulary *(F1)* — RECOMMEND
+
+Take `BUILDER_MODULES` from netlab's own module list rather than the four the builder has
+controls for, and separate **vocabulary** (what parses typed) from **offer** (what gets a
+checkbox):
+
+- vocabulary = netlab's 18, so no module list is ever demoted;
+- offer = the modules at least one cataloged device supports (17 today — `eigrp` gets no
+  checkbox), plus any module already present in the document, so a key is never
+  un-removable;
+- per-device greying already exists (`deviceSupports`, `inspector.tsx:1041`) and starts
+  doing real work the moment the intersection widens.
+
+Presence-only is the honest promise: the module goes in the list, its attributes
+(`isis.net`, `stp.priority`, …) stay extras. For `vlan`/`vxlan`/`evpn` a bare presence is
+close to inert without their `vlans:` definitions — that is fine, the dry `netlab create`
+stays the judge; we are removing a trap, not claiming support.
+
+The one real cost: `FALLBACK_DEVICE_CATALOG` currently says "all four" for four devices
+because the intersection made that true. It needs the real per-device lists mirrored from
+`SUPPORTED_DEVICES` — a new drift surface between frontend and backend, though the
+admission procedure already requires both to move together (step 1).
+
+### Class 2 · Per-subkey splits, killing the sibling-drags-the-key rule — RECOMMEND
+
+The same shape as F1's cascade, one level down, and the same reasoning **delta 26 just
+settled for the fact namespace**: partition per object, not per top-level key, so an
+unpinned sibling never hides a pinned member.
+
+| Today | After |
+|---|---|
+| `bgp: {as, router_id}` → whole key extras, **`as` included** | `as` typed; `{router_id}` rides `bgp` extras |
+| `mpls: {ldp, vpn}` → whole key extras | each typed; the rest rides `mpls` extras |
+| `vrfs:` where ANY vrf has `rd`/`rt` → whole key extras | the vrf NAME list typed; per-vrf attributes ride extras keyed by name |
+| `groups:` with one non-mapping value → **entire groups UI disappears** | that entry rides extras; the rest edit normally |
+
+Emission merges the halves back into one mapping (`bgp: {as: 65000, router_id: …}`) rather
+than leaning on netlab's dotted-key merge the way the `defaults.device` split does — same
+result, one less netlab behaviour to depend on. The advanced editors gain sub-key errors
+("the `as` subkey is owned by the BGP AS control"), keeping the one-classifier invariant.
+
+Note this deliberately does NOT type `rd`/`rt`/`import`/`export` (§3.2 floats it): the
+split alone removes the trap, and their shapes are list-valued and route-target-shaped —
+a control worth building only on demand.
+
+### Class 3 · The import surface *(F2)* — RECOMMEND
+
+Typed fields for exactly the four keys the factory emits:
+
+- **link `prefix`** — string CIDR **or `false`** (delta 23's unnumbered/L2 wire). The dict
+  form (`{ipv4, ipv6, allocation}`) stays extras.
+- **endpoint `ipv4` / `ipv6`** — string **or `false`** (delta 23 spells `ipv4: false` on
+  the addressed-mixed wire, and netlab invents an address without it), plus **`ifname`**,
+  which imported labs carry for interface-name fidelity. This is the first typed field at
+  the endpoint level; the inspector already has a per-endpoint section to put it in.
+- **node `loopback`** — the `{ipv4}`/`{ipv6}` subset only; `{pool: …}` and the bool form
+  stay extras.
+- **node `config`** — the string list, reusing the group section's template picker.
+
+Cross-check when this lands: `SelfLinkAddressingHint` (`inspector.tsx:1356`) reads
+`link.extras['prefix']` and the endpoints' `extras['ipv4']` directly — it must read the
+typed fields or it will stop firing exactly when the user starts using the new controls.
+
+### Class 4 · Link `bandwidth` / `mtu` *(F3)* — RECOMMEND
+
+Two number fields beside `prefix`, netlab's own bounds on `mtu` (64–9216). Small, and it
+retires the last Tier B key in `examples/`.
+
+### Class 5 · Three node attributes, added by the 2026-08-05 re-analysis — RECOMMEND
+
+The first pass excluded the node core attributes on "no evidence anyone edits them" —
+which is a sample of one maintainer, not evidence. Re-derived from netlab 26.07's source
+(§6.4.1), three of them turn out to belong in the slate for the SAME reason as F1: not
+because they are cheap, but because the builder currently shows something untrue.
+
+- **`box` — a typed control that lies.** `box` and `image` are ONE setting, and `box`
+  WINS: `augment/nodes.py:335–341` returns early on `n.box` before ever looking at
+  `n.image` (which it otherwise moves into `box` and deletes). The builder types `image`
+  and leaves `box` in extras — so a node carrying `box:` shows an EMPTY, editable Image
+  field while the advanced properties silently decide the image, and editing the field
+  changes nothing. Fix: one control, both spellings, remembering which was authored (the
+  `listName` precedent) and preferring `box` when a document sets both, exactly as netlab
+  does.
+- **`group` — the second spelling of a relationship the builder already models.**
+  `augment/groups.py:405–423` appends a node's `group:` entries straight into
+  `groups[<name>].members`; the two spellings are indistinguishable after expansion. Today
+  the node-side one rides node extras, so the Groups UI UNDERSTATES membership — a group
+  whose members all declare themselves node-side renders empty. Fix: parse it into the
+  member list and emit the canonical `members:`, with a notice — the link-group
+  expand-on-parse pattern from Tier A, and it must be proven the same way (byte-identical
+  expanded topology).
+- **`role` — an enum with consequences.** `nodes.py:224` gives a loopback interface only to
+  `role: router` (the bird asymmetry documented in `mixed-nos.yml`), and `nodes.py:481–489`
+  validates the value against a PER-DEVICE allowed set. A select beats a free-text YAML
+  key: four values, real behaviour behind them, per-device validation available. The
+  weakest of the three — it fixes no lie — but it clears the §6.4.2 bar on its own.
+
+## 6.4 Deliberately NOT in the slate
+
+**Re-derived 2026-08-05.** The first pass leaned on "no demand" for several of these,
+reading demand off `examples/`, the import output and the sweep labs — i.e. off one
+maintainer's use of the tool. That is not evidence about users, so each exclusion below now
+rests on netlab's own behaviour or on an intrinsic property of the key. Where the honest
+reason turned out to be different, the entry moved (three of them into Class 5).
+
+### 6.4.1 Inert under the provider we deploy through
+
+- **Node `cpu` and `memory`** — libvirt-only in netlab 26.07: the sole consumer is
+  `templates/provider/libvirt/define-domain.j2`, and the clab template set never reads
+  them. Twinlab is clab-only, so these keys change nothing about a deployed lab — the same
+  category as `tc:` and `tools:`, not a coverage gap. (Container-side sizing for the
+  vrnetlab platform is a clab `env`/kind concern, not a netlab node attribute.)
+- **Link `tc:`** — Twinlab's deploy path drops it (gap 1 / delta 25, undecided). Typing a
+  key that does nothing is UI over a no-op; it sequences after that decision, never before.
+- **`tools:` and `validate:`** — the PUT rejects `tools:` outright (422
+  `unsupported_directive`, gap 2) and Twinlab runs its own test suites. Permanently B.
+  *(Adjacent and out of scope: the builder could warn on backend-rejected keys before the
+  save round-trip.)*
+
+### 6.4.2 Live, but a typed control would add nothing over the YAML
+
+The criterion that replaces "no demand": **promote when the control does something the
+extras editor cannot** — fix a lie, model a relationship, offer an enum or picker, grey by
+the device catalog. A scalar with no validation beyond its type is equally editable either
+way, and typing it only adds a shape we then owe compatibility to.
+
+- **Node `id`, `router_id`, `mtu`, `unmanaged`, `skip_config`** — all live under clab, all
+  plain scalars. A number field for `id` is not better than `id: 7`.
+- **`plugin:`** — a list of strings whose whole purpose is to inject attributes that stay
+  extras regardless. The list control would type the container and nothing it contains.
+
+### 6.4.3 Live and worth typing, but too large to design before a tag
+
+- **`vlans:` + the vlan module's semantics** — access/trunk/native propagation, a VLAN
+  palette, and canvas meaning for vlan-member links. Genuinely valuable and genuinely
+  netlab's most complex module; the exclusion is size and design risk immediately before a
+  release, not lack of interest. Presence-only via Class 1 is what v1.0 gets, and a
+  vlan lab still parses fully typed apart from the `vlans:` block and per-link vlan
+  attributes.
+- **`addressing:` / `prefix:` pools** — the strongest post-v1.0 candidate. Real under clab
+  and central to how netlab users control an address plan, but it needs a design answer
+  first: the backend re-pins `addressing.mgmt` on every PUT, so the editor must own the
+  non-mgmt pools while showing the mgmt one as backend-managed.
+- **`components:`/`include:` see-through** — large; Tier A already shipped the minimum (the
+  endpoint-name rule plus the device-blocker waiver), so a components document parses and
+  saves today.
+
+## 6.5 Sizing and order
+
+Seven frontend commits; each extends `pnpm check:build-doc` (36 checks today) and each
+keeps the round-trip invariant `parse(emit(doc)) == doc`.
+
+1. Module vocabulary + per-device fallback lists + offer set *(Class 1)*
+2. Per-subkey splits: bgp, mpls, vrfs, groups *(Class 2)*
+3. Link fields: prefix, bandwidth, mtu; self-link hint reads typed *(Classes 3–4)*
+4. Endpoint fields: ipv4, ipv6, ifname *(Class 3)*
+5. Node fields: loopback, config *(Class 3)*
+6. Node `box`/`group`/`role` *(Class 5)*
+7. Docs + memory
+
+Order matters only for 1 before 2 (the vocabulary decides what `modulesShape` accepts) and
+3 before 4 (both touch the link inspector).
+
+**Verification** — the same shape the Tier A batch used, which is what made it trustworthy:
+the harness checks under plain node; all four `examples/` definitions parsing and re-emitting
+byte-stably; a real config-import output opened in the builder and saved unchanged (the F2
+proof); and a `netlab create` over each emitted document, because the round-trip invariant
+proves we did not lose the user's YAML, not that netlab likes it. Class 5's `group:`
+normalization additionally needs the link-group treatment — the expanded topology
+byte-identical before and after the rewrite.
+
+## 6.6 Decisions
+
+Reviewed 2026-08-05. **Classes 1–4 APPROVED**; the exclusion list was sent back because it
+rested on our own usage as a demand signal, and the re-analysis (§6.4, Class 5) is the
+result. Answers to the calls the review raised:
+
+1. **The slate** — Classes 1–4 in. Class 5 follows from the re-analysis and is
+   RECOMMENDED, not yet approved: it fixes two cases where the builder displays something
+   untrue (`box`, `group`) plus one enum (`role`).
+2. **`eigrp`** — in the parse vocabulary, out of the checkbox offer: a module list must
+   never demote, and a permanently-greyed box for a device set that cannot run it is
+   noise. Asymmetry is the honest shape.
+3. **Presence-only for `vlan`/`vxlan`/`evpn`** — honest. The checkbox states what the
+   document says; the dry `netlab create` remains the judge of whether the result is
+   deployable, exactly as for every other module.
+4. **Class 2's blast radius** — accepted. It re-partitions the typed/extras boundary for
+   four keys, so every stored definition using them re-partitions on next parse; lossless,
+   round-trip-guarded, and it is the largest behavioural change in the slate.
+5. **Sequencing** — full slate, ahead of Playwright.
+
+## 6.7 As shipped · 2026-08-05
+
+All five classes, six frontend commits, no contract or backend change. The
+harness went from 36 checks to **90**.
+
+| Class | Commit |
+|---|---|
+| 1 · module vocabulary | the builder's module vocabulary is netlab's whole module set |
+| 2 · subkey splits | bgp/mpls per subkey; vrf declarations and groups per entry |
+| 3–4 · link fields | the link's prefix, bandwidth and mtu |
+| 3 · endpoint fields | the endpoint's ifname, ipv4 and ipv6 |
+| 3 · node fields | the node's loopback pin and config templates |
+| 5 · re-analysis | the node's box, role and group |
+
+**Live verification.** Both spellings of six documents were created under
+netlab 26.07 **in the same directory** (netlab derives the lab name from it and
+records the input path, so separate directories diff on the harness rather than
+on the documents) and their expanded topologies compared:
+
+- **byte-identical**: `box`, `role`, the merged `bgp`/`mpls` mappings, the vrf
+  attribute split beside a groups-level `_auto_create`, and config import's
+  link shape (typed endpoint `ipv4`/`ifname`, `ipv4: false`, `prefix: false`,
+  `bandwidth`, `mtu`, node `loopback`).
+- **one key different**: the node-`group` fold. netlab keeps a vestigial
+  `group: [core]` on the node's own dict, which the folded document does not
+  carry. Everything else matches, **the generated Ansible inventory is
+  identical** — same `core` group, same members, same group_vars — and no
+  netlab code reads a node-level `group` after expansion (`augment/groups.py`
+  consumes it during expansion; the only other hits are link groups and a
+  device-features `group`). So the fold is behaviourally inert. Its one visible
+  cost: `node.group` leaves the fact namespace, where it sat in `_extras` — the
+  tier that promises nothing by construction (delta 26).
+
+  This is the one place the slate did not meet the bar §6.5 set for it
+  ("byte-identical expanded topology", the link-group standard).
+  **ACCEPTED 2026-08-05** — the delta is a key netlab writes and nothing reads,
+  against a Groups UI that otherwise understates membership whenever a lab
+  spells it node-side. The alternative was keeping the node-side spelling typed
+  instead of folding, which would have given membership two sources of truth in
+  the UI; that is the fix to revisit if the vestigial key ever turns out to
+  matter.
+
+Three test topologies of mine were wrong before they were right, and each was
+a fact worth keeping: a group granting `bgp` without an AS fails for BOTH
+spellings (not a fold bug — my `tail` had hidden the matching failure);
+**netlab rejects a node carrying both `box` and `image`** outright, since the
+early return on `box` leaves the `image` key it would otherwise consume; and a
+P router inheriting a global `vrf` module crashes netlab itself inside
+`mpls.node_adjust_mplsvpn`.

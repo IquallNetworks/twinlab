@@ -173,16 +173,32 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   — while bare links keep the terse `a-b`/list spellings; one-endpoint stubs render as small
   terminator canvas nodes, `stub:<n>` session ids), **groups** (first-class 2026-08-03 —
   members + `config` template attachment; anything
-  else a group broadcasts rides its extras), the proven ospf/bgp/mpls/vrf set, curated
+  else a group broadcasts rides its extras), netlab's whole module vocabulary, curated
   `lib/device-catalog.ts` with the module-support matrix, plus the server-injected
-  name/addressing keys — and every key OUTSIDE it (unknown top-level keys, unknown node
-  attributes, overflow forms like `bgp: {as, router_id}` or a vrf with `rd:`) lands VERBATIM in
+  name/addressing keys — and every key OUTSIDE it lands VERBATIM in
   `extras` at the lab/node/group/link/endpoint level, edited as YAML in the inspector's
   "Advanced properties"
   sections (`build/extras-editor.tsx`). ONE shape classifier decides typed-vs-extras for both
   the parser and the editors, so a key never lives in both places (typed controls whose key the
   extras own disable with a pointer; an edge-path same-key collision is an emit-time save
-  blocker). **The Tier A batch (ROADMAP 17.3) shipped 2026-08-04**, so `parseBuildDoc` now
+  blocker). **The Tier B batch (ROADMAP 17.3) shipped 2026-08-05**, reviewed off
+  `docs/nos-sweep/builder-coverage-gaps.md` §6 — three findings, not a wish list: one unknown
+  module used to demote the WHOLE `module:` list to extras and the bgp/mpls/vrf controls are
+  gated on that list, so a single `isis` emptied the protocol UI; config import emits exactly
+  four keys and all four were extras, so every address in an imported twin was raw YAML; and
+  `campus-lan.yml` uses link `bandwidth`/`mtu`. So the module VOCABULARY is now netlab's whole
+  18-module set (parse types any of them; the checkbox OFFER is the ones some cataloged device
+  can run — `eigrp` parses but is not offered — and per-device greying does the real work),
+  the whole-key demotions became PER-SUBKEY splits (`bgp: {as, router_id}` types the `as`
+  and rides the rest; `mpls` likewise; a vrf's rd/rt rides its own declaration; a groups-level
+  `_auto_create` no longer empties the Groups UI) — the same per-object partition delta 26
+  settled for facts — and these are typed: link `prefix`/`bandwidth`/`mtu`, endpoint
+  `ifname`/`ipv4`/`ipv6`, node `loopback`/`config`/`role`, plus node `box` (ONE setting with
+  `image`, and box WINS) and node `group:` (folded onto the group, with a notice). `prefix:
+  false` and `ipv4: false` are checkboxes because netlab INVENTS an address otherwise.
+  Deliberately still extras: `vlans:` semantics, `plugin:`, address pools, link `tc:` (behind
+  delta 25), `tools:`/`validate:` (the PUT rejects the first, Twinlab owns the second), and
+  node `cpu`/`memory` — libvirt-only in netlab 26.07, so inert under the clab provider. **The Tier A batch (ROADMAP 17.3) shipped 2026-08-04**, so `parseBuildDoc` now
   gates only on what NETLAB itself rejects — invalid YAML, attribute-only link entries,
   interfaces mixed with node keys, undeclared link endpoints, a name outside netlab's id rule
   (`[A-Za-z_][A-Za-z0-9_-]{0,15}` — hyphens legal, 16 chars) — plus the unknown-device POLICY
@@ -215,7 +231,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   stub, attributed LAN) are fully buildable visually. Text mode
   is the full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
   `netlab_invalid` renders as a panel with the envelope's `extras.stderr` (`ApiError` carries
-  extras). Unsaved changes get a router blocker + beforeunload guard. The parser/emitter's invariants are guarded by **`pnpm check:build-doc`** (`frontend/scripts/`) — 36 round-trip/gate/blocker checks incl. all three `examples/` definitions, bundling the pure module with vite's own API and running it under plain node, since the frontend has no test runner. Phase 5 (editor +
+  extras). Unsaved changes get a router blocker + beforeunload guard. The parser/emitter's invariants are guarded by **`pnpm check:build-doc`** (`frontend/scripts/`) — 90 round-trip/gate/blocker checks incl. all three `examples/` definitions, bundling the pure module with vite's own API and running it under plain node, since the frontend has no test runner. Phase 5 (editor +
   polish): a shared **`CodeEditor`** (`components/code-editor.tsx`, hand-rolled CodeMirror 6
   wrapper — controlled value with an echo guard, compartments, minimalSetup + explicit
   extensions, themed purely from identity CSS vars with three `--id-code-*` syntax tokens)

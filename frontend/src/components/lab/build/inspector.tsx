@@ -41,8 +41,8 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
-  BUILDER_MODULES,
   NODE_NAME_MAX,
+  NODE_ROLES,
   NODE_NAME_RE,
   declaredVrfs,
   emitNodeFragment,
@@ -57,18 +57,22 @@ import {
   type BuildGroup,
   type BuildLink,
   type BuildNode,
+  type BuildNodeLoopback,
+  type BuildNodeVrf,
   type BuilderModule,
+  type NodeRole,
+  type LinkAttrs,
   type LinkEndpoint,
 } from '@/lib/build-doc'
 import { api } from '@/lib/api'
-import { catalogDevice, deviceSupports } from '@/lib/device-catalog'
+import { catalogDevice, deviceSupports, offeredModules } from '@/lib/device-catalog'
 import { toastError } from '@/lib/error-toast'
 import { GROUP_PALETTE, groupColor, type GroupStyles } from '@/lib/group-colors'
 import { customConfigQueryOptions, meQueryOptions, nodeTemplatesQueryOptions } from '@/lib/queries'
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { cn } from '@/lib/utils'
 
-import type { BuilderAction, BuilderState } from './build-state'
+import type { BuilderAction, BuilderState, EndpointPatch } from './build-state'
 import { ExtrasEditor } from './extras-editor'
 
 // The builder's right-hand inspector: renders the form for whatever is
@@ -129,18 +133,22 @@ const vrfNameError = (draft: string, doc: BuildDoc): string | null => {
   if (draft.length === 0) return null // nothing typed yet — no error, no add
   if (draft.length > NODE_NAME_MAX) return `at most ${NODE_NAME_MAX} characters`
   if (!NODE_NAME_RE.test(draft)) return 'lowercase letters, digits and underscores'
-  if (doc.vrfs.includes(draft)) return `"${draft}" already exists`
+  if (doc.vrfs.some((vrf) => vrf.name === draft)) return `"${draft}" already exists`
   return null
 }
 
 function ModuleCheckboxes({
   idPrefix,
+  offered,
   selected,
   onToggle,
   isDisabled,
   disabledHint,
 }: {
   idPrefix: string
+  // The vocabulary is netlab's whole module set; only what some cataloged
+  // device can run (plus what this document already selects) is offered.
+  offered: readonly BuilderModule[]
   selected: readonly BuilderModule[]
   onToggle: (module: BuilderModule, checked: boolean) => void
   isDisabled?: (module: BuilderModule) => boolean
@@ -148,7 +156,7 @@ function ModuleCheckboxes({
 }) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-2">
-      {BUILDER_MODULES.map((module) => {
+      {offered.map((module) => {
         const id = `${idPrefix}-${module}`
         const disabled = isDisabled?.(module) ?? false
         return (
@@ -180,6 +188,74 @@ const groupNameError = (draft: string, doc: BuildDoc, current?: string): string 
   if (!NODE_NAME_RE.test(draft)) return 'lowercase letters, digits and underscores'
   if (doc.groups.some((group) => group.name === draft)) return `"${draft}" already exists`
   return null
+}
+
+/** netlab's `config: [...]` — the custom-config templates attached to a
+ * group's members or to one node. Shared by both, so the two spellings of the
+ * same netlab key are edited the same way. */
+function ConfigTemplatePicker({
+  idPrefix,
+  knownTemplates,
+  config,
+  onChange,
+}: {
+  idPrefix: string
+  knownTemplates: readonly string[]
+  config: readonly string[]
+  onChange: (next: string[]) => void
+}) {
+  // A stored document may reference templates this lab doesn't carry — keep
+  // them visible and removable rather than dropping them from the picker.
+  const unknown = config.filter((entry) => !knownTemplates.includes(entry))
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">Config templates</span>
+      {knownTemplates.length === 0 && unknown.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No templates available.</p>
+      ) : (
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          {knownTemplates.map((template) => {
+            const id = `${idPrefix}-config-${template}`
+            return (
+              <div key={template} className="flex items-center gap-1.5">
+                <Checkbox
+                  id={id}
+                  checked={config.includes(template)}
+                  onCheckedChange={(checked) =>
+                    onChange(
+                      checked === true
+                        ? [...config, template]
+                        : config.filter((entry) => entry !== template),
+                    )
+                  }
+                />
+                <Label htmlFor={id} className="font-mono text-xs font-normal">
+                  {template}
+                </Label>
+              </div>
+            )
+          })}
+          {unknown.map((entry) => (
+            <span
+              key={entry}
+              className="flex items-center gap-1 rounded-[2px] border px-1.5 py-0.5 font-mono text-xs"
+              title="Not among this lab's templates — kept as stored"
+            >
+              {entry}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                title={`Remove ${entry}`}
+                onClick={() => onChange(config.filter((item) => item !== entry))}
+              >
+                <X className="size-3" />
+              </Button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function GroupColorDot({
@@ -294,9 +370,6 @@ function GroupBlock({
       patch: { config: next.length > 0 ? next : undefined },
     })
   const config = group.config ?? []
-  // A stored group may reference templates this lab doesn't carry — keep them
-  // visible and removable rather than dropping them from the picker.
-  const unknownConfig = config.filter((entry) => !knownTemplates.includes(entry))
 
   return (
     <div className="flex flex-col gap-2 rounded-[2px] border p-2">
@@ -413,53 +486,12 @@ function GroupBlock({
         </div>
       )}
 
-      <div className="flex flex-col gap-1">
-        <span className="text-xs text-muted-foreground">Config templates</span>
-        {knownTemplates.length === 0 && unknownConfig.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No templates available.</p>
-        ) : (
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
-            {knownTemplates.map((template) => {
-              const id = `build-group-${group.name}-config-${template}`
-              return (
-                <div key={template} className="flex items-center gap-1.5">
-                  <Checkbox
-                    id={id}
-                    checked={config.includes(template)}
-                    onCheckedChange={(checked) =>
-                      setConfig(
-                        checked === true
-                          ? [...config, template]
-                          : config.filter((entry) => entry !== template),
-                      )
-                    }
-                  />
-                  <Label htmlFor={id} className="font-mono text-xs font-normal">
-                    {template}
-                  </Label>
-                </div>
-              )
-            })}
-            {unknownConfig.map((entry) => (
-              <span
-                key={entry}
-                className="flex items-center gap-1 rounded-[2px] border px-1.5 py-0.5 font-mono text-xs"
-                title="Not among this lab's templates — kept as stored"
-              >
-                {entry}
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  title={`Remove ${entry}`}
-                  onClick={() => setConfig(config.filter((item) => item !== entry))}
-                >
-                  <X className="size-3" />
-                </Button>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
+      <ConfigTemplatePicker
+        idPrefix={`build-group-${group.name}`}
+        knownTemplates={knownTemplates}
+        config={config}
+        onChange={setConfig}
+      />
 
       <ExtrasEditor
         key={JSON.stringify(group.extras ?? {})}
@@ -552,6 +584,24 @@ function GroupsSection({
           Add
         </Button>
       </div>
+      {/* Settings that sit BESIDE the groups rather than being one (netlab
+          reads a groups-level `_auto_create`). Only shown where they exist —
+          they are rare, and there is nothing to teach when there are none. */}
+      {doc.groupsExtras !== undefined && (
+        <ExtrasEditor
+          key={JSON.stringify(doc.groupsExtras)}
+          idPrefix="build-groups-extras"
+          label="groups-level settings"
+          value={doc.groupsExtras}
+          keyError={(_key, value) =>
+            value !== null && typeof value === 'object' && !Array.isArray(value)
+              ? 'a mapping here is a group — add it above instead'
+              : null
+          }
+          onApply={(extras) => dispatch({ type: 'patch-lab', patch: { groupsExtras: extras } })}
+          placeholder={'settings beside the groups, e.g.\n_auto_create: true'}
+        />
+      )}
     </div>
   )
 }
@@ -625,6 +675,7 @@ function LabInspector({
           <>
             <ModuleCheckboxes
               idPrefix="build-lab-mod"
+              offered={offeredModules(devices, doc.modules)}
               selected={doc.modules}
               onToggle={(module, checked) =>
                 dispatch({ type: 'patch-lab', patch: { modules: toggled(doc.modules, module, checked) } })
@@ -690,11 +741,12 @@ function LabInspector({
           {doc.vrfs.length === 0 && (
             <p className="text-xs text-muted-foreground">None yet — add one to place customer sites.</p>
           )}
-          {doc.vrfs.map((vrf) => {
+          {doc.vrfs.map(({ name: vrf, extras }) => {
             const members = memberCount(vrf)
             const remove = () => dispatch({ type: 'remove-vrf', name: vrf })
             return (
-              <div key={vrf} className="flex items-center justify-between gap-2 rounded-[2px] border px-2 py-1">
+              <div key={vrf} className="flex flex-col gap-1 rounded-[2px] border px-2 py-1">
+              <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-sm">{vrf}</span>
                 <span className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">
@@ -727,6 +779,18 @@ function LabInspector({
                     </Button>
                   )}
                 </span>
+              </div>
+              {/* rd, rt, import/export: netlab derives them when absent, so
+                  they stay YAML rather than becoming four more controls. */}
+              <ExtrasEditor
+                key={JSON.stringify(extras ?? {})}
+                idPrefix={`build-vrf-${vrf}`}
+                label={`${vrf} attributes`}
+                value={extras}
+                keyError={() => null}
+                onApply={(next) => dispatch({ type: 'patch-vrf', name: vrf, extras: next })}
+                placeholder={'vrf attributes, e.g.\nrd: "65000:1"\nexport: [ "65000:1" ]'}
+              />
               </div>
             )
           })}
@@ -891,14 +955,30 @@ function SaveNodeTemplate({ doc, node }: { doc: BuildDoc; node: BuildNode }) {
 
 function NodeInspector({
   doc,
+  labName,
   node,
   dispatch,
 }: {
   doc: BuildDoc
+  labName: string
   node: BuildNode
   dispatch: Dispatch<BuilderAction>
 }) {
   const { devices } = useDeviceCatalog()
+  const templates = useQuery(customConfigQueryOptions(labName))
+  const knownTemplates = [
+    ...(templates.data?.builtin.map((template) => template.name) ?? []),
+    ...Object.keys(templates.data?.custom_config ?? {}).map((path) => path.replace(/\.j2$/, '')),
+  ]
+  // A cleared field drops the key; an empty loopback drops the mapping.
+  const setLoopback = (key: 'ipv4' | 'ipv6', raw: string) => {
+    const next: BuildNodeLoopback = { ...node.loopback }
+    if (raw === '') delete next[key]
+    else next[key] = raw
+    const empty =
+      next.ipv4 === undefined && next.ipv6 === undefined && next.extras === undefined
+    dispatch({ type: 'patch-node', name: node.name, patch: { loopback: empty ? undefined : next } })
+  }
   const [nameDraft, setNameDraft] = useState(node.name)
   const draftError = nameError(nameDraft, doc, node.name)
   const commitName = () => {
@@ -926,7 +1006,12 @@ function NodeInspector({
     (node.mplsVpn === true ? 1 : 0) +
     Object.keys(node.vrfs ?? {}).length +
     (vrfsOwned ? 1 : 0)
-  const advancedCount = (node.image !== undefined ? 1 : 0) + Object.keys(node.extras ?? {}).length
+  const advancedCount =
+    (node.image !== undefined ? 1 : 0) +
+    (node.role !== undefined ? 1 : 0) +
+    (node.loopback !== undefined ? 1 : 0) +
+    (node.config !== undefined ? 1 : 0) +
+    Object.keys(node.extras ?? {}).length
 
   return (
     <div className="flex flex-col gap-4">
@@ -1030,6 +1115,7 @@ function NodeInspector({
         {overridden ? (
           <ModuleCheckboxes
             idPrefix={`build-node-mod-${node.name}`}
+            offered={offeredModules(devices, effectiveModules)}
             selected={effectiveModules}
             onToggle={(module, checked) =>
               dispatch({
@@ -1183,7 +1269,7 @@ function NodeInspector({
             const membership = node.vrfs?.[vrf]
             const member = membership !== undefined
             const id = `build-node-vrf-${vrf}`
-            const setVrfs = (next: Record<string, { loopback?: boolean }>) =>
+            const setVrfs = (next: Record<string, BuildNodeVrf>) =>
               dispatch({
                 type: 'patch-node',
                 name: node.name,
@@ -1214,7 +1300,11 @@ function NodeInspector({
                       onCheckedChange={(checked) =>
                         setVrfs({
                           ...node.vrfs,
-                          [vrf]: checked === true ? { loopback: true } : {},
+                          // keep whatever else this node says about the vrf
+                          [vrf]: {
+                            ...membership,
+                            ...(checked === true ? { loopback: true } : { loopback: undefined }),
+                          },
                         })
                       }
                     />
@@ -1250,6 +1340,64 @@ function NodeInspector({
               }}
             />
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="build-node-role">Role</Label>
+            <Select
+              value={node.role ?? 'default'}
+              onValueChange={(value) =>
+                dispatch({
+                  type: 'patch-node',
+                  name: node.name,
+                  patch: { role: value === 'default' ? undefined : (value as NodeRole) },
+                })
+              }
+            >
+              <SelectTrigger id="build-node-role" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">(the device&apos;s own role)</SelectItem>
+                {NODE_ROLES.map((role) => (
+                  <SelectItem key={role} value={role}>
+                    {role}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="build-node-loopback4">Loopback IPv4</Label>
+            <Input
+              id="build-node-loopback4"
+              className="h-8 font-mono"
+              placeholder="from the loopback pool"
+              value={node.loopback?.ipv4 ?? ''}
+              onChange={(event) => setLoopback('ipv4', event.target.value)}
+            />
+            <Label htmlFor="build-node-loopback6">Loopback IPv6</Label>
+            <Input
+              id="build-node-loopback6"
+              className="h-8 font-mono"
+              placeholder="from the loopback pool"
+              value={node.loopback?.ipv6 ?? ''}
+              onChange={(event) => setLoopback('ipv6', event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              netlab creates a loopback interface for router-role devices only.
+            </p>
+          </div>
+          <ConfigTemplatePicker
+            idPrefix={`build-node-${node.name}`}
+            knownTemplates={knownTemplates}
+            config={node.config ?? []}
+            onChange={(next) =>
+              dispatch({
+                type: 'patch-node',
+                name: node.name,
+                patch: { config: next.length > 0 ? next : undefined },
+              })
+            }
+          />
           <ExtrasEditor
             key={JSON.stringify(node.extras ?? {})}
             idPrefix={`build-node-${node.name}`}
@@ -1291,6 +1439,115 @@ function LinkNameInput({
   )
 }
 
+/** A number field that clears its key when emptied. netlab's own bounds are
+ * the min/max — the dry create is still the judge, this just stops the
+ * obvious typo. */
+function LinkNumberInput({
+  id,
+  label,
+  value,
+  placeholder,
+  min,
+  max,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: number | undefined
+  placeholder: string
+  min?: number
+  max?: number
+  onChange: (next: number | undefined) => void
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="number"
+        className="h-8 font-mono"
+        placeholder={placeholder}
+        min={min}
+        max={max}
+        value={value ?? ''}
+        onChange={(event) => {
+          const raw = event.target.value
+          if (raw === '') return onChange(undefined)
+          const parsed = Number(raw)
+          if (Number.isFinite(parsed)) onChange(parsed)
+        }}
+      />
+    </div>
+  )
+}
+
+/** The link's addressing and sizing: netlab's `prefix`, `bandwidth`, `mtu`.
+ * `prefix: false` is the L2 spelling — an unnumbered wire, which is what
+ * config import emits for a link whose endpoints carry no address and what a
+ * self-link needs. */
+function LinkAttrInputs({
+  link,
+  linkIndex,
+  dispatch,
+}: {
+  link: BuildLink
+  linkIndex: number
+  dispatch: Dispatch<BuilderAction>
+}) {
+  const patch = (next: Partial<Pick<LinkAttrs, 'prefix' | 'bandwidth' | 'mtu'>>) =>
+    dispatch({ type: 'patch-link', linkIndex, patch: next })
+  const unnumbered = link.prefix === false
+  return (
+    <>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`build-link-${linkIndex}-prefix`}>Prefix</Label>
+        <Input
+          id={`build-link-${linkIndex}-prefix`}
+          className="h-8 font-mono"
+          placeholder={unnumbered ? 'none (L2 link)' : 'from the pool'}
+          disabled={unnumbered}
+          value={typeof link.prefix === 'string' ? link.prefix : ''}
+          onChange={(event) =>
+            patch({ prefix: event.target.value === '' ? undefined : event.target.value })
+          }
+        />
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id={`build-link-${linkIndex}-l2`}
+            checked={unnumbered}
+            onCheckedChange={(checked) => patch({ prefix: checked === true ? false : undefined })}
+          />
+          <Label
+            htmlFor={`build-link-${linkIndex}-l2`}
+            className="text-xs font-normal text-muted-foreground"
+          >
+            no addressing (L2 link)
+          </Label>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <LinkNumberInput
+          id={`build-link-${linkIndex}-bandwidth`}
+          label="Bandwidth"
+          placeholder="kbps"
+          min={1}
+          value={link.bandwidth}
+          onChange={(bandwidth) => patch({ bandwidth })}
+        />
+        <LinkNumberInput
+          id={`build-link-${linkIndex}-mtu`}
+          label="MTU"
+          placeholder="bytes"
+          min={64}
+          max={9216}
+          value={link.mtu}
+          onChange={(mtu) => patch({ mtu })}
+        />
+      </div>
+    </>
+  )
+}
+
 /** Link-level attributes (bandwidth, mtu, prefix, …). The classifier refuses
  * keys naming declared nodes — those would re-parse as endpoints. */
 function LinkAdvanced({
@@ -1320,7 +1577,11 @@ function LinkAdvanced({
   )
 }
 
-function EndpointAdvanced({
+/** One endpoint: its interface name and addresses (typed — the fidelity an
+ * imported lab depends on), then everything else as YAML. `ipv4: false` is
+ * its own control because a BARE endpoint on an addressed link gets an
+ * address invented for it, which is not the same thing as "no address". */
+function EndpointFields({
   endpoint,
   linkIndex,
   endpointIndex,
@@ -1334,17 +1595,71 @@ function EndpointAdvanced({
   dispatch: Dispatch<BuilderAction>
   bare?: boolean
 }) {
+  const patch = (next: EndpointPatch) =>
+    dispatch({ type: 'patch-endpoint', linkIndex, endpointIndex, patch: next })
+  const id = `build-link-${linkIndex}-${endpointIndex}`
+  const unaddressed = endpoint.ipv4 === false
   return (
-    <ExtrasEditor
-      key={JSON.stringify(endpoint.extras ?? {})}
-      idPrefix={`build-link-${linkIndex}-${endpointIndex}`}
-      label={`${endpoint.node} attributes`}
-      value={endpoint.extras}
-      keyError={() => null}
-      onApply={(extras) => dispatch({ type: 'patch-endpoint', linkIndex, endpointIndex, extras })}
-      placeholder={'per-endpoint attributes, e.g.\nifname: eth9\nipv4: 10.0.0.1/30'}
-      bare={bare}
-    />
+    <>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${id}-ifname`}>Interface name</Label>
+        <Input
+          id={`${id}-ifname`}
+          className="h-8 font-mono"
+          placeholder="netlab assigns one"
+          value={endpoint.ifname ?? ''}
+          onChange={(event) => patch({ ifname: event.target.value })}
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${id}-ipv4`}>IPv4</Label>
+        <Input
+          id={`${id}-ipv4`}
+          className="h-8 font-mono"
+          placeholder={unaddressed ? 'none' : 'from the link prefix'}
+          disabled={unaddressed}
+          value={typeof endpoint.ipv4 === 'string' ? endpoint.ipv4 : ''}
+          onChange={(event) => patch({ ipv4: event.target.value })}
+        />
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id={`${id}-noipv4`}
+            checked={unaddressed}
+            onCheckedChange={(checked) => patch({ ipv4: checked === true ? false : undefined })}
+          />
+          <Label htmlFor={`${id}-noipv4`} className="text-xs font-normal text-muted-foreground">
+            no IPv4 here (netlab invents one otherwise)
+          </Label>
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${id}-ipv6`}>IPv6</Label>
+        <Input
+          id={`${id}-ipv6`}
+          className="h-8 font-mono"
+          placeholder="from the link prefix"
+          disabled={endpoint.ipv6 === false}
+          value={typeof endpoint.ipv6 === 'string' ? endpoint.ipv6 : ''}
+          onChange={(event) => patch({ ipv6: event.target.value })}
+        />
+      </div>
+      <ExtrasEditor
+        key={JSON.stringify(endpoint.extras ?? {})}
+        idPrefix={id}
+        label={`${endpoint.node} attributes`}
+        value={endpoint.extras}
+        keyError={(key, value) => {
+          if (key === 'ifname' && typeof value === 'string') return 'use the Interface name field'
+          if ((key === 'ipv4' || key === 'ipv6') && (typeof value === 'string' || value === false)) {
+            return `use the ${key.toUpperCase()} field`
+          }
+          return null
+        }}
+        onApply={(extras) => patch({ extras })}
+        placeholder={'per-endpoint attributes, e.g.\nospf.cost: 100'}
+        bare={bare}
+      />
+    </>
   )
 }
 
@@ -1355,14 +1670,13 @@ function EndpointAdvanced({
  * editing instead of blocking a save the server would judge anyway. */
 function SelfLinkAddressingHint({ link }: { link: BuildLink }) {
   if (link.kind !== 'p2p' || link.a.node !== link.b.node) return null
-  const unnumbered = link.extras?.['prefix'] === false
   const addressed = link.a.extras?.['ipv4'] !== undefined && link.b.extras?.['ipv4'] !== undefined
-  if (unnumbered || addressed) return null
+  if (link.prefix === false || addressed) return null
   return (
     <p className="text-xs text-muted-foreground">
       Both ends of a self-link would take the same address from the link prefix, which netlab
-      rejects. Set <span className="font-mono">prefix: false</span> in Advanced properties for an
-      L2 link, or an <span className="font-mono">ipv4</span> on each end.
+      rejects. Tick <span className="font-mono">no addressing</span> for an L2 link, or set an{' '}
+      <span className="font-mono">ipv4</span> on each end.
     </p>
   )
 }
@@ -1405,7 +1719,9 @@ export function Inspector({
       const node = doc.nodes.find((entry) => entry.name === selection.name)
       if (node === undefined) return lab
       // Keyed remount resets the name draft when the selection moves.
-      return <NodeInspector key={node.name} doc={doc} node={node} dispatch={dispatch} />
+      return (
+        <NodeInspector key={node.name} doc={doc} labName={labName} node={node} dispatch={dispatch} />
+      )
     }
     case 'link': {
       const link = doc.links[selection.linkIndex]
@@ -1446,6 +1762,7 @@ export function Inspector({
             </TabsList>
             <InspectorTabContent value="general">
               <LinkNameInput link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
+              <LinkAttrInputs link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
               <Separator />
               <Button
                 variant="outline"
@@ -1458,7 +1775,7 @@ export function Inspector({
               </Button>
             </InspectorTabContent>
             <InspectorTabContent value="ep-a">
-              <EndpointAdvanced
+              <EndpointFields
                 endpoint={link.a}
                 linkIndex={selection.linkIndex}
                 endpointIndex={0}
@@ -1467,7 +1784,7 @@ export function Inspector({
               />
             </InspectorTabContent>
             <InspectorTabContent value="ep-b">
-              <EndpointAdvanced
+              <EndpointFields
                 endpoint={link.b}
                 linkIndex={selection.linkIndex}
                 endpointIndex={1}
@@ -1511,6 +1828,7 @@ export function Inspector({
             </TabsList>
             <InspectorTabContent value="general">
               <LinkNameInput link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
+              <LinkAttrInputs link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
               <Separator />
               <Button
                 variant="outline"
@@ -1523,7 +1841,7 @@ export function Inspector({
               </Button>
             </InspectorTabContent>
             <InspectorTabContent value="endpoint">
-              <EndpointAdvanced
+              <EndpointFields
                 endpoint={link.endpoint}
                 linkIndex={selection.linkIndex}
                 endpointIndex={0}
@@ -1592,6 +1910,7 @@ export function Inspector({
             </p>
           )}
           <LinkNameInput link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
+              <LinkAttrInputs link={link} linkIndex={selection.linkIndex} dispatch={dispatch} />
           <Separator />
           <Button
             variant="outline"
@@ -1627,7 +1946,7 @@ export function Inspector({
           <p className="font-mono text-sm">
             {member.node} on {link.name ?? link.id}
           </p>
-          <EndpointAdvanced
+          <EndpointFields
             endpoint={member}
             linkIndex={selection.linkIndex}
             endpointIndex={selection.endpointIndex}

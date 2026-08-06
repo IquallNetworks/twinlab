@@ -19,6 +19,24 @@ export function flowEdges(canvas: Locator): Locator {
   return canvas.locator('.react-flow__edge')
 }
 
+// Click an edge ON its path: the interaction stroke follows the (possibly
+// curved) path, so a bounding-box-center click can land beside it and select
+// nothing. getPointAtLength gives a guaranteed on-path point in screen space.
+export async function clickEdge(page: Page, edge: Locator): Promise<void> {
+  // mouse.click works in viewport coordinates and cannot reach below the
+  // fold — bring the edge on screen before computing the point.
+  await edge.scrollIntoViewIfNeeded()
+  const point = await edge.locator('.react-flow__edge-path').first().evaluate((el) => {
+    const path = el as unknown as SVGPathElement
+    const mid = path.getPointAtLength(path.getTotalLength() / 2)
+    const ctm = path.getScreenCTM()
+    if (ctm === null) throw new Error('clickEdge: path has no CTM')
+    const screen = new DOMPoint(mid.x, mid.y).matrixTransform(ctm)
+    return { x: screen.x, y: screen.y }
+  })
+  await page.mouse.click(point.x, point.y)
+}
+
 // Move a node by dragging its body — newly added nodes spawn stacked at the
 // same spot, so specs spread them before connecting.
 export async function dragNodeBy(page: Page, node: Locator, dx: number, dy: number): Promise<void> {

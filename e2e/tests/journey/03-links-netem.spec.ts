@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { E2E_NET_LINKS, E2E_NET_NAME } from '../../fixtures/fixtures'
+import { clickEdge } from '../../lib/canvas'
 
 // The link table, bidirectional link impairment, the per-interface
 // unidirectional form, and the canvas edge panel.
@@ -44,10 +45,14 @@ test('the canvas edge panel exposes the impairment editor', async ({ page }) => 
   const canvas = page.getByRole('application', { name: 'Lab topology canvas' })
   await expect(canvas.locator('.react-flow__edge').first()).toBeVisible()
 
-  // The impaired edge (core-a) exists among the drawn edges; click one and
-  // the bottom panel opens with per-endpoint state.
-  await canvas.locator('.react-flow__edge').first().click({ force: true })
-  await expect(page.getByText(/eth\d/).first()).toBeVisible()
+  // Click an edge ON its path — the bottom panel opens with per-endpoint
+  // state (node:iface pairs). Retried: the live canvas reseeds once when the
+  // links query resolves, which can move the edge between the point
+  // computation and the click.
+  await expect(async () => {
+    await clickEdge(page, canvas.locator('.react-flow__edge').first())
+    await expect(page.getByText(/eth\d/).first()).toBeVisible({ timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
 })
 
 test('interface netem is unidirectional and clears from the link row', async ({ page }) => {

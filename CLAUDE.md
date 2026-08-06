@@ -48,12 +48,21 @@ import — input methods part two, approved 2026-08-04, design record in
 import surface the same day: the wiring list became a required input and
 inferred adjacency was removed — and delta 24 batch runtime actions, approved
 2026-08-04: the v1.0 remnant of the SHELVED scenario item, many netem
-impairments + node power events in one request). Two non-compose
+impairments + node power events in one request). Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0) and **`blackbox/`** (the black-box test suite: 140 tests
+client — PyPI-ready, published at v1.0), **`blackbox/`** (the black-box test suite: 140+ tests
 exercising a live stack through the client only; all green, README documents env config and the
-`deploy` marker). The suite is the contract's enforcement — backend changes are verified against
-it, and contract changes go through review.
+`deploy` marker) and **`e2e/`** (the Playwright UX suite, SHIPPED 2026-08-06 — ROADMAP item 14:
+pnpm + @playwright/test, chromium, 51 exact-string specs driving the real frontend against a
+dedicated **`twinlab-e2e`** parallel stack that every run resets to a REAL EMPTY backend via
+`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (31 specs, no containers) → `journey`
+(19 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`); its
+README carries the driving conventions — never `networkidle` (the SSE stream never settles),
+radix/CodeMirror/xterm helpers in `e2e/lib/`, and the barrier truth that the lifecycle badge
+flips to `deployed` when containers are up while the JOB runs on, so the Last-operation badge
+is what gates follow-on work). The blackbox suite is the contract's enforcement — backend
+changes are verified against it, and contract changes go through review; the e2e suite is the
+browser layer's.
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of seven services:
 
@@ -114,9 +123,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   recorded in ROADMAP 16.5); after it comes the **NOS platform
   sweep** (ROADMAP item 17, which since 2026-08-04 also carries the two reviews it
   informs — the `netlab up` parity gaps and the builder coverage review, run in
-  parallel with it), then a
-  comprehensive **Playwright e2e UX suite** (decided 2026-07-31, see ROADMAP —
-  the browser-layer complement to the blackbox suite), and only then the v1.0
+  parallel with it), then the
+  comprehensive **Playwright e2e UX suite** (decided 2026-07-31, **DONE 2026-08-06** — the
+  `e2e/` project above, the browser-layer complement to the blackbox suite; it found and fixed
+  four real bugs on the way — the template mgmt-subnet pin, two clab-api concurrency classes,
+  and the netns-propagation break of node stop), and only then the v1.0
   release train (publish `twinlab-client` to PyPI + tag) goes LAST). Phase 1 (graphical
   identity):
   identities are CSS token packs
@@ -552,13 +563,22 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `ssh -J jump@host:2222 <node-user>@<mgmt_ip>` — Ansible-ready.
 - **`clab-api`** — the containerlab API server (`srl-labs/clab-api-server`, Apache-2.0), host-coupled
   (host network + PID, Docker socket and PAM databases mounted); it deploys lab nodes as sibling
-  containers on the host daemon and authenticates a host user in the `clab_api` group.
+  containers on the host daemon and authenticates a host user in the `clab_api` group. Its
+  `/var/run/netns` bind is **rshared** (2026-08-06, found by the e2e suite): containerlab's node
+  STOP parks the node's interfaces into a netns it creates there, and with the default-private
+  propagation the nsfs mounts don't cross the container boundary — parking then fails ("unknown FS
+  magic", tmpfs) or strands plain files that poison every later stop. It also holds a per-lab netem
+  mutex and 409s/500s colliding or bursty callers — the backend serializes its OWN netem calls,
+  retries the busy rejection on lifecycle verbs and transient 5xx on the cheap idempotent ones
+  (never deploy), and retries the destroy pre-check inspect (`services/clab_api.py`).
 - **`postgres`** — backs the RBAC store (users, roles, permissions, sessions) and the durable lab
   records (`labs`: definition + status + owner) via SQLAlchemy async + Alembic; migrations run in the
   backend entrypoint.
 
 Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner + hostprep quality gates: `ruff
-format` + `ruff check`, basedpyright (strict), pytest.
+format` + `ruff check`, basedpyright (strict), pytest. The e2e suite's gates: `pnpm typecheck` +
+`pnpm test` from `e2e/` (resets and drives the twinlab-e2e stack; one-time host setup in its
+README — the lab-files dir and the three pullable node images).
 
 **Supported NOS platforms are VyOS, FRR and MikroTik RouterOS 7 (CHR), plus the
 bird and dnsmasq daemons and `linux` as the host/endpoint device — the tested set** (the

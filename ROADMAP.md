@@ -42,10 +42,13 @@ said what was left.
    six platforms) and live verification in `docs/fact-namespace.md`; the
    member lists are a contract appendix and a drift-guard test over the
    examples' real netlab output is their teeth.
-4. **Playwright e2e UX suite** (item 14). Sequenced last-but-one on purpose: the
-   surfaces it pins down must be final first.
+4. ~~**Playwright e2e UX suite** (item 14)~~ — **DONE 2026-08-06**: the `e2e/`
+   project (see item 14 below), 51 specs green from a pristine stack reset in
+   ~5 minutes, and four real bugs found and fixed on the way (mgmt-subnet pins
+   in served templates, two clab-api concurrency classes, and the
+   /run/netns mount-propagation break of node stop).
 5. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
-   **LAST**, and it must not ship without item 14.
+   **LAST**; item 14 is done, so this is the whole remainder.
 
 Explicitly NOT in v1.0: the CML licensing revisit (item 20), the acquisition-blocked
 platform tail (item 21), validation-gate parallelization (item 10), packet capture +
@@ -555,22 +558,40 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     Revocation (key delete, grant removal, user deactivation) bites on the
     next connection; established tunnels survive until closed.
 
-### Playwright e2e UX suite · **planned** (after the parked backend batch AND the NOS sweep, BEFORE the release train)
+### Playwright e2e UX suite · **done** (2026-08-06)
 
 14. **A comprehensive end-to-end test suite driving the real frontend with
-    Playwright (Apache-2.0), verifying the UX** — decided 2026-07-31. Sequencing
-    is locked: it lands after the parked backend batch (CLOSED 2026-08-04 —
-    scenarios shelved post-v1.0, their v1.0 remnant delta 24 shipped; see
-    16.5) and the
-    NOS platform sweep with its two companion reviews (item 17) so the surfaces
-    it pins down are final, and before the v1.0
-    release train (item 22), which must not ship without it. The black-box suite already proves the API contract through the
-    client; this suite covers what that cannot — the browser layer: login/auth
-    flows, role-gated affordances actually hidden/shown, the dashboard → lab
-    tabs → builder → deploy → operate journeys, dialogs/toasts/empty states,
-    and the canvas interactions. Scope, structure (against a live stack like
-    blackbox, deploy-marked split, etc.), and gating are designed when picked
-    up.
+    Playwright (Apache-2.0), verifying the UX** — decided 2026-07-31, **SHIPPED
+    2026-08-06** as the top-level **`e2e/`** project (pnpm + @playwright/test,
+    chromium). Structure as designed at pickup: it owns a dedicated parallel
+    compose project, **`twinlab-e2e`** (the nokia port-shift pattern — 5373/
+    2422/8290/8291, pool 10.79/16, own `LAB_FILES_DIR`), and every run starts
+    from a REAL EMPTY backend: `e2e/scripts/stack.sh reset` sweeps leftover
+    e2e lab containers/networks/bridges/park-netns, drops the volumes, clears
+    lab files and brings the stack back up (fresh migrations + RBAC seed +
+    bootstrap admin). Three Playwright projects — `setup` (the login spec,
+    which saves the admin storageState), `fast` (31 specs, no containers:
+    empty states, users/groups, lab creation, the visual builder incl.
+    drag-to-connect, text mode + rejection surfaces, template library, import
+    wizard, account credentials, role gating with a second signed-in context,
+    command palette) and `journey` (19 specs deploying the purpose-built
+    `e2e-net` — an OSPF triangle of two VyOS + one FRR with two linux hosts on
+    a LAN and a stub, pullable images only — through deploy + config push +
+    config-time gate, nodes/logs/terminal, link table + netem both ways +
+    canvas edge panel, on-demand validation + facts, drift + Changes diff +
+    redeploy, whole-lab power, destroy/delete). One worker, ordered stateful
+    specs, exact-string assertions throughout; **51/51 green from reset in
+    ~5 min**. It caught four real bugs, all fixed: published templates served
+    the source lab's pinned mgmt subnet (every instantiation 409'd), clab-api's
+    netem mutex broke concurrent lifecycle/netem calls (backend now serializes
+    its own netem ops and retries the busy rejection), clab-api 500s
+    transiently under read bursts (bounded retry on the idempotent verbs), and
+    the compose `/var/run/netns` bind's default-private propagation broke
+    containerlab's interface parking — node/lab STOP of linked nodes failed
+    outright (now `rshared`). Two timing truths the specs encode: the lifecycle
+    badge flips to `deployed` when containers are up while the JOB runs on
+    (the Last-operation badge is the real barrier), and job rows are buttons
+    named `<kind> <status>, open details`.
 
 ### Test-suites v2 — render → execute → parse → assert (contract delta 17) · **done**
 

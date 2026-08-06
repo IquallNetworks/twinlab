@@ -15,11 +15,13 @@ test('the runtime suite runs green with rendered commands and results', async ({
   // Two loopback pings (r1→r3, r3→r1), both green.
   await expect(page.getByText(/2 passed · 0 failed/)).toBeVisible({ timeout: 180_000 })
 
-  // Expand: per-node rows with pass badges and the RENDERED command (facts
-  // resolved the loopback address).
-  await page.getByRole('button', { name: 'Expand' }).last().click()
-  await expect(page.locator('[data-slot="badge"]', { hasText: 'pass' }).first()).toBeVisible()
-  await expect(page.getByText(/ping -c 3 -W 2 10\.\d+\.\d+\.\d+/).first()).toBeVisible()
+  // Expand REACHABILITY's results (the custom-config card's rows carry the
+  // same Expand label, so scope to the suites card): per-node rows with pass
+  // badges and the RENDERED command — facts resolved the loopback address.
+  const suites = page.locator('[data-slot="card"]', { hasText: 'Test suites' }).first()
+  await suites.getByRole('button', { name: 'Expand' }).nth(1).click()
+  await expect(suites.locator('[data-slot="badge"]', { hasText: 'pass' }).first()).toBeVisible()
+  await expect(suites.getByText(/ping -c 3 -W 2 10\.\d+\.\d+\.\d+/).first()).toBeVisible()
 })
 
 test('the facts viewer serves the node namespace', async ({ page }) => {
@@ -27,8 +29,10 @@ test('the facts viewer serves the node namespace', async ({ page }) => {
   await page.getByRole('button', { name: 'Facts' }).click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText('Node facts')).toBeVisible()
-  // The promised core is visible in the JSON: OSPF router ids exist.
-  await expect(dialog.locator('.cm-editor').getByText('"router_id"').first()).toBeVisible({
+  // The fact JSON is long and CodeMirror virtualizes — assert on the promised
+  // core keys near the TOP of the first node's dict, which are always in the
+  // rendered viewport.
+  await expect(dialog.locator('.cm-editor').getByText('"mgmt"').first()).toBeVisible({
     timeout: 30_000,
   })
   await page.keyboard.press('Escape')

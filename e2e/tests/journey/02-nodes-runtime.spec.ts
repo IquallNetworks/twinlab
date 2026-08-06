@@ -35,10 +35,12 @@ test('the connect drawer serves the SSH recipe with the real address', async ({ 
   const sheet = page.locator('[data-slot="sheet-content"]')
   await expect(sheet.getByText('Management address')).toBeVisible()
   await expect(sheet.getByText('SSH from your machine')).toBeVisible()
-  // The config-block recipe teaches the jump host; the one-liner names the ip.
+  // The node's mgmt address renders in the drawer, the config-block recipe
+  // teaches the jump host, and the one-liner is the ProxyCommand form.
+  await expect(sheet.getByText(/^10\.79\.\d+\.\d+$/)).toBeVisible()
   await expect(sheet.getByText('Host twinlab-jump')).toBeVisible()
   await sheet.getByRole('tab', { name: 'One-liner' }).click()
-  await expect(sheet.getByText(/@10\.79\.\d+\.\d+/)).toBeVisible()
+  await expect(sheet.getByText(/ProxyCommand/)).toBeVisible()
   await page.keyboard.press('Escape')
 })
 
@@ -57,9 +59,11 @@ test('logs stream and the web terminal answers a command', async ({ page }) => {
   await r3.getByRole('button', { name: 'Console' }).click()
   await page.getByRole('button', { name: 'shell', exact: true }).click()
   await expect(page.getByText('Connected · shell')).toBeVisible({ timeout: 30_000 })
-  await page.locator('.xterm').click()
-  await page.keyboard.type('hostname')
-  await page.keyboard.press('Enter')
+  // Drive xterm through its hidden helper textarea — page-level keyboard
+  // events reach it flakily (the typed text landed but Enter got lost).
+  const termInput = page.locator('.xterm-helper-textarea')
+  await termInput.pressSequentially('hostname')
+  await termInput.press('Enter')
   await expect(page.locator('.xterm')).toContainText('r3', { timeout: 15_000 })
   await page.keyboard.press('Escape')
 })
@@ -69,13 +73,13 @@ test('per-node power: stop and restart a host', async ({ page }) => {
   const h2 = page.getByRole('row').filter({ hasText: `clab-${E2E_NET_NAME}-h2` })
 
   await h2.getByRole('button', { name: 'Actions' }).click()
-  await page.getByRole('menuitem', { name: 'Stop' }).click()
+  await page.getByRole('menuitem', { name: 'Stop', exact: true }).click()
   await expect(h2.locator('[data-slot="badge"]', { hasText: 'exited' })).toBeVisible({
     timeout: 60_000,
   })
 
   await h2.getByRole('button', { name: 'Actions' }).click()
-  await page.getByRole('menuitem', { name: 'Start' }).click()
+  await page.getByRole('menuitem', { name: 'Start', exact: true }).click()
   await expect(h2.locator('[data-slot="badge"]', { hasText: 'running' })).toBeVisible({
     timeout: 60_000,
   })

@@ -56,10 +56,15 @@ test('deploy with config push, watched from jobs, dashboard and the header', asy
   await page.getByLabel('Push configuration after deploy (adds minutes)').check()
   await page.getByRole('dialog').getByRole('button', { name: 'Deploy', exact: true }).click()
 
-  // The lab is now mid-flight everywhere.
-  await expect(page.locator('[data-slot="badge"]', { hasText: 'deploying' })).toBeVisible()
+  // The lab is now mid-flight everywhere. The lifecycle badge is the FIRST
+  // badge in main (beside the h1) — hasText filters elsewhere have matched
+  // unrelated badges and let the suite race ahead of the running job.
+  const statusBadge = page.getByRole('main').locator('[data-slot="badge"]').first()
+  await expect(statusBadge).toHaveText(/deploying/)
   await page.goto('/jobs')
-  const runningRow = page.getByRole('row').filter({ hasText: 'deploy' }).filter({ hasText: 'running' })
+  // Job rows are keyboard-focusable buttons, not plain table rows; their
+  // accessible name is "<kind> <status>, open details".
+  const runningRow = page.getByRole('button', { name: 'deploy running, open details' })
   await expect(runningRow.first()).toBeVisible()
   await runningRow.first().click()
   const sheet = page.locator('[data-slot="sheet-content"]')
@@ -76,10 +81,18 @@ test('deploy with config push, watched from jobs, dashboard and the header', asy
     timeout: 300_000,
   })
 
-  // Ride out the rest on the lab header; the badge flips when the job ends.
+  // The lifecycle badge flips to deployed when the CONTAINERS are up, but the
+  // job keeps configuring past that — the Last-operation badge reaching
+  // `succeeded` is the true deploy+configure+gate barrier (a suite run
+  // submitted before it would 409 on the per-lab job mutex).
   await page.goto(`/labs/${E2E_NET_NAME}/overview`)
-  await expect(page.locator('[data-slot="badge"]', { hasText: 'deployed' })).toBeVisible({
-    timeout: 700_000,
+  await expect(page.getByRole('main').locator('[data-slot="badge"]').first()).toHaveText(
+    /deployed$/,
+    { timeout: 300_000 },
+  )
+  await expect(page.getByText('Last operation:')).toBeVisible({ timeout: 60_000 })
+  await expect(page.locator('[data-slot="badge"]', { hasText: 'succeeded' })).toBeVisible({
+    timeout: 600_000,
   })
 
   // The config-time gate ran green: 3 adjacency results + 1 compare.

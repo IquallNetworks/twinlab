@@ -29,12 +29,10 @@ collection** change, not a catalog edit.
 
 ## Decision log (maintainer, 2026-08-04)
 
-- **Gap 1 (`tc:`)** — honor it, with ONE unified application method for baseline (deploy-time
-  `tc:`) and runtime: the existing clab-api netem path — no second raw-`tc` channel, minimize
-  hand-rolled code. Consequence: `tc.duplicate`/`tc.reorder` are rejected loudly at PUT (they
-  don't exist on that path). Baseline semantics (reapply on node restart; clear reverts to
-  baseline) to be designed as a contract delta before implementation; settle once with 16.5's
-  schedules.
+- **Gap 1 (`tc:`)** — SUPERSEDED by the 2026-08-05 decision below. (The 2026-08-04 direction
+  was: honor it, with ONE unified application method for baseline and runtime — the existing
+  clab-api netem path; `tc.duplicate`/`tc.reorder` rejected at PUT because they don't exist
+  there; baseline semantics to be designed as a contract delta first.)
 - **Gap 2 (`tools:`)** — reject at PUT; reconsider later. **SHIPPED 2026-08-04** (422
   `unsupported_directive`, per-key reasons in extras; dotted and nested spellings).
 - **Gap 3 (image pre-flight)** — reject only when the deploy is impossible: first job step
@@ -63,12 +61,17 @@ collection** change, not a catalog edit.
   rejects — an explicit `bridge` is what hostprep does anyway).
 - **Gap 7 (topology `message`)** — surface it (LabDetail / deploy-job result). **SHIPPED
   2026-08-04** (`LabDetail.message` + an "About this lab" card on the frontend Overview).
-- **Gap 1 (`tc:`) status** — contract **delta 25 SKETCHED 2026-08-04, then DEFERRED to the
-  END of item 17** (maintainer wants to re-analyze before it proceeds; the sketch stands as
-  a starting point, not an approved design):
-  baseline applied via the one netem executor at deploy (fails loudly), reapplied by power
-  verbs after restart, runtime sets override, clear reverts to baseline,
-  `tc.duplicate`/`tc.reorder` reject at PUT; rate-unit mapping is a flagged probe item.
+- **Gap 1 (`tc:`), REDECIDED 2026-08-05 — REJECT at PUT for v1.0, reconsider later.
+  SHIPPED same day** (422 `unsupported_directive`, one entry per placement, the key naming
+  the link entry: `links[0].h1.tc`; `defaults.tc.enable` and a knob-less `tc:` — a node may
+  be NAMED tc — are not rejected). Delta 25's honor-it sketch is WITHDRAWN, never
+  implemented. The re-analysis found the mapping is not the hard part (probes in
+  `netlab-up-gaps.md` gap 1: propagation, ms normalization, and `tc.rate` being bit/s to our
+  kbit/s) — honoring `tc:` forces the baseline-vs-runtime design, including a "clear" that
+  reverts to a baseline, which would change delta 7's shipped REPLACE semantics. Rejecting
+  settles that question for 16.5's scenarios too: **no baseline tier — the live qdisc is the
+  only impairment state**, and a scenario restores by re-submitting a delta-24 batch.
+  **This closes item 17.2 and, with it, ROADMAP item 17.**
 - **Builder coverage (17.3)** — Tier A batch AGREED: hyphenated names, nodes-as-dict-list,
   list-form dict members, dict-of-lists links (typed listName, lossless), link groups
   (expand-on-parse with notice), **self-links (SUPPORT — maintainer overrode the defer lean)**,

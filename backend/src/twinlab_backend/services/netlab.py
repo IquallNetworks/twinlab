@@ -539,21 +539,50 @@ class UnsupportedDirective:
     reason: str
 
 
-def _flatten_paths(
-    mapping: dict[object, object], prefix: tuple[str, ...]
-) -> list[tuple[tuple[str, ...], object]]:
-    """Every (path, value) in a definition mapping, with dotted keys split —
-    netlab treats `defaults.netlab.up:` and nested `defaults: {netlab: {up:`
-    identically, so the checks below must too."""
+def _flatten_paths(value: object, prefix: tuple[str, ...]) -> list[tuple[tuple[str, ...], object]]:
+    """Every (path, value) in a definition, with dotted keys split — netlab
+    treats `defaults.netlab.up:` and nested `defaults: {netlab: {up:`
+    identically, so the checks below must too. Lists are descended as well
+    (`tc:` lives on `links:` entries), their indices riding the path as `[i]`
+    components so a rejected key can name the entry it came from."""
     entries: list[tuple[tuple[str, ...], object]] = []
-    for key, value in mapping.items():
-        if not isinstance(key, str):
-            continue
-        path = prefix + tuple(key.split("."))
-        entries.append((path, value))
-        if isinstance(value, dict):
-            entries.extend(_flatten_paths(cast("dict[object, object]", value), path))
+    if isinstance(value, dict):
+        for key, member in cast("dict[object, object]", value).items():
+            if not isinstance(key, str):
+                continue
+            path = prefix + tuple(key.split("."))
+            entries.append((path, member))
+            entries.extend(_flatten_paths(member, path))
+    elif isinstance(value, list):
+        for index, member in enumerate(cast("list[object]", value)):
+            entries.extend(_flatten_paths(member, (*prefix, f"[{index}]")))
     return entries
+
+
+def _display_path(path: tuple[str, ...]) -> str:
+    """Dotted key for a message, list indices glued on: `links[1].tc`."""
+    rendered = ""
+    for part in path:
+        rendered += part if part.startswith("[") or not rendered else f".{part}"
+    return rendered
+
+
+# netlab's seven `tc:` knobs (defaults/attributes.yml). A `tc` key is impairment
+# only when it carries one of them — `defaults.tc.enable` is netlab's global
+# switch for a step we never run, and a NODE may legitimately be named `tc`,
+# which makes `tc:` on a link entry an endpoint rather than an attribute.
+_TC_KNOBS = frozenset({"delay", "jitter", "loss", "corrupt", "duplicate", "reorder", "rate"})
+
+
+def _tc_impairment_key(path: tuple[str, ...], value: object) -> str | None:
+    if path[-1] == "tc":
+        knobbed = isinstance(value, dict) and any(
+            key in _TC_KNOBS for key in cast("dict[object, object]", value)
+        )
+        return _display_path(path) if knobbed else None
+    if len(path) >= 2 and path[-2] == "tc" and path[-1] in _TC_KNOBS:
+        return _display_path(path[:-1])  # report the `tc` key, not each knob
+    return None
 
 
 def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
@@ -561,10 +590,12 @@ def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
     rather than silently ignores (up-parity decisions, docs/nos-sweep/):
     `tools:` side containers never start here, `defaults.netlab.up/down` shell
     hooks never run (arbitrary shell from a stored definition on a multi-user
-    server is off the table — only the silence was the bug), and an OVS
-    `bridge_type` would silently get Linux bridges from hostprep. An
-    unparseable or non-mapping definition returns [] — the dry `netlab create`
-    stays the syntax authority."""
+    server is off the table — only the silence was the bug), an OVS
+    `bridge_type` would silently get Linux bridges from hostprep, and link or
+    interface `tc:` impairment is applied by `netlab up` alone — a step Twinlab
+    replaces (gap 1, rejected for v1.0; the netem API impairs a deployed lab).
+    An unparseable or non-mapping definition returns [] — the dry `netlab
+    create` stays the syntax authority."""
     try:
         parsed: Any = yaml.safe_load(definition)
     except yaml.YAMLError:
@@ -573,7 +604,13 @@ def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
         return []
     found: dict[str, UnsupportedDirective] = {}
     for path, value in _flatten_paths(cast("dict[object, object]", parsed), ()):
-        if path[0] == "tools":
+        if (tc_key := _tc_impairment_key(path, value)) is not None:
+            found[tc_key] = UnsupportedDirective(
+                tc_key,
+                "definition-time `tc:` impairment is not applied — "
+                "shape a deployed lab through the netem API",
+            )
+        elif path[0] == "tools":
             found["tools"] = UnsupportedDirective(
                 "tools", "netlab's side-container tools are not started by Twinlab"
             )

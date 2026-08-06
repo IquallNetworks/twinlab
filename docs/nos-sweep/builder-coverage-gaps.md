@@ -451,8 +451,10 @@ reason turned out to be different, the entry moved (three of them into Class 5).
   them. Twinlab is clab-only, so these keys change nothing about a deployed lab — the same
   category as `tc:` and `tools:`, not a coverage gap. (Container-side sizing for the
   vrnetlab platform is a clab `env`/kind concern, not a netlab node attribute.)
-- **Link `tc:`** — Twinlab's deploy path drops it (gap 1 / delta 25, undecided). Typing a
-  key that does nothing is UI over a no-op; it sequences after that decision, never before.
+- **Link `tc:`** — DECIDED 2026-08-05: the PUT now **rejects** it (gap 1, 422
+  `unsupported_directive`), so it is in exactly the same category as `tools:` below —
+  permanently B, and typing it would be UI for a key that cannot be saved. Reopen only if
+  the post-v1.0 revisit honors it.
 - **`tools:` and `validate:`** — the PUT rejects `tools:` outright (422
   `unsupported_directive`, gap 2) and Twinlab runs its own test suites. Permanently B.
   *(Adjacent and out of scope: the builder could warn on backend-rejected keys before the

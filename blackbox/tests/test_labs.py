@@ -161,6 +161,27 @@ async def test_update_definition_rejects_unsupported_directives(
     assert detail.definition is None
 
 
+async def test_update_definition_rejects_tc_impairment(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Up-parity gap 1 (rejected for v1.0): netlab applies link/interface `tc:`
+    from `netlab up`, the step Twinlab replaces, so it used to deploy with no
+    impairment and no signal. Each placement is named; a deployed lab is
+    shaped through the netem API instead."""
+    lab = await make_lab(None)
+    definition = (
+        "provider: clab\ndefaults.device: linux\nnodes: [n1, n2]\n"
+        "links:\n- n1:\n    tc.delay: 20ms\n  n2:\n  tc:\n    loss: 1.5\n"
+    )
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.update_definition(lab.name, definition)
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "unsupported_directive"
+    directives = excinfo.value.extras["directives"]
+    assert isinstance(directives, list)
+    assert {d["key"] for d in directives} == {"links[0].n1.tc", "links[0].tc"}
+
+
 async def test_deploy_without_definition_is_409(admin: TwinlabClient, make_lab: LabFactory) -> None:
     lab = await make_lab(None)
     with pytest.raises(TwinlabApiError) as excinfo:

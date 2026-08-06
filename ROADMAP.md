@@ -16,10 +16,15 @@ Everything else in this file is either shipped or explicitly post-tag. Kept here
 because the remainder had grown scattered across four items and no single place
 said what was left.
 
-1. **`tc:` baseline impairment — gap 1 / contract delta 25** (item 17.2). The only
-   thing keeping the sweep item open besides Tier B. Sketched 2026-08-04 and then
-   **DEFERRED to the end of item 17 for maintainer re-analysis — the sketch is NOT
-   an approved design**, so this does not start on its own.
+1. ~~**`tc:` baseline impairment — gap 1 / contract delta 25**~~ — **DONE
+   2026-08-05 by REJECTING it** (item 17.2). Re-analyzed at the end of item 17 as
+   the deferral asked. The honor-it sketch is withdrawn: the knob mapping was
+   never the hard part (probed — `tc.rate` is bit/s to our netem's kbit/s, the
+   rest is exact), but honoring `tc:` forces the baseline-vs-runtime design, and
+   its "clear reverts to baseline" rule would change delta 7's shipped REPLACE
+   semantics for a key with no demand behind it. So `tc:` joins `tools:` and the
+   up/down hooks as 422 `unsupported_directive` at PUT — never silent — and the
+   netem API stays the one way to shape a lab. **This closes item 17 entirely.**
 2. ~~**Tier B builder promotions**~~ — **DONE 2026-08-05**, reviewed in
    `docs/nos-sweep/builder-coverage-gaps.md` §6 and shipped as six frontend
    commits. Scoped by three findings rather than by size: one unknown module
@@ -794,8 +799,10 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
        rule); flow types ping (universal) + iperf3 (`--json` output feeds
        the napalm compare grammar); scenario references EXISTING nodes only
        (never injects probes — the rejected-FRR-probe reasoning);
-       snapshot-restore cleanup (interacts with 17.2's `tc:`
-       baseline-vs-runtime question — settle once for both); a scenario run
+       snapshot-restore cleanup (17.2's `tc:` decision of 2026-08-05
+       settled the shared question: there is NO baseline tier, so a
+       scenario snapshots the live impairment via the link table and
+       restores by re-submitting a delta-24 batch); a scenario run
        is a job, which forces the first job CANCEL verb and a progress
        surface; permission `lab:configure`, no new grant.
     Each contract-touching item goes through the review gate
@@ -804,7 +811,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     (contract delta 26: the promised core + per-object `_extras`, closing the
     delta 17 resolution; `docs/fact-namespace.md`).
 
-### NOS platform sweep — and the two reviews it informs · **in progress; 17.1 CLOSED for v1.0 and 17.3 CLOSED (Tier A 2026-08-04, Tier B 2026-08-05) — ONE item remains: gap 1 / delta 25** (opened 2026-08-04; after the batch, BEFORE the Playwright suite; added 2026-08-03, scoped 2026-08-04)
+### NOS platform sweep — and the two reviews it informs · **CLOSED 2026-08-05** (17.1 closed for v1.0, 17.2 closed by rejecting gap 1 / delta 25, 17.3 shipped Tier A 2026-08-04 + Tier B 2026-08-05; opened 2026-08-04, added 2026-08-03, scoped 2026-08-04)
 
 17. **One work item with three strands, run in parallel.** The sweep is the
     driver; the two reviews were previously carried as unsequenced items 18 and
@@ -935,8 +942,9 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     coherent, tested six. **What remained in 17.1 for v1.0 was exactly one thing:
     the large mixed-NOS topology** over that set, which needed nothing from
     anyone — and it **LANDED 2026-08-05, so 17.1 IS CLOSED for v1.0** (below).
-    One item keeps item 17 open: gap 1 (delta 25, in 17.2). 17.3's Tier B
-    review shipped 2026-08-05.
+    The last open item, gap 1 (delta 25, in 17.2), was decided and shipped
+    2026-08-05 — as a rejection — so **item 17 is CLOSED**. 17.3's Tier B
+    review shipped the same day.
 
     **The mixed-NOS lab — DONE 2026-08-05, closing strand 17.1 for v1.0.** Every
     platform above was admitted on its own two-node probe;
@@ -1053,17 +1061,21 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
       clab-api netem path), applied by `netlab up` after
       start via `execute_tc_commands`. A definition carrying `tc:` validates and
       deploys with no impairment — violating definition-is-source-of-truth.
-      DECIDED 2026-08-04: honor it with ONE unified application method for
-      baseline and runtime — the existing clab-api netem path (no second
-      raw-`tc` channel; a baseline is a batch the deploy job submits through
-      the delta-24 executor); consequence: `tc.duplicate`/`tc.reorder` reject
-      loudly at PUT. Contract **delta 25 SKETCHED 2026-08-04, then DEFERRED to
-      the END of item 17** — the maintainer wants to re-analyze before it
-      proceeds; the sketch (deploy applies after readiness and fails loudly;
-      power verbs reapply after restart; runtime sets override; clear reverts
-      to baseline) is a starting point, not an approved design.
-      *Interacts with 16.5* — impairment schedules are the scenario item's other
-      half, so settle the baseline-vs-runtime question once, for both.
+      Decided 2026-08-04 to honor it (delta 25 sketched: deploy applies through
+      the delta-24 executor, power verbs reapply, clear reverts to baseline),
+      then DEFERRED to the end of item 17 for re-analysis.
+      **REDECIDED 2026-08-05 — REJECT at PUT for v1.0, reconsider later;
+      SHIPPED same day** (422 `unsupported_directive`, one entry per placement,
+      the key naming the link entry — `defaults.tc.enable` and a knob-less
+      `tc:`, since a node may be NAMED tc, are not rejected). The re-analysis
+      probed the mapping and found it easy (`delay`/`jitter` normalize to ms;
+      `tc.rate` is bit/s to our kbit/s) — the cost was elsewhere: a baseline
+      needs reapply-on-restart and a "clear" that reverts, and that second rule
+      changes delta 7's shipped REPLACE semantics on a v1.0 surface, for a key
+      with no demand behind it. *Settles 16.5's shared question* the other way:
+      **no baseline tier — the live qdisc is the only impairment state**, and a
+      scenario restores by re-submitting a delta-24 batch, which needs nothing
+      new. Detail and probe evidence: `docs/nos-sweep/netlab-up-gaps.md` gap 1.
     - **`tools:` is silently dropped** (graphite, suzieq, nuts, nso, edgeshark —
       side containers `up`/`down` would start). DECIDED 2026-08-04: reject at
       PUT; reconsider later. **SHIPPED same day** (422 `unsupported_directive`).
@@ -1092,9 +1104,10 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
       DECIDED: reject at PUT, REVISIT if the sweep's L2 testing needs it), and
       topology `message` dropped (gap 7 — DECIDED: surface it). **Gaps 2, 5,
       6, 7 ALL SHIPPED 2026-08-04** (the `unsupported_directive` PUT batch +
-      `LabDetail.message`); with gaps 3 and 4 shipped the same day, gap 1
-      (delta 25) is the strand's only open item, DEFERRED to the end of
-      item 17 for re-analysis — blackbox 140/140.
+      `LabDetail.message`); gaps 3 and 4 shipped the same day, and gap 1
+      (delta 25) — the strand's last open item — was decided 2026-08-05 as a
+      rejection and shipped, **closing 17.2**. All seven gaps resolved:
+      four honored, three rejected loudly, none left silent.
 
     **17.3 — Review extending the builder's supported configuration surface.**
     The Build tab's Visual mode covers a deliberate typed core (nodes, p2p/LAN/

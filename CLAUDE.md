@@ -196,8 +196,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `ifname`/`ipv4`/`ipv6`, node `loopback`/`config`/`role`, plus node `box` (ONE setting with
   `image`, and box WINS) and node `group:` (folded onto the group, with a notice). `prefix:
   false` and `ipv4: false` are checkboxes because netlab INVENTS an address otherwise.
-  Deliberately still extras: `vlans:` semantics, `plugin:`, address pools, link `tc:` (behind
-  delta 25), `tools:`/`validate:` (the PUT rejects the first, Twinlab owns the second), and
+  Deliberately still extras: `vlans:` semantics, `plugin:`, address pools, link `tc:`,
+  `tools:`/`validate:` (the PUT rejects the first two, Twinlab owns the third), and
   node `cpu`/`memory` — libvirt-only in netlab 26.07, so inert under the clab provider. **The Tier A batch (ROADMAP 17.3) shipped 2026-08-04**, so `parseBuildDoc` now
   gates only on what NETLAB itself rejects — invalid YAML, attribute-only link entries,
   interfaces mixed with node keys, undeclared link endpoints, a name outside netlab's id rule
@@ -274,9 +274,14 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   front; `PUT /labs/{name}` authors/replaces the stored definition (validated by a dry `netlab
   create`; the record's name and subnet are re-pinned into it — `set_lab_name`/`set_mgmt_subnet`,
   an explicit `addressing.mgmt.ipv4` wins; legal netlab keys Twinlab does not honor — `tools:`,
-  `defaults.netlab.up/down` shell hooks, OVS `bridge_type` — are 422 `unsupported_directive`
+  `defaults.netlab.up/down` shell hooks, OVS `bridge_type`, and link/interface `tc:` impairment
+  (gap 1, REJECTED for v1.0 2026-08-05 rather than honored: `netlab up` applies it and that is
+  the step Twinlab replaces, while a baseline tier would have changed the netem API's shipped
+  REPLACE semantics — so the netem API stays the one way to shape a lab; `defaults.tc.enable`
+  and a knob-less `tc:` are NOT rejected, since a node may be named `tc`) — are 422
+  `unsupported_directive`
   rather than silently ignored, and the definition's top-level `message:` rides `LabDetail` —
-  up-parity gaps 2/5/6/7, decisions in `docs/nos-sweep/`); `POST /labs/{name}/deploy` is the ONLY deploy verb —
+  up-parity gaps 1/2/5/6/7, decisions in `docs/nos-sweep/`); `POST /labs/{name}/deploy` is the ONLY deploy verb —
   from the stored definition, fresh or overwrite-in-place, opt-in `configure`; 409 `no_definition`
   on an unauthored record; the deploy job's first step is an **image pre-flight** (gap 3): a
   missing image whose device the catalog marks `local_only` (routeros7, the daemons) fails fast with a friendly

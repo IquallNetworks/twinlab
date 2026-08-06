@@ -16,6 +16,21 @@ Installed netlab: **networklab 26.7** in BOTH venvs (`backend/.venv` and `netlab
 
 ## Gap 1 — `tc:` link/interface impairment silently dropped
 
+> **DECIDED 2026-08-05 — REJECT at PUT for v1.0, reconsider later. SHIPPED same day**
+> (422 `unsupported_directive`, one entry per placement, the key naming the link entry:
+> `links[0].h1.tc`). This reverses the 2026-08-04 honor-it direction, which was sketched as
+> contract delta 25 and never implemented. What the re-analysis added to (d) below, kept
+> because a revisit starts from it: link-level `tc` propagates to EVERY node interface on the
+> link and a per-endpoint `tc` merges on top per key (probed); the authoritative read is
+> `nodes[].interfaces[].tc`, which the link-table parse already visits for `clab.name`;
+> `delay`/`jitter` normalize to integer **milliseconds** (`data/types.py:599`); and `tc.rate`
+> is **bit/s** where our netem is kbit/s (probed: `tc … netem rate 1000` reads back
+> `rate 1Kbit`, so netlab's minimum `rate: 1` is not representable). The blocker was never
+> the mapping — it was that honoring `tc:` forces the baseline-vs-runtime design (reapply on
+> restart; "clear" reverting to a baseline, which would change delta 7's shipped REPLACE
+> semantics) for a key with no demand behind it. Rejecting settles that for ROADMAP 16.5 too:
+> **there is no baseline tier — the live qdisc is the only impairment state.**
+
 **(a) What netlab does.**
 - Schema: `tc` is a first-class **link attribute** — `defaults/attributes.yml:71-78`:
   `delay: time`, `jitter: time` (milliseconds when rendered), `loss`, `corrupt`, `duplicate`,

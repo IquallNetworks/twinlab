@@ -347,50 +347,31 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     report — and a route merge would either kill fail-loudly for simple
     callers or leave ``ok`` a dead always-true field. (wire today: no
     batch — one round trip per interface/node.)
-25. Baseline impairment from the definition (SKETCHED then DEFERRED
-    2026-08-04 — maintainer parked it to the END of item 17 for
-    re-analysis; do NOT implement from this sketch. Direction as decided
-    that day, docs/nos-sweep/: honor netlab's `tc:` with ONE unified
-    application method). A definition's link/interface
-    `tc:` attributes become the lab's BASELINE impairment, applied by the
-    deploy job through the SAME clab-api netem executor the runtime API
-    uses (delta 24's `_netem_once` — a baseline is literally a batch the
-    deploy runs; no second raw-`tc` channel, no hand-rolled impairment
-    path). Semantics — the baseline-vs-runtime rules, settled once (and
-    inherited by post-v1.0 scenarios, ROADMAP 16.5):
-    - MAPPING: `tc.delay`/`tc.jitter` (ms) → Duration; `tc.loss` → loss %;
-      `tc.corrupt` → corruption %; `tc.rate` → rate (unit mapping to our
-      kbit/s VERIFIED against netlab's tc invocation at implementation —
-      probe item). `tc.duplicate` and `tc.reorder` do NOT exist on the
-      clab-api netem path: a definition carrying them is 422
-      `unsupported_directive` at PUT (maintainer's call — unified channel
-      over 7/7 coverage), listed like the other rejected keys.
-    - DEPLOY: after the clab deploy and node readiness, before any config
-      push, the job applies every `tc:`-derived impairment sequentially
-      (clab-api serializes netem per lab). A baseline that fails to apply
-      FAILS the job loudly (error `baseline_impairment_failed`, lab stays
-      deployed — same shape as a readiness failure): a lab silently not
-      matching its definition is the exact bug this delta removes.
-    - RESTART: netem qdiscs die with the container, so the node power
-      verbs (start/restart, standalone AND batch items, and the lab-level
-      start/restart fan-out) REAPPLY the node's baseline after a
-      successful action — a restarted node comes back matching the
-      definition, not bare. A reapply failure surfaces as that verb's
-      error (single: 502 envelope; batch item: its report entry).
-    - RUNTIME OVERRIDE: set_netem/batch netem items keep REPLACE
-      semantics and WIN over the baseline (they replace the whole qdisc —
-      the single-qdisc reality permits nothing else). A set with NO
-      dimensions ("clear") now REVERTS TO THE BASELINE when the interface
-      has one, bare wire when it doesn't — removing a baseline is a
-      definition edit + redeploy, never a runtime verb (the definition
-      stays the source of truth).
-    - READS: no new wire shapes. The active impairment (netem show, the
-      link table's endpoint `impairment`) is what it is today — a baseline
-      IS an active impairment once applied. Whether an interface's active
-      impairment equals its baseline is derivable client-side from the
-      stored definition; no server-side `baseline` flag until something
-      needs it.
-    (wire today: `tc:` validates and is silently dropped.)
+25. Definition-time `tc:` REJECTED for v1.0 (DECIDED 2026-08-05, SHIPPED
+    same day). Up-parity gap 1: netlab's link/interface `tc:` impairment
+    is applied by `netlab up` — the step Twinlab replaces — so a
+    definition carrying it deployed with no impairment and no signal. It
+    now joins the `unsupported_directive` list at PUT: 422, one entry per
+    placement, the key naming the link entry it came from
+    (`links[0].h1.tc`). `defaults.tc.enable` is NOT rejected (netlab's
+    switch for a step we never run), nor is a `tc:` that carries none of
+    netlab's seven knobs (a node may be NAMED tc, which makes `tc:` on a
+    link entry an endpoint).
+
+    This REVERSES the honor-it sketch of 2026-08-04 (never implemented;
+    the parked design is recorded in docs/nos-sweep/netlab-up-gaps.md
+    and ROADMAP 17.2 for the post-v1.0 revisit). What the re-analysis
+    found, kept here because it is what a revisit starts from: the
+    mapping is exact except `tc.rate`, which is bit/s to our netem's
+    kbit/s (probed: `tc … netem rate 1000` reads back `rate 1Kbit`), and
+    `tc.duplicate`/`tc.reorder` have no clab-api netem expression at all;
+    honoring `tc:` therefore forces the baseline-vs-runtime question —
+    reapply-on-restart, and whether "clear" reverts to the baseline,
+    which would change delta 7's shipped REPLACE semantics. Rejecting
+    settles that question for post-v1.0 scenarios too (ROADMAP 16.5):
+    there is NO baseline tier — the live qdisc is the only impairment
+    state, and a scenario restores by re-submitting a delta-24 batch.
+    (wire before: `tc:` validated and was silently dropped.)
 26. The fact namespace pinned (APPROVED 2026-08-05, SHIPPED same day — the
     pre-v1.0 decision reserved by delta 17's resolution (a); analysis,
     evidence and live verification: docs/fact-namespace.md). Each node's facts become a PARTITION: a
@@ -2172,10 +2153,11 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         the mgmt subnet is re-pinned (explicit `addressing.mgmt.ipv4` wins).
         Validated by a dry `netlab create` (422). 409 subnet clash. Legal
         netlab keys Twinlab does not honor are 422 `unsupported_directive`
-        rather than silently ignored (up-parity decisions 2026-08-04,
-        docs/nos-sweep/): `tools:`, `defaults.netlab.up/down` shell hooks,
-        and `defaults.providers.clab.bridge_type: ovs-bridge`; extras
-        `directives` lists each `{key, reason}`."""
+        rather than silently ignored (up-parity decisions, docs/nos-sweep/):
+        `tools:`, `defaults.netlab.up/down` shell hooks,
+        `defaults.providers.clab.bridge_type: ovs-bridge`, and link or
+        interface `tc:` impairment; extras `directives` lists each
+        `{key, reason}`."""
         raise NotImplementedError
 
     async def deploy_lab(

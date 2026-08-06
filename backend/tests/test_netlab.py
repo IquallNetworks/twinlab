@@ -362,6 +362,45 @@ nodes: [r1]
     assert keys == ["defaults.netlab.down", "defaults.providers.clab.bridge_type"]
 
 
+def test_find_unsupported_directives_rejects_tc_impairment() -> None:
+    # Gap 1: `tc:` rides link entries (a LIST), at link level, on an endpoint,
+    # and inside the interfaces form — every placement is reported, naming the
+    # entry it came from. The dotted spelling collapses onto its `tc` key.
+    definition = """\
+provider: clab
+defaults.device: linux
+nodes: [h1, h2, h3]
+links:
+- h1:
+    tc.delay: 20ms
+  h2:
+  tc:
+    loss: 1.5
+- interfaces:
+  - node: h2
+    tc: {rate: 100000}
+  - node: h3
+"""
+    keys = [d.key for d in find_unsupported_directives(definition)]
+    assert keys == ["links[0].h1.tc", "links[0].tc", "links[1].interfaces[0].tc"]
+
+
+def test_find_unsupported_directives_allows_tc_lookalikes() -> None:
+    # `defaults.tc.enable` is netlab's switch for a step we never run, and a
+    # node may be NAMED tc — neither declares impairment.
+    definition = """\
+provider: clab
+defaults.device: linux
+defaults.tc.enable: false
+nodes: [tc, h2]
+links:
+- tc:
+    ifname: eth7
+  h2:
+"""
+    assert find_unsupported_directives(definition) == []
+
+
 def test_read_message() -> None:
     assert read_message("name: x\nmessage: Use ssh to reach r1.\n") == "Use ssh to reach r1."
     assert read_message("name: x\n") is None

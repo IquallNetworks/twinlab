@@ -46,7 +46,7 @@
       "loopback_ping": {
         "nodes": ["r1", "r3"],
         "wait": 60,
-        "description": "r1 (VyOS) pings r3's loopback and r3 (FRR) pings r1's — both directions of the fabric FIB.",
+        "description": "r1 (VyOS) pings r3's loopback and r3 (FRR) pings r1's — both directions of the fabric FIB. The FRR flavor asserts on '0% packet loss': its image's busybox ping prints 'N packets received' where iputils prints 'N received'.",
         "run": {
           "vyos": {
             "command": "ping -c 3 -W 2 {{ nodes.r3.loopback.ipv4 | address }}",
@@ -54,7 +54,7 @@
           },
           "frr": {
             "command": "ping -c 3 -W 2 {{ nodes.r1.loopback.ipv4 | address }}",
-            "expect": { "contains": "3 packets transmitted, 3 received" }
+            "expect": { "contains": "0% packet loss" }
           }
         }
       }

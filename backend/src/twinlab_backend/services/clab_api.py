@@ -10,6 +10,7 @@ httpx is a third-party boundary: its exceptions and the server's untyped JSON ar
 translated here into typed results; nothing propagates as an exception.
 """
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -130,6 +131,20 @@ class LabEvent:
 # is fully up/down, which for several nodes can take minutes — well past the
 # client's default timeout.
 _LAB_OP_TIMEOUT_SECONDS = 600.0
+
+# clab-api holds a per-lab netem mutex and 409s ANY colliding caller — a netem
+# set racing a netem show loses, and so does a lifecycle call (deploy/destroy)
+# racing either (live-hit: a destroy failed "busy with netem operation" because
+# the Overview canvas's link-table refetch was mid-show). Two defenses:
+# a process-wide lock serializes the backend's OWN netem calls (they are
+# sub-second, so one global lock is simpler than a per-lab registry and safe —
+# single-process assumption, same as the job sweeps), and lifecycle calls
+# retry briefly on the specific busy rejection for the shows a CONCURRENT
+# request may still fire between acquire windows.
+_netem_lock = asyncio.Lock()
+_NETEM_BUSY_MARKER = "busy with netem"
+_NETEM_BUSY_RETRIES = 8
+_NETEM_BUSY_RETRY_SECONDS = 0.5
 
 
 class _LoginResponse(BaseModel):
@@ -371,6 +386,43 @@ class ClabApiClient:
             return Err(ClabApiError(f"{method} {path} failed: {exc}", None))
         return Ok(resp)
 
+    async def _authed_lifecycle(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, str | bool] | None = None,
+        json: object | None = None,
+        timeout: float | None = None,
+        retry_server_errors: bool = False,
+    ) -> Result[httpx.Response, ClabApiError]:
+        """`_authed` plus a bounded retry on clab-api's transient rejections.
+
+        Always retried: the netem-busy 409 (see `_netem_lock` above) — a netem
+        show is sub-second, so a short wait clears the mutex. With
+        `retry_server_errors`, plain 5xx too: under a concurrent read burst
+        clab-api's v0.5.0 lifecycle handlers intermittently 500 with no logged
+        cause (live-hit: a node stop 500'd in 126 ms amid the UI's query storm
+        and succeeded moments later by hand). Only the CHEAP idempotent verbs
+        opt in — node/lab power, save, destroy; never deploy, where a 500 is
+        usually a real rejection ("already deployed") and the call is
+        heavyweight. The last response is returned once retries are spent, so
+        the caller reports the real rejection."""
+        attempts = _NETEM_BUSY_RETRIES
+        while True:
+            sent = await self._authed(method, path, params=params, json=json, timeout=timeout)
+            if isinstance(sent, Err):
+                return sent
+            attempts -= 1
+            status = sent.value.status_code
+            transient = (
+                status == HTTPStatus.CONFLICT and _NETEM_BUSY_MARKER in sent.value.text
+            ) or (retry_server_errors and status >= HTTPStatus.INTERNAL_SERVER_ERROR)
+            if transient and attempts > 0:
+                await asyncio.sleep(_NETEM_BUSY_RETRY_SECONDS)
+                continue
+            return sent
+
     async def deploy(
         self, topology: Mapping[str, object], *, reconfigure: bool = False
     ) -> Result[DeployedLab, ClabApiError]:
@@ -380,7 +432,7 @@ class ClabApiClient:
         target each container. `reconfigure=True` allows overwriting a lab of the
         same name the caller already owns — this is how a redeploy rebuilds a
         running lab from a (possibly edited) definition."""
-        sent = await self._authed(
+        sent = await self._authed_lifecycle(
             "POST",
             "/api/v1/labs",
             params={"reconfigure": True} if reconfigure else None,
@@ -407,11 +459,12 @@ class ClabApiClient:
         """Destroy a lab by name (DELETE /api/v1/labs/{labName}). `cleanup=true`
         also removes the lab's on-disk artifacts. `lab_name` is validated at the
         HTTP boundary before it reaches here."""
-        sent = await self._authed(
+        sent = await self._authed_lifecycle(
             "DELETE",
             f"/api/v1/labs/{lab_name}",
             params={"cleanup": True},
             timeout=_LAB_OP_TIMEOUT_SECONDS,
+            retry_server_errors=True,
         )
         if isinstance(sent, Err):
             return sent
@@ -480,20 +533,22 @@ class ClabApiClient:
         """Start/stop/restart a single node (POST .../nodes/{node}/{action}).
         `action` is constrained to that set at the HTTP boundary before it
         reaches here."""
-        sent = await self._authed(
+        sent = await self._authed_lifecycle(
             "POST",
             f"/api/v1/labs/{lab_name}/nodes/{node_name}/{action}",
             timeout=_LAB_OP_TIMEOUT_SECONDS,
+            retry_server_errors=True,
         )
         return self._parse_message(sent, f"node {action}")
 
     async def lab_action(self, lab_name: str, action: str) -> Result[str, ClabApiError]:
         """Start/stop/restart every node in a lab (POST .../labs/{lab}/{action}).
         The streaming variants are not used; this waits for the action to finish."""
-        sent = await self._authed(
+        sent = await self._authed_lifecycle(
             "POST",
             f"/api/v1/labs/{lab_name}/{action}",
             timeout=_LAB_OP_TIMEOUT_SECONDS,
+            retry_server_errors=True,
         )
         return self._parse_message(sent, f"lab {action}")
 
@@ -551,11 +606,12 @@ class ClabApiClient:
     ) -> Result[SaveResult, ClabApiError]:
         """Persist running config on the lab's nodes (POST .../save). `node_filter`
         (comma-separated names) narrows it; absent means every node."""
-        sent = await self._authed(
+        sent = await self._authed_lifecycle(
             "POST",
             f"/api/v1/labs/{lab_name}/save",
             params={"nodeFilter": node_filter} if node_filter is not None else None,
             timeout=_LAB_OP_TIMEOUT_SECONDS,
+            retry_server_errors=True,
         )
         if isinstance(sent, Err):
             return sent
@@ -636,17 +692,19 @@ class ClabApiClient:
             body["rate"] = rate
         if corruption is not None:
             body["corruption"] = corruption
-        sent = await self._authed("POST", "/api/v1/tools/netem/set", json=body)
+        async with _netem_lock:
+            sent = await self._authed("POST", "/api/v1/tools/netem/set", json=body)
         return self._parse_message(sent, "netem set")
 
     async def reset_netem(self, container_name: str, interface: str) -> Result[str, ClabApiError]:
         """Clear all netem impairment from one container interface (POST
         .../tools/netem/reset)."""
-        sent = await self._authed(
-            "POST",
-            "/api/v1/tools/netem/reset",
-            json={"containerName": container_name, "interface": interface},
-        )
+        async with _netem_lock:
+            sent = await self._authed(
+                "POST",
+                "/api/v1/tools/netem/reset",
+                json={"containerName": container_name, "interface": interface},
+            )
         return self._parse_message(sent, "netem reset")
 
     async def show_netem(
@@ -655,9 +713,10 @@ class ClabApiClient:
         """Read the current netem impairment on each of a container's interfaces
         (GET .../tools/netem/show). The response maps the container name to its
         interface list; we flatten it since we query one container."""
-        sent = await self._authed(
-            "GET", "/api/v1/tools/netem/show", params={"containerName": container_name}
-        )
+        async with _netem_lock:
+            sent = await self._authed(
+                "GET", "/api/v1/tools/netem/show", params={"containerName": container_name}
+            )
         if isinstance(sent, Err):
             return sent
         resp = sent.value

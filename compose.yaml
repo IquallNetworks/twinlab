@@ -243,7 +243,19 @@ services:
       LOG_LEVEL: info
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/run/netns:/var/run/netns
+      # rshared, because the entries under /run/netns are themselves nsfs
+      # MOUNTS (one per namespace): with the default rprivate, binds made
+      # after container start don't cross the boundary in either direction.
+      # containerlab's node stop "parks" the node's interfaces into a netns it
+      # creates here, and with a private mount it either sees a bare tmpfs
+      # file where the host has a namespace (unknown FS magic 0x1021994) or
+      # strands its park namespace as a plain file for the next instance to
+      # trip over — node/lab stop then 500s.
+      - type: bind
+        source: /var/run/netns
+        target: /var/run/netns
+        bind:
+          propagation: rshared
       - /var/lib/docker/containers:/var/lib/docker/containers
       # containerlab pre-flight-stats bind sources in THIS container's fs; the
       # actual mount happens on the host daemon. vyos nodes bind /lib/modules,

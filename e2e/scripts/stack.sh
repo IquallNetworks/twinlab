@@ -35,6 +35,25 @@ sweep_labs() {
     # shellcheck disable=SC2086
     docker rm -f ${containers} >/dev/null || true
   fi
+  # A crashed run can also leak the labs' mgmt docker networks (<lab>_mgmt);
+  # a name-colliding network with a stale subnet fails the next deploy.
+  local networks
+  networks="$(docker network ls -q --filter 'name=e2e-')"
+  if [ -n "${networks}" ]; then
+    echo "stack.sh: removing leftover e2e lab networks"
+    # shellcheck disable=SC2086
+    docker network rm ${networks} >/dev/null 2>&1 || true
+  fi
+  # containerlab's node-stop parks interfaces into /run/netns/clab-park-*
+  # namespaces; a crashed run can strand them as plain files that poison the
+  # next stop ("unknown FS magic"). Sweep the e2e ones (privileged one-off —
+  # entries may be live nsfs mounts that need an umount first).
+  docker run --rm --privileged -v /run/netns:/netns alpine sh -c '
+    for f in /netns/clab-park-clab-e2e*; do
+      [ -e "$f" ] || continue
+      umount "$f" 2>/dev/null
+      rm -f "$f" && echo "stack.sh: removed stale park ns ${f##*/}"
+    done' 2>/dev/null || true
   # Bridges live in the host netns and are root-owned; a one-off NET_ADMIN
   # container avoids needing sudo. Only actual bridges are touched.
   docker run --rm --net=host --cap-add=NET_ADMIN alpine sh -c '

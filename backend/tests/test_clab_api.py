@@ -2,8 +2,10 @@ import json
 from collections.abc import Callable
 
 import httpx
+import pytest
 
 from twinlab_backend.result import Err, Ok
+from twinlab_backend.services import clab_api
 from twinlab_backend.services.clab_api import ClabApiClient
 
 
@@ -40,6 +42,95 @@ async def test_destroy_not_found_carries_status() -> None:
     result = await _client(handler).destroy("missing")
     assert isinstance(result, Err)
     assert result.error.status_code == 404
+
+
+async def test_destroy_retries_through_netem_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """clab-api 409s a destroy while a netem show holds its per-lab mutex —
+    transient by nature, so the lifecycle call retries past it."""
+    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    calls = {"destroy": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"token": "t"})
+        calls["destroy"] += 1
+        if calls["destroy"] < 3:
+            return httpx.Response(
+                409, text='{"error":"Lab \'tmp1\' is busy with netem operation."}'
+            )
+        return httpx.Response(200, text="destroyed tmp1")
+
+    result = await _client(handler).destroy("tmp1")
+    assert isinstance(result, Ok), result
+    assert calls["destroy"] == 3
+
+
+async def test_destroy_netem_busy_retries_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    calls = {"destroy": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"token": "t"})
+        calls["destroy"] += 1
+        return httpx.Response(409, text='{"error":"Lab \'tmp1\' is busy with netem operation."}')
+
+    result = await _client(handler).destroy("tmp1")
+    assert isinstance(result, Err)
+    assert result.error.status_code == 409
+    assert "busy with netem" in result.error.message
+    assert calls["destroy"] == 8  # mirrors _NETEM_BUSY_RETRIES
+
+
+async def test_node_action_retries_through_transient_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """clab-api's lifecycle handlers intermittently 500 under a concurrent
+    read burst; the cheap idempotent verbs retry past it."""
+    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    calls = {"stop": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"token": "t"})
+        calls["stop"] += 1
+        if calls["stop"] < 2:
+            return httpx.Response(500, text='{"error":"internal error"}')
+        return httpx.Response(200, json={"message": "Node 'n1' stopped successfully."})
+
+    result = await _client(handler).node_action("tmp1", "n1", "stop")
+    assert isinstance(result, Ok), result
+    assert calls["stop"] == 2
+
+
+async def test_deploy_does_not_retry_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deploy 500 is usually a real rejection (e.g. "already deployed") and
+    the call is heavyweight — no blind retry there."""
+    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    calls = {"deploy": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"token": "t"})
+        calls["deploy"] += 1
+        return httpx.Response(500, text='{"error":"already deployed"}')
+
+    result = await _client(handler).deploy({"name": "tmp1"})
+    assert isinstance(result, Err)
+    assert calls["deploy"] == 1
+
+
+async def test_other_conflicts_do_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    calls = {"destroy": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"token": "t"})
+        calls["destroy"] += 1
+        return httpx.Response(409, text='{"error":"some other conflict"}')
+
+    result = await _client(handler).destroy("tmp1")
+    assert isinstance(result, Err)
+    assert calls["destroy"] == 1
 
 
 _NODE = {

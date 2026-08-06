@@ -12,6 +12,7 @@ that stored record with live node state read from clab-api. This HTTP boundary
 maps typed errors to status codes.
 """
 
+import asyncio
 import re
 import shutil
 import uuid
@@ -1774,7 +1775,16 @@ async def destroy_lab(
     if not remove:
         # Pre-accept the "must be running" rule; the job tolerates the small
         # TOCTOU window (a teardown race fails the job with the same code).
+        # The inspect itself gets a short retry: under a concurrent read burst
+        # clab-api transiently errs (live-hit: a destroy of a fully-running
+        # lab 409'd seconds after a whole-lab start while a netem show beside
+        # it 502'd) — a persistent 404 still reads not-running, just ~1s later.
         inspected = await clab.inspect(lab_name)
+        for _ in range(2):
+            if isinstance(inspected, Ok):
+                break
+            await asyncio.sleep(0.5)
+            inspected = await clab.inspect(lab_name)
         if isinstance(inspected, Err):
             if inspected.error.status_code == HTTPStatus.NOT_FOUND:
                 raise ApiError(409, "lab_not_running", f"lab '{lab_name}' is not running")

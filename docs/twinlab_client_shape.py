@@ -2132,8 +2132,13 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         """POST /labs {name} — 201. GLOBAL lab:create; caller becomes owner.
 
         Record only: allocates the lab's mgmt /24, status "created" — no
-        definition yet, nothing deployed. `name` is the lab's durable identity.
-        409 name taken; 503 subnet pool exhausted."""
+        definition yet, nothing deployed. `name` is the lab's durable identity
+        and must be a netlab identifier — a leading letter then
+        letters/digits/dash/underscore, at most 16 characters — because it is
+        pinned into the stored definition as netlab's topology `name:`, which
+        netlab validates as an identifier. A wider name would create a lab
+        whose definition PUT can never succeed.
+        409 name taken; 422 invalid name; 503 subnet pool exhausted."""
         raise NotImplementedError
 
     async def list_labs(self) -> list[LabSummary]:

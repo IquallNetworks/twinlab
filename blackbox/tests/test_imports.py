@@ -70,6 +70,20 @@ async def test_wiring_suggestion_is_advice_the_factory_accepts(admin: TwinlabCli
     assert "10.77.0.1/30" in result.definition
 
 
+async def test_import_keeps_hyphenated_hostnames(admin: TwinlabClient) -> None:
+    """Hyphens are legal in netlab identifiers, so a hyphenated hostname is not
+    a rename — the twin keeps the name the operator knows the box by. Only what
+    netlab cannot carry (dots, a non-letter start, past 16 characters) moves."""
+    sources = [
+        ImportSource(device="vyos", content=_R1_VYOS.replace("'r1'", "'core-r1'")),
+        ImportSource(device="vyos", content=_R2_VYOS.replace("'r2'", "'core-r2'")),
+    ]
+    result = await admin.import_network(sources, [["core-r1:eth1", "core-r2:eth1"]])
+    assert result.name_map == {"core-r1": "core-r1", "core-r2": "core-r2"}
+    assert "core-r1:" in result.definition
+    assert "imported/core-r1.j2" in result.custom_config
+
+
 async def test_import_network_factory_output(admin: TwinlabClient) -> None:
     result = await admin.import_network(_SOURCES, _WIRING)
 

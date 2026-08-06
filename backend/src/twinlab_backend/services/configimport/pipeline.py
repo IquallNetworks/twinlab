@@ -16,6 +16,7 @@ import yaml
 from twinlab_backend.result import Err, Ok, Result
 from twinlab_backend.services.configimport.classify import BucketSplit, split_buckets
 from twinlab_backend.services.configimport.emit import (
+    NODE_NAME_MAX,
     carry_relpath,
     emit_definition,
     quarantine_relpath,
@@ -193,8 +194,17 @@ def _read_sources(
             )
         node = sanitize_node_name(raw_name)
         if node in seen:
+            # A collision the caller never typed is almost always the length
+            # cap biting two long hostnames that share a prefix — say so, and
+            # name the way out (the per-source `name` override).
+            hint = (
+                f" — netlab caps node names at {NODE_NAME_MAX} characters and"
+                f" {raw_name!r} truncates to it; set an explicit `name` on one source"
+                if len(raw_name) > NODE_NAME_MAX
+                else ""
+            )
             return Err(
-                ImportProblem("duplicate_node", f"two sources resolve to node name {node!r}")
+                ImportProblem("duplicate_node", f"two sources resolve to node name {node!r}{hint}")
             )
         seen.add(node)
         if hostname is not None:

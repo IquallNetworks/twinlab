@@ -16,7 +16,12 @@ to production networks.
 The declarative input is a netlab definition — netlab syntax (`provider`, `defaults.device`,
 `module`, `nodes`, `links`). A worked example lives at `examples/mpls-l3vpn.yml` (a VyOS MPLS
 L3VPN core: OSPF + LDP + MP-BGP VPNv4). The lab's name is not taken from the definition — it is
-the lab's durable identity, chosen at create (`CreateLabRequest.name`).
+the lab's durable identity, chosen at create (`CreateLabRequest.name`) and *pinned into* the
+definition as netlab's topology `name:`. That makes it a **netlab identifier**, so create gates
+it to one (2026-08-06): a leading LETTER, then letters/digits/dash/underscore, 16 characters —
+netlab's `must_be_id` rule intersected with docker's object-name rule, since the name also
+prefixes the lab's containers and networks. Anything wider used to create a live record whose
+definition PUT could never succeed.
 
 **Twinlab is fully open source.** Everything we distribute must be open source too: every
 dependency, bundled tool, and reference platform we ship or require must carry an OSI-approved
@@ -361,7 +366,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   factories in `services/configimport/`: per-platform boundary parsers (VyOS set+brace own code;
   IOS over netutils, Apache-2.0, with a local `typings/` stub since ConfigLine is an untyped
   namedtuple) → subnet-join link inference (2=p2p, 3+=LAN, 1=stub; mgmt-VRF interfaces never
-  join) → THIN skeleton emission (nodes/links/pinned addressing, NO modules) → the same dry
+  join) → THIN skeleton emission (nodes/links/pinned addressing, NO modules; a hostname is
+  renamed ONLY where netlab's node-id rule forces it — hyphens are legal and kept since
+  2026-08-06, dots and a non-letter start are rewritten, and the name truncates at netlab's
+  16-character cap, whose collisions surface as `duplicate_node` naming the cap and the
+  per-source `name` override) → the same dry
   `netlab create` a PUT runs, whose expanded topology yields the source-if→lab-if map joined on
   PINNED addresses → carry rewrite (IOS single-pass alternation over names+abbreviations so
   shifted maps can't cascade; VyOS structural token rewrite incl. the ethernet→dummy type change

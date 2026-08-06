@@ -587,7 +587,10 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 
         Record only: allocates the lab's mgmt /24, status "created" — no
         definition yet, nothing deployed. `name` is the lab's durable
-        identity. 409 name taken; 503 subnet pool exhausted."""
+        identity and must be a netlab identifier — a leading letter then
+        letters/digits/dash/underscore, at most 16 characters — because it is
+        pinned into the stored definition as netlab's topology `name:`.
+        409 name taken; 422 invalid name; 503 subnet pool exhausted."""
         payload = await self._send_json("POST", "/labs", json_body={"name": name})
         return _wire.parse_lab_detail(payload)
 

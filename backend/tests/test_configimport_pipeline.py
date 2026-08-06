@@ -202,15 +202,17 @@ def test_import_network_end_to_end() -> None:
     assert isinstance(outcome, Ok), getattr(outcome, "error", None)
     result = outcome.value
 
-    # Sanitized names, recorded.
-    assert result.name_map == {"r1": "r1", "r2": "r2", "r3-vyos": "r3_vyos"}
-    assert "r3_vyos:" in result.definition
+    # Node names, recorded. A hyphenated hostname is a legal netlab identifier,
+    # so it survives the whole factory unrenamed — through the dry create, the
+    # interface map and the carry rewrite below.
+    assert result.name_map == {"r1": "r1", "r2": "r2", "r3-vyos": "r3-vyos"}
+    assert "r3-vyos:" in result.definition
 
     # Identity maps for same-platform interfaces; loopbacks resolve to the
     # netlab realization (VyOS loopback pin lands on dum0 — probed live).
     assert result.interface_map["r1"]["Ethernet0/1"] == "Ethernet0/1"
     assert result.interface_map["r1"]["Loopback0"] == "Loopback0"
-    assert result.interface_map["r3_vyos"]["lo"] == "dum0"
+    assert result.interface_map["r3-vyos"]["lo"] == "dum0"
     assert "GigabitEthernet0/0" not in result.interface_map["r1"]  # mgmt never maps
 
     # Carry: rewritten, raw-wrapped, referenced by the definition.
@@ -221,15 +223,15 @@ def test_import_network_end_to_end() -> None:
     assert "imported/r1.j2" in result.definition
     # r3's eth1 has no subnet peer -> stub -> netlab realizes it as a dummy;
     # the carry followed the map, type segment included.
-    assert result.interface_map["r3_vyos"]["eth1"] == "dum1"
-    vyos_carry = result.custom_config["imported/r3_vyos.j2"]
+    assert result.interface_map["r3-vyos"]["eth1"] == "dum1"
+    vyos_carry = result.custom_config["imported/r3-vyos.j2"]
     assert "set interfaces dummy dum1 description 'lan leg'" in vyos_carry
 
     # Quarantine: classified AND kept as an unattached file.
     assert {q.reason for q in result.quarantine["r1"]} >= {"mgmt", "auth", "telemetry"}
     assert "imported/r1.quarantine.j2" in result.custom_config
     assert "imported/r1.quarantine.j2" not in result.definition
-    assert any(q.reason == "auth" for q in result.quarantine["r3_vyos"])
+    assert any(q.reason == "auth" for q in result.quarantine["r3-vyos"])
 
 
 def test_import_network_problems() -> None:
@@ -263,12 +265,29 @@ def test_import_network_problems() -> None:
 
     duplicate = import_network(
         [
-            ImportSourceSpec(device="iol", content="hostname r-1\ninterface Ethernet0/1\n"),
+            ImportSourceSpec(device="iol", content="hostname r.1\ninterface Ethernet0/1\n"),
             ImportSourceSpec(device="iol", content="hostname r_1\ninterface Ethernet0/1\n"),
         ],
         [],
     )
     assert isinstance(duplicate, Err) and duplicate.error.code == "duplicate_node"
+
+    # The collision a caller never typed: two hostnames past netlab's
+    # 16-character id cap that truncate onto each other. The message has to
+    # name the cap and the way out.
+    truncated = import_network(
+        [
+            ImportSourceSpec(
+                device="iol", content="hostname datacenter-core-rtr-1\ninterface Ethernet0/1\n"
+            ),
+            ImportSourceSpec(
+                device="iol", content="hostname datacenter-core-rtr-2\ninterface Ethernet0/1\n"
+            ),
+        ],
+        [],
+    )
+    assert isinstance(truncated, Err) and truncated.error.code == "duplicate_node"
+    assert "16 characters" in truncated.error.message
 
 
 def test_import_node() -> None:

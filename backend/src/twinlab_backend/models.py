@@ -29,6 +29,16 @@ type ContainerState = Literal[
 _Name = Annotated[
     str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", min_length=1, max_length=64)
 ]
+# A lab name is narrower than _Name because it is not just a path segment: it
+# is pinned into the definition as netlab's topology `name:`, which netlab
+# validates as an *identifier* (must_be_id — `[A-Za-z_][A-Za-z0-9_-]{0,15}`, so
+# no dots and 16 characters), and it prefixes the lab's docker objects, whose
+# names must start with an alphanumeric. The intersection is a leading LETTER
+# plus letters/digits/dash/underscore. Accepting anything wider at create hands
+# back a lab whose definition PUT can never succeed.
+_LabName = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,15}$", min_length=1, max_length=16)
+]
 # How a test case turns stdout into data `compare` can assert on (contract
 # delta 17): "json" = stdout must parse as JSON (free on VyOS — FRR's vtysh
 # emits it natively); "textfsm" = stdout parses into a list of records via a
@@ -231,7 +241,7 @@ class CreateLabRequest(BaseModel):
     # authored definition. Create is record-only (lifecycle split): it
     # allocates the mgmt subnet and stores nothing else; the definition is
     # authored via PUT and deployed via POST /labs/{name}/deploy.
-    name: _Name
+    name: _LabName
 
 
 class UpdateDefinitionRequest(BaseModel):

@@ -32,6 +32,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { api, type ImportSourceInput } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
+import { labNameError } from '@/lib/lab-name'
 import { deviceCatalogQueryOptions } from '@/lib/queries'
 import type { ImportWarning, NetworkImport, QuarantineClass } from '@/lib/schemas'
 import { useDocumentTitle } from '@/lib/use-document-title'
@@ -260,6 +261,8 @@ export function LabImportPage() {
   const [suggestionNotes, setSuggestionNotes] = useState<ImportWarning[]>([])
   const [result, setResult] = useState<NetworkImport | null>(null)
   const [labName, setLabName] = useState('')
+  // Same rule as the create dialog — an untyped field is not yet a problem.
+  const labNameProblem = labName === '' ? null : labNameError(labName)
 
   const sourceInputs = (): ImportSourceInput[] =>
     sources.map((s) => ({
@@ -516,12 +519,19 @@ export function LabImportPage() {
                 className="w-56 font-mono"
                 value={labName}
                 onChange={(e) => setLabName(e.target.value)}
-                placeholder="my-imported-lab"
+                placeholder="imported-lab"
+                aria-invalid={labNameProblem !== null}
+                aria-describedby={labNameProblem === null ? undefined : 'import-lab-name-error'}
               />
+              {labNameProblem !== null && (
+                <p id="import-lab-name-error" className="text-destructive text-sm">
+                  {labNameProblem}
+                </p>
+              )}
             </div>
             <Button
               type="button"
-              disabled={labName.trim() === '' || create.isPending}
+              disabled={labName === '' || labNameProblem !== null || create.isPending}
               onClick={() => create.mutate()}
             >
               {create.isPending ? 'Creating…' : 'Create lab'}

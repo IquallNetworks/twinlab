@@ -314,6 +314,26 @@ def test_create_lab_request_accepts_valid_name() -> None:
     assert CreateLabRequest(name="mpls-l3vpn").name == "mpls-l3vpn"
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "seventeen-chars-x",  # over netlab's 16-character identifier cap
+        "lab.one",  # netlab identifiers carry no dots
+        "1lab",  # netlab identifiers start with a letter or underscore
+        "_lab",  # ...and a docker object name starts with an alphanumeric
+    ],
+)
+def test_create_lab_request_rejects_names_netlab_cannot_carry(name: str) -> None:
+    # The name is pinned into the definition as netlab's topology `name:`, so a
+    # name outside netlab's id rule creates a lab whose PUT can never succeed.
+    with pytest.raises(pydantic.ValidationError):
+        _ = CreateLabRequest(name=name)
+
+
+def test_create_lab_request_accepts_the_full_identifier_width() -> None:
+    assert CreateLabRequest(name="Sixteen-chars_16").name == "Sixteen-chars_16"
+
+
 def test_custom_config_accepts_fileset() -> None:
     request = UpdateCustomConfigRequest(custom_config={"nat/ios.j2": "conf"})
     assert request.custom_config == {"nat/ios.j2": "conf"}

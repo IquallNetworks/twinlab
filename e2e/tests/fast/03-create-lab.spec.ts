@@ -14,14 +14,21 @@ test('create-lab dialog validates and creates the fast-tier lab', async ({ page 
     ),
   ).toBeVisible()
 
-  // Client-side validation mirrors the server's name rule.
+  // Client-side validation mirrors the server's name rule, which is netlab's
+  // id rule: the name is pinned into the definition as the topology `name:`,
+  // so anything wider would create a lab whose definition PUT can never pass.
+  const hint = 'Start with a letter; then letters, digits, dash or underscore'
   await dialog.getByRole('button', { name: 'Create' }).click()
   await expect(dialog.getByText('A lab name is required')).toBeVisible()
   await dialog.getByLabel('Name').fill('bad name!')
   await dialog.getByRole('button', { name: 'Create' }).click()
-  await expect(
-    dialog.getByText('Start with a letter or digit; then letters, digits, dot, dash or underscore'),
-  ).toBeVisible()
+  await expect(dialog.getByText(hint)).toBeVisible()
+  await dialog.getByLabel('Name').fill('dotted.name')
+  await dialog.getByRole('button', { name: 'Create' }).click()
+  await expect(dialog.getByText(hint)).toBeVisible()
+  await dialog.getByLabel('Name').fill('seventeen-chars-x')
+  await dialog.getByRole('button', { name: 'Create' }).click()
+  await expect(dialog.getByText('At most 16 characters')).toBeVisible()
 
   await dialog.getByLabel('Name').fill(FAST_LAB)
   await dialog.getByRole('button', { name: 'Create' }).click()

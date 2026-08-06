@@ -21,20 +21,31 @@ _RESERVED_NODE_NAMES = frozenset(
     {"prefix", "type", "name", "bridge", "interfaces", "mtu", "bandwidth", "gateway", "role"}
 )
 
-_INVALID_NAME_CHARS = re.compile(r"[^A-Za-z0-9_]")
+_INVALID_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]")
+# netlab validates node names as identifiers (must_be_id): a leading letter or
+# underscore, then letters/digits/underscore/hyphen, MAX_NODE_ID_LENGTH (16)
+# characters. A name outside it fails the dry `netlab create` the import runs,
+# so the sanitizer has to land inside it — hyphens included, since they are
+# legal here (the emitted links are dict-form, never the terse `a-b` spelling
+# that would re-split a hyphenated name). The leading underscore netlab would
+# also accept is NOT taken: node names travel through the API's `_Name` (the
+# netem and power routes), which starts at an alphanumeric.
+NODE_NAME_MAX = 16
 
 
 def sanitize_node_name(hostname: str) -> str:
-    """A netlab-safe node name: alphanumerics and underscores only (hyphens
-    and dots are the builder's gated territory, and netlab mangles them in
-    identifier contexts), first char alphanumeric, 64 max. The applied
-    rename lands in the import's name map."""
+    """A netlab-safe node name: letters, digits, underscores and hyphens, a
+    leading letter, 16 characters max. Only what the twin cannot carry is
+    rewritten — a hyphenated hostname keeps its hyphens. Every applied rename
+    lands in the import's name map."""
     cleaned = _INVALID_NAME_CHARS.sub("_", hostname)
-    if not cleaned or not cleaned[0].isalnum():
+    if not cleaned or not cleaned[0].isalpha():
         cleaned = f"n{cleaned}"
+    # Reserved words are all far shorter than the cap, so truncating last
+    # cannot reintroduce one.
     if cleaned.lower() in _RESERVED_NODE_NAMES:
         cleaned = f"n_{cleaned}"
-    return cleaned[:64]
+    return cleaned[:NODE_NAME_MAX]
 
 
 def carry_relpath(node: str) -> str:

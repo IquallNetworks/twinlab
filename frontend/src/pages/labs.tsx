@@ -51,6 +51,7 @@ import {
 import { api, waitJob } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
 import { formatDateTime } from '@/lib/format'
+import { labNameSchema } from '@/lib/lab-name'
 import { labsQueryOptions, meQueryOptions, networkTemplatesQueryOptions } from '@/lib/queries'
 import { useDocumentTitle } from '@/lib/use-document-title'
 
@@ -58,16 +59,10 @@ const PERM_LAB_CREATE = 'lab:create'
 const PERM_LAB_DESTROY = 'lab:destroy'
 
 const createSchema = z.object({
-  // Same path-safe charset the backend enforces (`_Name`): the name keys the
-  // record and every /labs/{name} route, so it must be a safe URL segment.
-  name: z
-    .string()
-    .min(1, 'A lab name is required')
-    .max(64, 'At most 64 characters')
-    .regex(
-      /^[A-Za-z0-9][A-Za-z0-9_.-]*$/,
-      'Start with a letter or digit; then letters, digits, dot, dash or underscore',
-    ),
+  // The same netlab-identifier rule the backend enforces (`_LabName`): the
+  // name keys every /labs/{name} route AND is pinned into the definition as
+  // netlab's topology `name:`. See lib/lab-name.ts.
+  name: labNameSchema,
 })
 
 // The create dialog's "start from" choice: blank, or a network template name.

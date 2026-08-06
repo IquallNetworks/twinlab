@@ -183,11 +183,17 @@ def test_suggestion_proposes_the_subnet_join_and_warns_about_the_rest() -> None:
 
 
 def test_sanitize_node_name() -> None:
-    assert sanitize_node_name("core-rtr-01.example.com") == "core_rtr_01_example_com"
     assert sanitize_node_name("r1") == "r1"
-    assert sanitize_node_name("_edge") == "n_edge"
+    # Hyphens are legal netlab identifiers, so a hyphenated hostname is NOT a
+    # rename; only the dots have to go.
+    assert sanitize_node_name("core-rtr-01") == "core-rtr-01"
+    assert sanitize_node_name("edge.example") == "edge_example"
+    assert sanitize_node_name("_edge") == "n_edge"  # `_Name` starts alphanumeric
+    assert sanitize_node_name("9leading") == "n9leading"  # netlab ids start with a letter
     assert sanitize_node_name("prefix") == "n_prefix"  # reserved link-attr word
-    assert len(sanitize_node_name("x" * 100)) == 64
+    # netlab's id cap, not an arbitrary bound: a longer name fails the dry
+    # `netlab create` the import runs.
+    assert sanitize_node_name("x" * 100) == "x" * 16
 
 
 def test_emitted_skeleton_shape() -> None:

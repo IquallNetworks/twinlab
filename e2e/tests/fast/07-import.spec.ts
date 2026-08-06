@@ -21,13 +21,13 @@ test('the import wizard turns two VyOS configs into a lab', async ({ page }) => 
   await page.getByLabel('Source config').nth(1).fill(IMPORT_R2_CONFIG)
   await page.getByRole('button', { name: 'Next: wiring' }).click()
 
-  // Step 2 — wiring: the shared /30 is proposed as one p2p entry. The import
-  // sanitizes hostnames to underscores (imp-r1 → imp_r1) — asserted here and
-  // on the review step's rename line. ("Wiring entry" the textbox, not the
-  // "Remove wiring entry" button getByLabel would also match.)
+  // Step 2 — wiring: the shared /30 is proposed as one p2p entry. Hyphenated
+  // hostnames are legal netlab identifiers, so imp-r1 keeps its name all the
+  // way through — the review step's rename line stays away. ("Wiring entry"
+  // the textbox, not the "Remove wiring entry" button getByLabel also matches.)
   await expect(page.getByRole('heading', { name: 'Wiring' })).toBeVisible()
   const entry = page.getByRole('textbox', { name: 'Wiring entry' })
-  await expect(entry).toHaveValue(/imp_r1:eth1.*imp_r2:eth1|imp_r2:eth1.*imp_r1:eth1/)
+  await expect(entry).toHaveValue(/imp-r1:eth1.*imp-r2:eth1|imp-r2:eth1.*imp-r1:eth1/)
   await expect(page.locator('[data-slot="badge"]', { hasText: 'p2p' })).toBeVisible()
   await page.getByRole('button', { name: 'Analyze' }).click()
 
@@ -36,12 +36,12 @@ test('the import wizard turns two VyOS configs into a lab', async ({ page }) => 
   await expect(page.getByText('1 warning', { exact: true })).toBeVisible()
   await expect(
     page.getByText(
-      /imp_r1: interface eth2 \(10\.220\.1\.1\/24\) is not wired to a peer; realized as a stub/,
+      /imp-r1: interface eth2 \(10\.220\.1\.1\/24\) is not wired to a peer; realized as a stub/,
     ),
   ).toBeVisible()
-  await expect(page.getByText('Renamed for netlab: imp-r1 → imp_r1, imp-r2 → imp_r2')).toBeVisible()
+  await expect(page.getByText(/Renamed for netlab/)).toHaveCount(0)
   await expect(page.getByText('Inferred definition')).toBeVisible()
-  await expect(page.locator('.cm-editor').getByText('imp_r1:', { exact: true })).toBeVisible()
+  await expect(page.locator('.cm-editor').getByText('imp-r1:', { exact: true })).toBeVisible()
   // The unwired eth2 realizes as a dummy; loopback pins land on dum0.
   await expect(page.getByText('eth2 → dum1')).toBeVisible()
   await expect(page.getByText('lo → dum0').first()).toBeVisible()
@@ -58,6 +58,6 @@ test('the import wizard turns two VyOS configs into a lab', async ({ page }) => 
   await expectToast(page, 'Imported into e2e-imported')
   await page.waitForURL('**/labs/e2e-imported/build')
   const canvas = page.getByRole('region', { name: 'Topology builder canvas' })
-  await expect(flowNode(canvas, 'imp_r1')).toBeVisible()
-  await expect(flowNode(canvas, 'imp_r2')).toBeVisible()
+  await expect(flowNode(canvas, 'imp-r1')).toBeVisible()
+  await expect(flowNode(canvas, 'imp-r2')).toBeVisible()
 })

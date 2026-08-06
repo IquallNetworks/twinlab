@@ -45,6 +45,19 @@ async def test_create_duplicate_name_is_409(admin: TwinlabClient, make_lab: LabF
     assert excinfo.value.status_code == 409
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["seventeen-chars-x", "dotted.name", "1leading", "_leading"],
+)
+async def test_create_rejects_names_netlab_cannot_carry(admin: TwinlabClient, name: str) -> None:
+    """The name is pinned into the definition as netlab's topology `name:`, an
+    identifier (a leading letter, then letters/digits/dash/underscore, 16). A
+    wider name used to create a lab whose definition PUT could never pass."""
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.create_lab(name)
+    assert excinfo.value.status_code == 422
+
+
 async def test_created_lab_appears_in_list(admin: TwinlabClient, make_lab: LabFactory) -> None:
     lab = await make_lab(None)
     rows = {row.name: row for row in await admin.list_labs()}

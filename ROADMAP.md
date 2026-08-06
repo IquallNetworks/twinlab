@@ -47,8 +47,24 @@ said what was left.
    ~5 minutes, and four real bugs found and fixed on the way (mgmt-subnet pins
    in served templates, two clab-api concurrency classes, and the
    /run/netns mount-propagation break of node stop).
-5. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
-   **LAST**; item 14 is done, so this is the whole remainder.
+5. ~~**The two name findings item 14 surfaced but left open**~~ — **DONE
+   2026-08-06**, both the same class: a name Twinlab accepted that netlab's
+   `must_be_id` rule (a leading letter or underscore, then
+   letters/digits/dash/underscore, 16 characters) cannot carry. (a) `POST /labs`
+   took the wide `_Name` (64 characters, dots, a leading digit), so a name past
+   the rule created a live record — mgmt subnet reserved — whose definition PUT
+   could never succeed; create now gates on netlab's rule intersected with
+   docker's object-name rule (leading LETTER, since the name prefixes the lab's
+   containers and networks), mirrored in the create dialog and the import
+   wizard, which had no validation at all. (b) config import rewrote hyphens to
+   underscores (`core-r1` → `core_r1`) although netlab accepts them — a twin
+   that no longer answers to the name the operator knows the box by. It now
+   renames only what netlab refuses (dots, a non-letter start) and truncates at
+   the 16-character cap it never enforced, so an over-long hostname stopped
+   producing a `netlab_invalid` import; truncation collisions surface as
+   `duplicate_node` naming the cap and the per-source `name` override.
+6. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
+   **LAST**; item 14 and its findings are done, so this is the whole remainder.
 
 Explicitly NOT in v1.0: the CML licensing revisit (item 20), the acquisition-blocked
 platform tail (item 21), validation-gate parallelization (item 10), packet capture +

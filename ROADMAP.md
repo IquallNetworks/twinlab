@@ -858,7 +858,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     falls short. They run alongside the sweep, not after it.
     **Numbering note: 18 and 19 are RETIRED, not missing.** They were exactly
     those two reviews, and they live on as 17.2 and 17.3; nothing was dropped.
-    Do not reuse either number — the next new item takes **23** (22 is the release
+    Do not reuse either number — the next new item takes **24** (22 is the release
     train).
 
     **Opened 2026-08-04 with three parallel analyses, recorded in
@@ -1337,6 +1337,67 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     the up-to-five coordinated admission changes), against the **two bars**
     settled 2026-08-05 — a platform must work *and* its image must be one we may
     legitimately run.
+
+### Post-v1.0 · jump-side DNS for lab nodes · **planned, after the v1.0 tag**
+
+23. **Let `ssh -J twinlab-jump vyos@clab-<lab>-<node>` work without any
+    per-lab client config.** Investigated 2026-08-06 against the live stack;
+    the client-side half shipped the same day (below), the server-side half is
+    this item.
+
+    **What Twinlab loses today, precisely.** Three naming planes exist and only
+    the third is broken. (1) Node→node inside the lab: netlab's
+    `node_files/-shared-hosts` bind, working since the `LAB_FILES_DIR` fix.
+    (2) Docker's embedded DNS on `<lab>_mgmt`, which already carries
+    `DNSNames = [clab-<lab>-<node>, <short-id>, <node>]` → mgmt IP for free —
+    but 127.0.0.11 answers only for networks the *querying* container is
+    attached to, and the jump host is on the plain compose network.
+    (3) containerlab's own `/etc/hosts` block, which IS still written — into
+    the clab-api CONTAINER, where nothing reads it (verified: a deploy adds
+    `###### CLAB-<lab>-START ######` there while the host's file stays
+    untouched; clab-api runs `network_mode: host`, so docker seeded its hosts
+    file as a copy of the host's at create time, which is why a stale block
+    from an old direct-clab run appears in both). clab-api v0.5.0 ships no
+    `containerlab` binary at all — it drives containerlab in-process as a
+    library, so the write lands in its own mount namespace.
+
+    **The constraint that decides the design, and the reason this is not a
+    one-liner.** `permitopen` is a LITERAL string match — sshd(8): *"No pattern
+    matching or name lookup is performed on the specified hostnames, they must
+    be literal host names and/or addresses."* Proven end-to-end against the
+    running jump: a request for the IP is permitted (`connect failed:
+    Connection refused` — the alpine node has no sshd, so that IS the success
+    signal); the same request by name is `administratively prohibited`; adding
+    the name to the jump's `/etc/hosts` changes nothing; adding it to
+    `permitopen` as well makes it permitted. So name-based access needs BOTH
+    halves — resolution on the jump AND the literal name in
+    `render_authorized_keys_line`.
+
+    **Shape when picked up.** Backend feeds the jump a hosts fragment (a new
+    `/internal/ssh/hosts` the lookup script refreshes, or a shared volume with
+    a small refresher in the jump entrypoint), and the renderer emits
+    `permitopen="clab-<lab>-<node>:*"` beside each IP. Costs: a doubled
+    permitopen list, a staleness window between deploy and resolution, a new
+    internal surface, and it touches the fail-safe authorized-keys renderer —
+    the one place its module docstring says to keep exactly as it is. Attaching
+    the jump to each lab's mgmt network would be strictly cleaner (docker DNS
+    already has the names) but needs a Docker socket in the only
+    internet-facing service: a hard no.
+
+    **Rejected: bind-mounting the host's `/etc/hosts` into clab-api rw.** It
+    would literally recover clab's block, but only for someone SSHing from the
+    lab host, does nothing for the jump path, and lets a container mutate a
+    host file — with that orphaned block as evidence of how the mutations leak.
+
+    **Shipped instead (2026-08-06), and the reason this item is not urgent:**
+    client-side aliases. `lib/ssh.ts` emits `Host <node>.<lab>` /
+    `HostName <mgmt-ip>` / `ProxyJump twinlab-jump` blocks — per node in the
+    Connect drawer, whole-lab in the Nodes tab's `LabSshConfigDialog` — so
+    `ssh r1.mylab` works against an UNCHANGED backend: ProxyJump sends the
+    resolved `HostName`, i.e. the IP, so the existing permitopen matches
+    (verified). What this item adds over that is only the removal of the paste.
+    Note also that mgmt IPs are already stable per lab (durable subnet +
+    netlab-pinned node ids), so names buy readability, not stability.
 
 ### i18n · **deferred**
 

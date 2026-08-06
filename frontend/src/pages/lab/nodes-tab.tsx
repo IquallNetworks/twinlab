@@ -4,11 +4,12 @@ import { toast } from 'sonner'
 
 import { LabInterfaces } from '@/components/lab/lab-interfaces'
 import { LabLinks } from '@/components/lab/lab-links'
+import { LabSshConfigDialog } from '@/components/lab/lab-ssh-config-dialog'
 import { NodeConnectDrawer } from '@/components/lab/node-connect-drawer'
 import { NodeControls } from '@/components/lab/node-controls'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
   TableBody,
@@ -65,6 +66,10 @@ export function NodesTab({ name }: { name: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Nodes</CardTitle>
+          {/* Whole-lab ssh_config; the per-node equivalent is in Connect. */}
+          <CardAction>
+            <LabSshConfigDialog name={lab.name} nodes={lab.nodes} />
+          </CardAction>
         </CardHeader>
         <CardContent>
           {lab.nodes.length === 0 ? (

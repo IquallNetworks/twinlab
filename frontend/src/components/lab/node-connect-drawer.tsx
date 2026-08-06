@@ -24,9 +24,10 @@ import { sshAccessQueryOptions } from '@/lib/queries'
 import type { LabNodeState } from '@/lib/schemas'
 import {
   jumpCoordinates,
+  nodeConfigBlock,
+  sshAliasCommand,
   sshConfigBlock,
   sshDirectCommand,
-  sshJumpCommand,
   sshProxyCommand,
 } from '@/lib/ssh'
 
@@ -59,7 +60,12 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
  *
  * The SSH guidance deliberately never suggests `ssh -i key -J jump@host ip`:
  * command-line -i does not reach the -J hop, so that form always fails for
- * registered keys. Both offered recipes route the identity correctly. */
+ * registered keys. Both offered recipes route the identity correctly.
+ *
+ * The config recipe names the node (`ssh r1.mylab`) rather than its address:
+ * the alias is a client-side ssh_config entry whose HostName is still the
+ * management IP, so nothing on the jump host has to resolve it. Every node of
+ * the lab in one paste is on the Nodes tab. */
 export function NodeConnectDrawer({
   name,
   node,
@@ -157,7 +163,11 @@ export function NodeConnectDrawer({
                   </TabsList>
                   <TabsContent value="config" className="flex flex-col gap-3">
                     <CopyBlock label="config block (once)" text={sshConfigBlock(jump)} />
-                    <CopyBlock label="command" text={sshJumpCommand(nodeUser, node.mgmt_ip)} />
+                    <CopyBlock
+                      label="config block (this node)"
+                      text={nodeConfigBlock(jump, name, node, nodeUser)}
+                    />
+                    <CopyBlock label="command" text={sshAliasCommand(name, node.name)} />
                   </TabsContent>
                   <TabsContent value="proxy">
                     <CopyBlock

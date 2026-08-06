@@ -39,8 +39,33 @@ test('the connect drawer serves the SSH recipe with the real address', async ({ 
   // teaches the jump host, and the one-liner is the ProxyCommand form.
   await expect(sheet.getByText(/^10\.79\.\d+\.\d+$/)).toBeVisible()
   await expect(sheet.getByText('Host twinlab-jump')).toBeVisible()
+  // The node alias: an ssh_config entry whose HostName is still the address,
+  // so the command names the node while the jump keeps seeing the IP.
+  await expect(sheet.getByText(`Host r1.${E2E_NET_NAME}`)).toBeVisible()
+  await expect(sheet.getByText(`ProxyJump twinlab-jump`)).toBeVisible()
+  await expect(sheet.getByText(`ssh r1.${E2E_NET_NAME}`, { exact: true })).toBeVisible()
   await sheet.getByRole('tab', { name: 'One-liner' }).click()
   await expect(sheet.getByText(/ProxyCommand/)).toBeVisible()
+  await page.keyboard.press('Escape')
+})
+
+test('the Nodes tab hands out an ssh_config for the whole lab', async ({ page }) => {
+  await page.goto(`/labs/${E2E_NET_NAME}/nodes`)
+  await page.getByRole('button', { name: 'SSH config', exact: true }).click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText(`SSH config — ${E2E_NET_NAME}`)).toBeVisible()
+  await expect(dialog.getByText(`nodes (${E2E_NET_NODES.length})`)).toBeVisible()
+  // Every deployed node is aliased, jump-routed, and addressed.
+  for (const node of E2E_NET_NODES) {
+    await expect(dialog.getByText(`Host ${node}.${E2E_NET_NAME}`)).toBeVisible()
+  }
+  // The login field rewrites every block, so one edit serves the whole lab.
+  await dialog.getByLabel('Node login').fill('vyos')
+  await expect(dialog.getByText('User vyos').first()).toBeVisible()
+
+  await dialog.getByRole('button', { name: `Copy nodes (${E2E_NET_NODES.length})` }).click()
+  await expectToast(page, `Copied nodes (${E2E_NET_NODES.length})`)
   await page.keyboard.press('Escape')
 })
 

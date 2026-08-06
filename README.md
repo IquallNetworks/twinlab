@@ -216,6 +216,25 @@ Host twinlab-jump
 ssh -J twinlab-jump vyos@10.77.0.101
 ```
 
+To reach nodes by name instead, the lab's Nodes tab hands out ready-made aliases (one per node,
+`<node>.<lab>`) to paste beneath that block:
+
+```
+Host r1.mylab
+  HostName 10.77.0.101
+  User vyos
+  ProxyJump twinlab-jump
+```
+
+```bash
+ssh r1.mylab
+```
+
+The alias is resolved on *your* machine and `HostName` stays the management address, so the jump
+host still receives the IP — which is what it authorizes. sshd matches its `permitopen`
+restrictions literally, performing no name lookup, so a name the server was never told about
+would be refused however well it resolves.
+
 Use the config block (or an explicit `ProxyCommand`) rather than a bare `ssh -J` with `-i`:
 command-line identity options do **not** apply to the jump hop, which is its own implicit
 connection, so the connection dies there with "Permission denied (publickey)". Access is resolved

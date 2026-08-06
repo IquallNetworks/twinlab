@@ -641,6 +641,11 @@ function SshKeysCard() {
                 </pre>
                 <CopyButton value={sshConfigBlock(jump)} label="config block" />
               </div>
+              <p className="text-sm text-muted-foreground">
+                To reach nodes by name instead, a lab&apos;s Nodes tab hands out ready-made{' '}
+                <code className="font-mono text-xs">&lt;node&gt;.&lt;lab&gt;</code> aliases to
+                paste beneath this block.
+              </p>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">

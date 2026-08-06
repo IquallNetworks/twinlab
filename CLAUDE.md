@@ -149,8 +149,15 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `defaultLabTab(lab.permissions)` — authors land on Overview, pure consumers on Nodes; Access
   renders only with `lab:grant`); a per-node **Connect drawer** (mgmt IP, web console + logs
   launchers, and SSH guidance from `lib/ssh.ts`: the `~/.ssh/config` `Host twinlab-jump` block +
-  `ssh -J twinlab-jump <user>@<ip>` or the ProxyCommand one-liner — NEVER bare `-J` with `-i`,
-  which dies at the hop; the Account page teaches the same block); a **jobs center at `/jobs`**
+  a per-node **`<node>.<lab>` alias block** so the everyday command is `ssh r1.mylab` rather than
+  an address (whole-lab paste on the Nodes tab, `LabSshConfigDialog`), or the ProxyCommand
+  one-liner over the raw IP — NEVER bare `-J` with `-i`,
+  which dies at the hop; the Account page teaches the same block. The alias is CLIENT-SIDE only,
+  its `HostName` still the mgmt IP: sshd matches `permitopen` literally with **no name lookup**
+  (sshd(8), proven against the live jump 2026-08-06), so a name the backend never rendered into
+  the authorized_keys line is refused "administratively prohibited" however well the jump host
+  resolves it — jump-side DNS is therefore a two-part change and is parked as ROADMAP item 23);
+  a **jobs center at `/jobs`**
   plus per-lab job history through one shared `JobsTable` (row → detail sheet with request/
   result/error JSON; aggregation is one `GET /jobs` query keyed `['jobs', 'all', limit]`, under
   the same `['jobs']` root as the per-lab lists so one invalidation refreshes either). Long ops submit **202 async jobs** awaited via `waitJob`

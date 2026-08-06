@@ -34,10 +34,16 @@ async def main() -> None:
     async with TwinlabClient("http://localhost:8000") as client:
         await client.login("admin", "...")
 
+        # The lab name is its durable identity and a netlab identifier:
+        # a leading letter, then letters/digits/dash/underscore, max 16.
         await client.create_lab("my-lab")
         await client.update_definition("my-lab", open("lab.yml").read())
-        result = await client.deploy_lab("my-lab", configure=True)
-        print(result.status)
+
+        # Deploy is asynchronous: it returns a RUNNING job. wait_job polls it
+        # to a terminal state and hands back the job, result and all.
+        job = await client.deploy_lab("my-lab", configure=True)
+        done = await client.wait_job("my-lab", job.id, timeout=900)
+        print(done.status, done.result, done.error)
 
         for lab in await client.list_labs():
             print(lab.name, lab.status)

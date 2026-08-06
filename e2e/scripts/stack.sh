@@ -48,9 +48,11 @@ sweep_labs() {
   # namespaces; a crashed run can strand them as plain files that poison the
   # next stop ("unknown FS magic"). Sweep the e2e ones (privileged one-off —
   # entries may be live nsfs mounts that need an umount first).
+  # -e follows symlinks, so a DANGLING one (netns entries can be links to a
+  # /proc/<pid>/ns/net that is gone) would be skipped and persist; -L catches it.
   docker run --rm --privileged -v /run/netns:/netns alpine sh -c '
-    for f in /netns/clab-park-clab-e2e*; do
-      [ -e "$f" ] || continue
+    for f in /netns/clab-park-clab-e2e* /netns/clab-e2e-*; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
       umount "$f" 2>/dev/null
       rm -f "$f" && echo "stack.sh: removed stale park ns ${f##*/}"
     done' 2>/dev/null || true

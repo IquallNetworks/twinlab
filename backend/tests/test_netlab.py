@@ -17,6 +17,7 @@ from twinlab_backend.services.netlab import (
     set_lab_name,
     set_mgmt_subnet,
     strip_generated_binds,
+    strip_record_pins,
 )
 
 # device and provider are stated explicitly — Twinlab never defaults them.
@@ -226,6 +227,41 @@ def test_set_mgmt_subnet_preserves_explicit_network() -> None:
 
 def test_set_mgmt_subnet_rejects_non_mapping_addressing() -> None:
     assert isinstance(set_mgmt_subnet("addressing: not-a-map\n", "10.0.0.0/24", "n"), Err)
+
+
+def test_strip_record_pins_inverts_the_pinning() -> None:
+    named = set_lab_name(_VALID_DEFINITION, "tl-abc123")
+    assert isinstance(named, Ok), named
+    pinned = set_mgmt_subnet(named.value, "10.77.9.0/24", "tl-abc_mgmt")
+    assert isinstance(pinned, Ok), pinned
+    stripped = strip_record_pins(pinned.value)
+    assert isinstance(stripped, Ok), stripped
+    # emptied addressing/mgmt containers are dropped too, so the result parses
+    # identically to the pre-pin original
+    assert yaml.safe_load(stripped.value) == yaml.safe_load(_VALID_DEFINITION)
+
+
+def test_strip_record_pins_keeps_other_addressing_keys() -> None:
+    definition = (
+        "name: lab1\n"
+        "addressing:\n"
+        "  mgmt:\n"
+        "    ipv4: 10.77.9.0/24\n"
+        "    _network: lab1_mgmt\n"
+        "    start: 50\n"
+        "  p2p:\n"
+        "    ipv4: 10.1.0.0/16\n"
+        "nodes: [r1]\n"
+    )
+    stripped = strip_record_pins(definition)
+    assert isinstance(stripped, Ok), stripped
+    parsed = cast("dict[str, object]", yaml.safe_load(stripped.value))
+    assert "name" not in parsed
+    assert parsed["addressing"] == {"mgmt": {"start": 50}, "p2p": {"ipv4": "10.1.0.0/16"}}
+
+
+def test_strip_record_pins_rejects_non_mapping() -> None:
+    assert isinstance(strip_record_pins("- a\n- list\n"), Err)
 
 
 def test_strip_generated_binds_drops_node_files_binds() -> None:

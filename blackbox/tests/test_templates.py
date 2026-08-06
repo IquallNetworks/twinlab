@@ -96,14 +96,27 @@ async def test_publish_toggle_lifecycle(admin: TwinlabClient, make_lab: LabFacto
     assert (await admin.get_lab(lab.name)).template_published is True
 
     # The entry is a LIVE view: it serves the lab's CURRENT stored definition,
-    # including edits made after publishing.
+    # including edits made after publishing — MINUS the record pins (name,
+    # mgmt subnet), which belong to the source lab's record. Served as-stored
+    # they made every instantiation 409 mgmt_subnet_taken while the source lab
+    # held the subnet.
     stored = (await admin.get_lab(lab.name)).definition
     assert stored is not None
-    assert (await admin.get_network_template(lab.name)).content == stored
+    content = (await admin.get_network_template(lab.name)).content
+    assert f"name: {lab.name}" in stored and f"name: {lab.name}" not in content
+    assert "mgmt" in stored and "mgmt" not in content
+    assert "n3" not in content
     _ = await admin.update_definition(lab.name, LAN_LAB_DEFINITION)
-    restored = (await admin.get_lab(lab.name)).definition
-    assert restored is not None and restored != stored
-    assert (await admin.get_network_template(lab.name)).content == restored
+    assert "n3" in (await admin.get_network_template(lab.name)).content
+
+    # Instantiation is create + PUT of the served content, and it must work
+    # WHILE the source lab exists (the compose the create dialog's "Start
+    # from" performs).
+    clone = await make_lab(None)
+    cloned = await admin.update_definition(
+        clone.name, (await admin.get_network_template(lab.name)).content
+    )
+    assert cloned.definition is not None
 
     # Re-publishing updates the card.
     entry = await admin.set_lab_template(lab.name, published=True, description="new card")

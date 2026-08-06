@@ -1,0 +1,19 @@
+{
+  "name": "twinlab-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "test": "playwright test",
+    "test:fast": "playwright test --project=fast",
+    "test:journey": "playwright test --project=journey",
+    "typecheck": "tsc --noEmit",
+    "report": "playwright show-report report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}

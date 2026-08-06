@@ -419,6 +419,39 @@ def set_mgmt_subnet(definition: str, subnet: str, network_name: str) -> Result[s
     return Ok(yaml.safe_dump(definition_map, sort_keys=False))
 
 
+def strip_record_pins(definition: str) -> Result[str, NetlabError]:
+    """The inverse of set_lab_name/set_mgmt_subnet, for REUSE of a stored
+    definition: remove the record-keyed pins — top-level `name:` and
+    `addressing.mgmt.ipv4`/`_network` — so serving it as a network template
+    yields something another lab can instantiate. The receiving PUT re-pins
+    its own record's name and subnet; left in place, the source lab's explicit
+    mgmt subnet wins there and the PUT 409s `mgmt_subnet_taken` for as long as
+    the source lab exists. Other `addressing.mgmt` keys survive; mappings the
+    strip empties are dropped rather than left as clutter."""
+    try:
+        parsed: Any = yaml.safe_load(definition)
+    except yaml.YAMLError as exc:
+        return Err(NetlabError(f"could not parse definition: {exc}", ""))
+    if not isinstance(parsed, dict):
+        return Err(NetlabError("definition is not a mapping", ""))
+
+    definition_map = cast("dict[str, object]", parsed)
+    _ = definition_map.pop("name", None)
+    addressing = definition_map.get("addressing")
+    if isinstance(addressing, dict):
+        addressing_map = cast("dict[str, object]", addressing)
+        mgmt = addressing_map.get("mgmt")
+        if isinstance(mgmt, dict):
+            mgmt_map = cast("dict[str, object]", mgmt)
+            _ = mgmt_map.pop("ipv4", None)
+            _ = mgmt_map.pop("_network", None)
+            if not mgmt_map:
+                _ = addressing_map.pop("mgmt")
+        if not addressing_map:
+            _ = definition_map.pop("addressing")
+    return Ok(yaml.safe_dump(definition_map, sort_keys=False))
+
+
 def _write_templates(workdir: Path, templates: dict[str, str]) -> NetlabError | None:
     """Write custom-config templates into the create workdir so `netlab create`'s
     validation of `config:` references passes. Paths are already validated upstream

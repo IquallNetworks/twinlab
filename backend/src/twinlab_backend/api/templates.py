@@ -36,6 +36,7 @@ from twinlab_backend.models import (
 )
 from twinlab_backend.result import Err, Ok, Result
 from twinlab_backend.services import lab_store, template_store
+from twinlab_backend.services.netlab import strip_record_pins
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
@@ -159,12 +160,22 @@ async def get_network_template(
         raise ApiError(
             500, "internal_error", f"published lab '{lab.name}' has no stored definition"
         )
+    # Served MINUS the record pins (name, mgmt subnet): the stored text carries
+    # the SOURCE lab's, and an instantiating PUT would honor the explicit
+    # subnet and 409 mgmt_subnet_taken while the source lab holds it.
+    content = strip_record_pins(lab.definition)
+    if isinstance(content, Err):
+        raise ApiError(
+            500,
+            "internal_error",
+            f"published lab '{lab.name}' definition unusable: {content.error.message}",
+        )
     return NetworkTemplateOut(
         name=lab.name,
         tier="user",
         description=published_lab_description(lab),
         source_lab=lab.name,
-        content=lab.definition,
+        content=content.value,
     )
 
 

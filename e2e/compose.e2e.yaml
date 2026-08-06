@@ -1,0 +1,28 @@
+# e2e override: shift the two HOST-NETWORK services off their default ports so
+# the twinlab-e2e stack can run beside the dev stack (and the nokia one).
+#
+# compose.yaml already parameterises the published ports it owns (FRONTEND_PORT,
+# JUMP_PORT — set in stack.env); clab-api and hostprep bind the host network
+# directly, so their ports are fixed there and moved here instead. Values are
+# literal (not ${...}) because they must stay in lockstep with the URLs the
+# backend is handed.
+
+services:
+  backend:
+    environment:
+      CLAB_API_URL: http://host.docker.internal:8290
+      HOSTPREP_URL: http://host.docker.internal:8291
+
+  clab-api:
+    environment:
+      API_PORT: "8290"
+
+  hostprep:
+    environment:
+      HOSTPREP_PORT: "8291"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8291/health')

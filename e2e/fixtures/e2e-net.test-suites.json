@@ -1,0 +1,63 @@
+{
+  "convergence": {
+    "stage": "config-time",
+    "description": "Gates config-done on the OSPF triangle converging. Device-keyed across the two FRR-based flavors; every address and router ID renders from the fact namespace.",
+    "tests": {
+      "ospf_adjacency": {
+        "nodes": ["r1", "r2", "r3"],
+        "wait": 240,
+        "description": "Each router holds two Full adjacencies (its two triangle peers), asserted in each platform's own idiom.",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show ip ospf neighbor\"",
+            "expect": { "matches": "(?s)Full.*Full" }
+          },
+          "frr": {
+            "command": "vtysh -c \"show ip ospf neighbor\"",
+            "expect": { "matches": "(?s)Full.*Full" }
+          }
+        }
+      },
+      "ospf_peers_json": {
+        "nodes": ["r1"],
+        "wait": 240,
+        "description": "parse=json + compare: r1 sees both peers converged Full, by router IDs rendered from facts — the panel's worked example of a compare diff.",
+        "run": {
+          "vyos": {
+            "command": "vtysh -c \"show ip ospf neighbor json\"",
+            "parse": "json",
+            "expect": {
+              "compare": {
+                "neighbors": {
+                  "{{ nodes.r2.ospf.router_id }}": { "list": [{ "converged": "Full" }] },
+                  "{{ nodes.r3.ospf.router_id }}": { "list": [{ "converged": "Full" }] }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "reachability": {
+    "stage": "runtime",
+    "description": "The control plane agreeing is not the data plane working: cross-fabric loopback pings, run on demand from the Operations tab.",
+    "tests": {
+      "loopback_ping": {
+        "nodes": ["r1", "r3"],
+        "wait": 60,
+        "description": "r1 (VyOS) pings r3's loopback and r3 (FRR) pings r1's — both directions of the fabric FIB.",
+        "run": {
+          "vyos": {
+            "command": "ping -c 3 -W 2 {{ nodes.r3.loopback.ipv4 | address }}",
+            "expect": { "contains": "3 packets transmitted, 3 received" }
+          },
+          "frr": {
+            "command": "ping -c 3 -W 2 {{ nodes.r1.loopback.ipv4 | address }}",
+            "expect": { "contains": "3 packets transmitted, 3 received" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,54 @@
+# The Playwright suite's "complex network": every link shape the UI renders,
+# on PULLABLE images only (vyos, frr, python:3.13-alpine) so any host can run
+# the journey without local image builds.
+#
+#   - an OSPF triangle across two NOS families (two VyOS, one FRR) — real
+#     protocol substance for the facts viewer, the test-suites panel and the
+#     drift diff;
+#   - a three-endpoint services LAN (hostprep bridge path; hub on the canvas);
+#   - a STUB link (table-only row, terminator node on the builder canvas);
+#   - named links, one carrying explicit bandwidth + MTU;
+#   - a group (canvas styling + inspector Groups tab);
+#   - a top-level message (the Overview "About this lab" card).
+
+message: |
+  e2e-net — the Playwright journey's network. An OSPF triangle (r1/r2 VyOS,
+  r3 FRR) with two hosts on a services LAN behind r2. Deployed, impaired,
+  validated and destroyed by the suite; safe to delete if found lying around.
+
+provider: clab
+defaults.device: vyos
+module: [ospf]
+
+groups:
+  core:
+    members: [r1, r2, r3]
+
+nodes:
+  r1:
+  r2:
+  r3:
+    device: frr
+  h1:
+    device: linux
+  h2:
+    device: linux
+
+links:
+- name: core-a
+  r1:
+  r2:
+  bandwidth: 100000
+  mtu: 1400
+- name: core-b
+  r2:
+  r3:
+- name: core-c
+  r1:
+  r3:
+- name: services
+  r2:
+  h1:
+  h2:
+- name: sink
+  r1:

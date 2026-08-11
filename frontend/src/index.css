@@ -2,24 +2,22 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
-/* Identity typefaces (self-hosted, OFL): Space Grotesk + IBM Plex Mono
- * (schematic), IBM Plex Serif/Sans/Mono (blueprint). */
+/* Schematic's typefaces (self-hosted, OFL): Space Grotesk UI over IBM Plex
+ * Mono data. */
 @import '@fontsource-variable/space-grotesk';
 @import '@fontsource/ibm-plex-mono';
-@import '@fontsource/ibm-plex-serif';
-@import '@fontsource/ibm-plex-sans';
 
-/* The identity token packs (schematic default, blueprint shelved). */
-@import './styles/identities.css';
+/* The design tokens. */
+@import './styles/theme.css';
 
-/* React Flow base styles + the identity mapping for the topology canvas. */
+/* React Flow base styles + the theme mapping for the topology canvas. */
 @import '@xyflow/react/dist/style.css';
 @import './styles/topology.css';
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    /* Fonts resolve through the active identity pack (--id-*). */
+    /* Fonts resolve through the theme's --id-* tokens. */
     --font-sans: var(--id-font-sans);
     --font-mono: var(--id-font-mono);
     --font-heading: var(--id-font-heading);
@@ -69,8 +67,8 @@
     }
   body {
     @apply bg-background text-foreground;
-    /* Each identity paints its own canvas motif (dot grid / scanlines /
-     * graph paper); fixed so it doesn't scroll with content. */
+    /* Schematic's faint line-grid canvas motif; fixed so it doesn't scroll
+     * with content. */
     background-image: var(--id-pattern, none);
     background-size: var(--id-pattern-size, auto);
     background-attachment: fixed;

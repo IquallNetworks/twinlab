@@ -18,8 +18,7 @@ function TwinGlyph({ className }: { className?: string }) {
   )
 }
 
-/** The product wordmark — the twin-diamond glyph is the logo across every
- * identity (picked from the bake-off). */
+/** The product wordmark — the twin-diamond glyph is the logo. */
 export function Wordmark({ className }: { className?: string }) {
   return (
     <span className={cn('inline-flex items-center gap-2', className)}>

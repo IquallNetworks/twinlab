@@ -8,7 +8,6 @@ import {
   LogOut,
   Monitor,
   Moon,
-  Palette,
   Plus,
   Search,
   Sun,
@@ -155,12 +154,6 @@ export function CommandPalette({ className }: { className?: string }) {
               <KeyRound />
               Account
             </CommandItem>
-            {import.meta.env.DEV && (
-              <CommandItem onSelect={() => go(() => navigate({ to: '/styleguide' }))}>
-                <Palette />
-                Styleguide
-              </CommandItem>
-            )}
           </CommandGroup>
           {currentLab !== undefined && (
             <>

@@ -1,5 +1,5 @@
 /* React Flow themed through its --xy-* custom properties, mapped onto the
- * identity tokens so the canvas flips with the pack's own dark/light. */
+ * theme tokens so the canvas flips with the app's own dark/light. */
 .react-flow {
     /* The drawing surface is the PAGE token, not the card one: the canvas sits
      * inside a card, so painting it --card gave the nodes (also --card) no fill

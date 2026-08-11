@@ -119,9 +119,3 @@ test('unknown routes and labs land on honest not-found pages', async ({ page }) 
   await page.goto('/labs/e2e-ghost')
   await expect(page.getByText('No lab named e2e-ghost.')).toBeVisible()
 })
-
-test('styleguide renders as the dev-only gallery', async ({ page }) => {
-  await page.goto('/styleguide')
-  await expect(page.getByRole('heading', { name: 'Styleguide' })).toBeVisible()
-  await expect(page.getByText('Identity under review:')).toBeVisible()
-})

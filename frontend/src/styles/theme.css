@@ -1,0 +1,111 @@
+/* SCHEMATIC — Twinlab's design system (docs/frontend-rework.md, Phase 1).
+ *
+ * Sober engineering ink, dark-first: blue-black neutrals, one amber "signal"
+ * accent, a faint line-grid canvas, Space Grotesk UI over IBM Plex Mono data,
+ * restrained 2px radius. It won a bake-off against Blueprint, Control Room
+ * and Indigo, all retired since (git history has them) — so this is the only
+ * pack, applied at :root with no selection mechanism.
+ *
+ * It defines the FULL shadcn token set for both themes, plus Twinlab's own
+ * --id-* extras: fonts, shell width, header chrome, canvas motif and the
+ * code-editor syntax slots. Dark/light is next-themes' .dark class.
+ */
+
+/* Light theme, and every token the dark block does not restate. */
+:root {
+    --id-font-sans: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+    --id-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --id-font-heading: var(--id-font-sans);
+    --id-shell-max: 72rem;
+    --radius: 0.125rem;
+
+    --background: oklch(0.97 0.004 255);
+    --foreground: oklch(0.25 0.02 260);
+    --card: oklch(0.995 0.002 255);
+    --card-foreground: oklch(0.25 0.02 260);
+    --popover: oklch(0.995 0.002 255);
+    --popover-foreground: oklch(0.25 0.02 260);
+    /* L 0.64 (was 0.7): the amber signal must hold 3:1 as a non-text
+     * indicator on --background (measured 3.17:1; 0.7 was 2.51:1). */
+    --primary: oklch(0.64 0.13 70);
+    --primary-foreground: oklch(0.22 0.04 75);
+    --secondary: oklch(0.93 0.01 255);
+    --secondary-foreground: oklch(0.25 0.02 260);
+    --muted: oklch(0.94 0.008 255);
+    --muted-foreground: oklch(0.48 0.02 260);
+    --accent: oklch(0.91 0.012 255);
+    --accent-foreground: oklch(0.25 0.02 260);
+    --destructive: oklch(0.54 0.19 27);
+    --border: oklch(0.86 0.012 255);
+    --input: oklch(0.86 0.012 255);
+    --ring: oklch(0.64 0.13 70);
+
+    /* Header chrome: a translucent page surface by default, but its own
+     * tokens so the chrome can be restyled independently of the body. */
+    --id-header-bg: color-mix(in oklab, var(--background) 85%, transparent);
+    --id-header-fg: var(--foreground);
+    --id-header-muted: var(--muted-foreground);
+    --id-header-border: var(--border);
+
+    /* Charts and sidebar are unused surfaces for now — pinned to the core
+     * tokens so the set stays complete. */
+    --chart-1: var(--primary);
+    --chart-2: var(--muted-foreground);
+    --chart-3: var(--secondary-foreground);
+    --chart-4: var(--accent-foreground);
+    --chart-5: var(--destructive);
+    --sidebar: var(--card);
+    --sidebar-foreground: var(--foreground);
+    --sidebar-primary: var(--primary);
+    --sidebar-primary-foreground: var(--primary-foreground);
+    --sidebar-accent: var(--accent);
+    --sidebar-accent-foreground: var(--accent-foreground);
+    --sidebar-border: var(--border);
+    --sidebar-ring: var(--ring);
+
+    /* Code-editor syntax voice (CodeEditor): three slots derived from the
+     * core tokens, so highlighting tracks the theme with no JS. They resolve
+     * per element, so the dark block's core values feed them unchanged.
+     * Pure primary reads at only ~3:1 on the near-white card and syntax keys
+     * are text, so the key slot pulls toward ink for 4.5:1+ (measured
+     * ≥4.6:1 — the Phase 5 contrast audit). */
+    --id-code-key: color-mix(in oklab, var(--primary) 70%, var(--foreground));
+    --id-code-literal: color-mix(in oklab, var(--primary) 55%, var(--foreground));
+    --id-code-comment: var(--muted-foreground);
+
+    --id-pattern:
+        linear-gradient(oklch(0.3 0.05 260 / 5%) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(0.3 0.05 260 / 5%) 1px, transparent 1px);
+    --id-pattern-size:
+        24px 24px,
+        24px 24px;
+}
+
+/* Dark theme — the one Schematic is designed around. */
+.dark {
+    --background: oklch(0.18 0.015 258);
+    --foreground: oklch(0.92 0.008 255);
+    --card: oklch(0.22 0.016 258);
+    --card-foreground: oklch(0.92 0.008 255);
+    --popover: oklch(0.22 0.016 258);
+    --popover-foreground: oklch(0.92 0.008 255);
+    --primary: oklch(0.78 0.13 75);
+    --primary-foreground: oklch(0.2 0.03 75);
+    --secondary: oklch(0.28 0.018 258);
+    --secondary-foreground: oklch(0.92 0.008 255);
+    --muted: oklch(0.26 0.016 258);
+    --muted-foreground: oklch(0.67 0.015 255);
+    --accent: oklch(0.3 0.02 258);
+    --accent-foreground: oklch(0.92 0.008 255);
+    --destructive: oklch(0.66 0.18 25);
+    --border: oklch(0.32 0.018 258);
+    --input: oklch(0.32 0.018 258);
+    --ring: oklch(0.74 0.11 75);
+
+    --id-pattern:
+        linear-gradient(oklch(0.92 0.008 255 / 3.5%) 1px, transparent 1px),
+        linear-gradient(90deg, oklch(0.92 0.008 255 / 3.5%) 1px, transparent 1px);
+    --id-pattern-size:
+        24px 24px,
+        24px 24px;
+}

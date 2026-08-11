@@ -3,7 +3,7 @@ import { Link, Outlet, type LinkProps } from '@tanstack/react-router'
 import { LogOut } from 'lucide-react'
 
 import { CommandPalette } from '@/components/command-palette'
-import { IdentitySwitcher, ThemeToggle } from '@/components/identity-switcher'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Wordmark } from '@/components/wordmark'
 import { meQueryOptions } from '@/lib/queries'
@@ -13,8 +13,8 @@ import { useLogout } from '@/lib/use-logout'
 const PERM_USER_MANAGE = 'user:manage'
 const PERM_GROUP_MANAGE = 'group:manage'
 
-// Header chrome colors come from the identity's header tokens, not the page
-// tokens: a pack may run a dark header over a light body.
+// Header chrome colors come from the header tokens, not the page tokens: the
+// chrome is styled independently of the body surface it sits over.
 const HEADER_GHOST =
   'text-(--id-header-fg) hover:text-(--id-header-fg) hover:bg-[color-mix(in_oklab,var(--id-header-fg)_12%,transparent)]'
 
@@ -65,11 +65,9 @@ export function AppShell() {
             {canManageGroups && <NavLink to="/groups">Groups</NavLink>}
             {/* Self-service credentials — no permission gate. */}
             <NavLink to="/account">Account</NavLink>
-            {import.meta.env.DEV && <NavLink to="/styleguide">Styleguide</NavLink>}
           </nav>
           <div className="ml-auto flex items-center gap-1 text-sm">
             <CommandPalette className={HEADER_GHOST} />
-            <IdentitySwitcher className={HEADER_GHOST} />
             <ThemeToggle className={HEADER_GHOST} />
             <span className="px-2 font-mono text-xs text-(--id-header-muted)">{me?.username}</span>
             <Button

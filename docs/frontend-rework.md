@@ -83,10 +83,21 @@ Control Room was cut in round 2 (not professional enough) and the survivors conv
 shared language (ink-blue neutrals, faint 24px line grid, IBM Plex Mono data, 2px radius);
 round 3 trialed Indigo (Schematic's bones in a reference-dashboard colorway with a dark
 header over a light body), round 4 merged more Blueprint into it, but it was ultimately
-dropped. **Blueprint is shelved, not deleted** — the maintainer's aesthetic preference; it
-stays a selectable pack for reconsideration after the full rework. The twin-diamond wordmark
-(originally Schematic's) is the logo across all identities. The header-chrome tokens
+dropped. Blueprint was shelved rather than deleted at the time — the maintainer's aesthetic
+preference — and stayed a selectable pack for reconsideration after the full rework. The
+twin-diamond wordmark (originally Schematic's) is the logo. The header-chrome tokens
 (`--id-header-*`) built for Indigo remain part of the system.
+
+**Retired (2026-08-06, before v1.0):** the reconsideration never came, so the bake-off
+scaffolding is gone. Blueprint, the identity-selection machinery (`lib/identity.tsx`, the
+`IdentitySwitcher`, the `data-identity` stamping and its localStorage key) and the dev-only
+`/styleguide` gallery were all deleted; Schematic's tokens now sit at `:root`/`.dark` in
+`styles/theme.css` (renamed from `identities.css`), and IBM Plex Sans/Serif — Blueprint's
+faces — left the bundle with it. The `--id-*` token names stay: they are the design system's
+own layer over shadcn's set, and the seam they give (`--id-font-heading`, `--id-header-*`,
+`--id-pattern`) is what a future restyle would use. The `ThemeToggle` outlived its module and
+moved to `components/theme-toggle.tsx`; light/dark remains, and is the only visual choice the
+UI still offers.
 
 ### Phase 2 — information architecture + role-tailored surfaces
 

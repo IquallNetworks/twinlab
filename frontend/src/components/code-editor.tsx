@@ -23,8 +23,8 @@ import { cn } from '@/lib/utils'
 
 export type CodeLanguage = 'yaml' | 'jinja2' | 'json'
 
-/* Colors come from the identity packs (identities.css) so the editor tracks
- * theme and identity switches live, with no JS re-render. */
+/* Colors come from the theme tokens (styles/theme.css) so the editor tracks
+ * dark/light switches live, with no JS re-render. */
 const editorTheme = EditorView.theme({
   '&': {
     /* The container className owns sizing: a definite height flows in via

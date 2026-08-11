@@ -4,8 +4,8 @@ import { useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 
 import { FieldError } from '@/components/field-error'
-import { IdentitySwitcher, ThemeToggle } from '@/components/identity-switcher'
 import { PasswordInput } from '@/components/password-input'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -45,9 +45,7 @@ export function LoginPage() {
 
   return (
     <div className="relative grid min-h-screen place-items-center px-4">
-      {/* The bake-off must be comparable from the first screen. */}
       <div className="absolute top-3 right-3 flex items-center gap-1">
-        <IdentitySwitcher />
         <ThemeToggle />
       </div>
 

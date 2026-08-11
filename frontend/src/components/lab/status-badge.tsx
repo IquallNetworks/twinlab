@@ -11,8 +11,8 @@ const STATUS_GLYPHS: Record<string, string> = {
   destroyed: '■',
 }
 
-/** Lab lifecycle status as a glyph-fronted badge (shared across identities;
- * the packs restyle it through the badge tokens). */
+/** Lab lifecycle status as a glyph-fronted badge, styled through the badge
+ * tokens. */
 export function LabStatusBadge({ status, className }: { status: string; className?: string }) {
   const glyph = STATUS_GLYPHS[status]
   return (

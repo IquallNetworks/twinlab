@@ -58,10 +58,10 @@ projects sit beside the services: **`client/`** (`twinlab-client`, the distribut
 client — PyPI-ready, published at v1.0), **`blackbox/`** (the black-box test suite: 140+ tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker) and **`e2e/`** (the Playwright UX suite, SHIPPED 2026-08-06 — ROADMAP item 14:
-pnpm + @playwright/test, chromium, 51 exact-string specs driving the real frontend against a
+pnpm + @playwright/test, chromium, 50 exact-string specs driving the real frontend against a
 dedicated **`twinlab-e2e`** parallel stack that every run resets to a REAL EMPTY backend via
-`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (31 specs, no containers) → `journey`
-(19 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`); its
+`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (30 specs, no containers) → `journey`
+(20 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`); its
 README carries the driving conventions — never `networkidle` (the SSE stream never settles),
 radix/CodeMirror/xterm helpers in `e2e/lib/`, and the barrier truth that the lifecycle badge
 flips to `deployed` when containers are up while the JOB runs on, so the Last-operation badge
@@ -135,12 +135,16 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   and the netns-propagation break of node stop), and only then the v1.0
   release train (publish `twinlab-client` to PyPI + tag) goes LAST). Phase 1 (graphical
   identity):
-  identities are CSS token packs
-  keyed off `<html data-identity>`, **Schematic** (dark-first ink, amber signal, Space Grotesk +
-  IBM Plex Mono, faint line-grid canvas) is the chosen design system and Blueprint is
-  shelved-but-selectable; the twin-diamond wordmark is the logo; header chrome has its own
-  `--id-header-*` tokens; fonts are self-hosted @fontsource (OFL); a dev-only `/styleguide`
-  gallery renders every primitive. Phase 2 (IA + role-tailored surfaces): a **role-aware
+  **Schematic** (dark-first ink, amber signal, Space Grotesk +
+  IBM Plex Mono, faint line-grid canvas) is the design system — ONE CSS token pack at
+  `:root`/`.dark` in `styles/theme.css`; the twin-diamond wordmark is the logo; header chrome
+  has its own `--id-header-*` tokens; fonts are self-hosted @fontsource (OFL). The bake-off
+  scaffolding was **retired 2026-08-06 before v1.0**: the rival Blueprint pack, the
+  identity-selection machinery (`lib/identity.tsx`, the `IdentitySwitcher`, `data-identity`
+  stamping) and the dev-only `/styleguide` gallery are all deleted, and light/dark (the
+  `ThemeToggle`, now `components/theme-toggle.tsx`) is the only visual choice the UI offers.
+  The `--id-*` token names stay — they are Twinlab's own layer over shadcn's set, and the
+  seam a future restyle would use. Phase 2 (IA + role-tailored surfaces): a **role-aware
   dashboard at `/`** (fleet stat tiles, recent operations across labs, recently-updated labs
   linking each caller to their tab, session-scoped SSE **activity feed** — module ring buffer in
   `lib/lab-event-store.ts`, no server history — and an admin card whose queries are

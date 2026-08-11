@@ -5,7 +5,7 @@ import { DEVICE_H, DEVICE_W, LAN_H, LAN_W, type AppNode } from './flow-types'
 
 export type RankDir = 'LR' | 'TB'
 
-/** Dagre auto-layout over the fixed node geometry. Spacing rides the identity
+/** Dagre auto-layout over the fixed node geometry. Spacing rides the theme's
  * grid (24px multiples); dagre yields centers, React Flow wants top-left. */
 export function layoutNodes(nodes: AppNode[], edges: Edge[], rankdir: RankDir): AppNode[] {
   const g = new dagre.graphlib.Graph()

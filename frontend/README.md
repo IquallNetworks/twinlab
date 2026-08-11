@@ -33,7 +33,7 @@ no token to store.
 | `src/components/lab/topology/` | The read-only canvas: node/LAN/stub renderers, dagre layout, PNG export. |
 | `src/lib/build-doc.ts` | **The parser/emitter** — netlab YAML ⇄ a typed core plus lossless `extras` passthrough. Pure, dependency-light, and the round-trip invariant `parse(emit(doc)) == doc` is load-bearing. |
 | `src/lib/topology.ts` | Best-effort parse of netlab's link forms for the read-only canvas. Unresolvable entries surface in a strip, never silently dropped. |
-| `src/lib/identity.tsx`, `src/styles/identities.css` | Graphical identities as CSS token packs keyed off `<html data-identity>`. |
+| `src/styles/theme.css` | Schematic, the design system, as one CSS token pack at `:root`/`.dark` — shadcn's full set plus Twinlab's `--id-*` extras (fonts, canvas motif, header chrome, code-editor syntax). Light/dark is the only visual choice offered. |
 
 Actions are gated on the caller's permissions (the backend enforces them independently — the UI
 gate is about not offering what would fail).
@@ -52,8 +52,6 @@ All three checks are gates. `check:build-doc` runs 90 round-trip, gate and emit-
 against `build-doc.ts` — including all three `examples/` definitions — by bundling the pure module
 with vite's own API and running it under plain node. **The frontend has no test runner**, so this
 is its only regression net; changes to the parser or emitter belong with a case there.
-
-`/styleguide` renders every primitive of the active identity (dev builds).
 
 The browser layer's end-to-end coverage lives in `../e2e` (Playwright, against its own stack).
 Nothing there uses `data-testid` — specs locate by role and label, so keep `<Label htmlFor>`

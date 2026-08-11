@@ -45,10 +45,17 @@ from twinlab_client.models import (
     DeployResponse,
     DestroyResponse,
     DeviceCatalog,
+    DockerDiskUsage,
+    DockerUsage,
     Duration,
     Grant,
     GroupMember,
     GroupSummary,
+    HostCpu,
+    HostDisk,
+    HostMemory,
+    HostResources,
+    HostSwap,
     ImportWarning,
     Job,
     JobDetail,
@@ -66,6 +73,7 @@ from twinlab_client.models import (
     LabNodeState,
     LabOwner,
     LabSummary,
+    LabUsage,
     LayoutGroupStyle,
     LayoutPosition,
     LinkEndpoint,
@@ -82,6 +90,7 @@ from twinlab_client.models import (
     NodeInterfaces,
     NodeLogsResponse,
     NodeTemplate,
+    NodeUsage,
     PowerAction,
     Principal,
     Principals,
@@ -181,6 +190,15 @@ def _get_opt_bool(obj: dict[str, object], key: str, where: str) -> bool | None:
 
 def _get_float(obj: dict[str, object], key: str, where: str) -> float:
     value = _req(obj, key, where)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TwinlabProtocolError(where, f"{key!r}: expected number, got {type(value).__name__}")
+    return float(value)
+
+
+def _get_opt_float(obj: dict[str, object], key: str, where: str) -> float | None:
+    value = obj.get(key)
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TwinlabProtocolError(where, f"{key!r}: expected number, got {type(value).__name__}")
     return float(value)
@@ -400,6 +418,101 @@ def parse_device_catalog(value: object) -> DeviceCatalog:
     obj = as_object(value, where)
     return DeviceCatalog(
         devices=[parse_catalog_device(v) for v in as_list(_req(obj, "devices", where), where)],
+        live=_get_bool(obj, "live", where),
+    )
+
+
+def parse_host_resources(value: object) -> HostResources:
+    where = "HostResources"
+    obj = as_object(value, where)
+    cpu = as_object(_req(obj, "cpu", where), where)
+    memory = as_object(_req(obj, "memory", where), where)
+    swap = as_object(_req(obj, "swap", where), where)
+    return HostResources(
+        sampled_at=_get_datetime(obj, "sampled_at", where),
+        cpu=HostCpu(
+            cores=_get_int(cpu, "cores", where),
+            utilization_percent=_get_float(cpu, "utilization_percent", where),
+            load1=_get_float(cpu, "load1", where),
+            load5=_get_float(cpu, "load5", where),
+            load15=_get_float(cpu, "load15", where),
+        ),
+        memory=HostMemory(
+            total_bytes=_get_int(memory, "total_bytes", where),
+            used_bytes=_get_int(memory, "used_bytes", where),
+            available_bytes=_get_int(memory, "available_bytes", where),
+            percent=_get_float(memory, "percent", where),
+        ),
+        swap=HostSwap(
+            total_bytes=_get_int(swap, "total_bytes", where),
+            used_bytes=_get_int(swap, "used_bytes", where),
+            percent=_get_float(swap, "percent", where),
+        ),
+        disks=[_parse_host_disk(v) for v in as_list(_req(obj, "disks", where), where)],
+    )
+
+
+def _parse_host_disk(value: object) -> HostDisk:
+    where = "HostDisk"
+    obj = as_object(value, where)
+    return HostDisk(
+        path=_get_str(obj, "path", where),
+        total_bytes=_get_int(obj, "total_bytes", where),
+        used_bytes=_get_int(obj, "used_bytes", where),
+        free_bytes=_get_int(obj, "free_bytes", where),
+        percent=_get_float(obj, "percent", where),
+    )
+
+
+def _parse_docker_disk_usage(value: object) -> DockerDiskUsage:
+    where = "DockerDiskUsage"
+    obj = as_object(value, where)
+    return DockerDiskUsage(
+        kind=_get_str(obj, "kind", where),
+        total=_get_int(obj, "total", where),
+        active=_get_int(obj, "active", where),
+        size_bytes=_get_int(obj, "size_bytes", where),
+        reclaimable_bytes=_get_int(obj, "reclaimable_bytes", where),
+    )
+
+
+def parse_docker_usage(value: object) -> DockerUsage:
+    where = "DockerUsage"
+    obj = as_object(value, where)
+    return DockerUsage(
+        root_dir=_get_str(obj, "root_dir", where),
+        containers_running=_get_int(obj, "containers_running", where),
+        containers_paused=_get_int(obj, "containers_paused", where),
+        containers_stopped=_get_int(obj, "containers_stopped", where),
+        containers_total=_get_int(obj, "containers_total", where),
+        images_total=_get_int(obj, "images_total", where),
+        disk=[_parse_docker_disk_usage(v) for v in as_list(_req(obj, "disk", where), where)],
+    )
+
+
+def _parse_node_usage(value: object) -> NodeUsage:
+    where = "NodeUsage"
+    obj = as_object(value, where)
+    return NodeUsage(
+        node=_get_str(obj, "node", where),
+        container=_get_str(obj, "container", where),
+        state=_get_str(obj, "state", where),
+        cpu_percent=_get_opt_float(obj, "cpu_percent", where),
+        memory_bytes=_get_opt_int(obj, "memory_bytes", where),
+        memory_limit_bytes=_get_opt_int(obj, "memory_limit_bytes", where),
+        net_rx_bytes=_get_opt_int(obj, "net_rx_bytes", where),
+        net_tx_bytes=_get_opt_int(obj, "net_tx_bytes", where),
+        pids=_get_opt_int(obj, "pids", where),
+    )
+
+
+def parse_lab_usage(value: object) -> LabUsage:
+    where = "LabUsage"
+    obj = as_object(value, where)
+    return LabUsage(
+        lab=_get_str(obj, "lab", where),
+        sampled_at=_get_datetime(obj, "sampled_at", where),
+        nodes=[_parse_node_usage(v) for v in as_list(_req(obj, "nodes", where), where)],
         live=_get_bool(obj, "live", where),
     )
 

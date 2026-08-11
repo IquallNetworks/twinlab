@@ -31,6 +31,38 @@ export const deviceCatalogQueryOptions = queryOptions({
   staleTime: 300_000,
 })
 
+// Host resources (delta 30). Its own root, not under ['labs']: it describes
+// the machine, not any lab, so SSE lab bursts must not churn it. The backend
+// samples on a ~5s timer, so refetching faster than that would only re-serve
+// the same snapshot.
+export const hostResourcesQueryOptions = queryOptions({
+  queryKey: ['host', 'resources'],
+  queryFn: () => api.hostResources(),
+  refetchInterval: 5_000,
+  staleTime: 4_000,
+})
+
+// The daemon's footprint moves only when images are pulled or labs deployed,
+// and the read costs a full inventory walk (~1s+) — so it is polled far more
+// slowly than the machine's own load, and only where it is shown.
+export const dockerUsageQueryOptions = queryOptions({
+  queryKey: ['host', 'docker'],
+  queryFn: () => api.hostDocker(),
+  staleTime: 60_000,
+  retry: false, // 503 when the runner is down; the card says so instead
+})
+
+// Per-node cost, polled while the Nodes tab is open. Matched to the host
+// card's cadence so the two readings move together. Each poll costs the daemon
+// one ~1s sampling window per running node (they run concurrently, so it is a
+// WAIT rather than load) — enable it only where the numbers are shown.
+export const labUsageQueryOptions = (name: string) =>
+  queryOptions({
+    queryKey: ['labs', name, 'usage'],
+    queryFn: () => api.labUsage(name),
+    refetchInterval: 5_000,
+  })
+
 // Template library (delta 21). Its own root — not under ['labs'] — so SSE
 // bursts don't churn it; publish/save mutations invalidate ['templates']
 // explicitly. Network entries move only on publish/withdraw (and lab PUTs

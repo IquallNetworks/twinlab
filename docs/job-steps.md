@@ -53,11 +53,13 @@ lose nothing but readability. That keeps them free to gain entries without a con
 
 | code | level | when |
 | --- | --- | --- |
+| `host_resources` | info | what the host had left when the deploy began (delta 30) |
 | `topology_generated` | info | `netlab create` returned — node and link counts |
 | `image_preflight` | info / warning | all images present, or which are missing-but-pullable |
 | `host_prep` | info | bridges created and kernel modules loaded (omitted when the lab needs none) |
 | `clab_deploy_started` | info | handing the topology to clab-api — the first long wait |
 | `nodes_deployed` | info | containers up, with the count |
+| `nodes_ready` | info | every node's NOS answered (`netlab initial --ready`) |
 | `config_push_started` | info | Ansible begins — the second long wait, and the quiet stretch |
 | `config_pushed` | info / error | per-node outcome, `N/M nodes ok` |
 | `validation` | info / error | config-time suites, `N/M passed` |

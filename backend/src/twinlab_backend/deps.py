@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from twinlab_backend.config import Settings
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.custom_config import BuiltinLibrary
+from twinlab_backend.services.host_metrics import HostSnapshot
 from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.network_templates import NetworkTemplateLibrary
 from twinlab_backend.services.runner_client import RunnerClient
@@ -37,6 +38,12 @@ def get_builtin_library(request: Request) -> BuiltinLibrary:
 
 def get_network_templates(request: Request) -> NetworkTemplateLibrary:
     return request.app.state.network_templates
+
+
+def get_host_snapshot(request: Request) -> HostSnapshot | None:
+    """The most recent host reading (delta 30). None only if no sample has ever
+    succeeded — the lifespan primes one before the app serves."""
+    return request.app.state.host_snapshot
 
 
 def get_clab_client(request: Request) -> ClabApiClient:
@@ -89,6 +96,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 BuiltinLibraryDep = Annotated[BuiltinLibrary, Depends(get_builtin_library)]
 NetworkTemplatesDep = Annotated[NetworkTemplateLibrary, Depends(get_network_templates)]
 ClabClientDep = Annotated[ClabApiClient, Depends(get_clab_client)]
+HostSnapshotDep = Annotated[HostSnapshot | None, Depends(get_host_snapshot)]
 RunnerClientDep = Annotated[RunnerClient, Depends(get_runner_client)]
 HostPrepDep = Annotated[HostPrepClient | None, Depends(get_hostprep_client)]
 SessionDep = Annotated[AsyncSession, Depends(get_db)]

@@ -755,6 +755,172 @@ class DeviceCatalog:
 
 
 # --------------------------------------------------------------------------- #
+# Host resource shapes (delta 30, PROPOSED 2026-08-11)
+# --------------------------------------------------------------------------- #
+
+# WHY: a lab is a claim on a finite machine, and nothing in the API said what
+# was left. "Is there room for this?" and "what is this lab costing?" were
+# answerable only by ssh-ing to the host. The ROADMAP's Phase 6 item 9 parked
+# a metrics stack with an explicit open question — full observability stack vs
+# lightweight Docker-API stats — and this is the second answer, deliberately:
+# an honest INSTANTANEOUS reading, no time series, no retention, no new
+# service, no dependency beyond psutil (BSD-3). History, alerting and a
+# Prometheus exposition stay parked; if they are ever picked up, this is the
+# collector they would read from.
+#
+# THREE resources, split by where the data lives and what it costs:
+#   GET /host         — the machine, sampled locally by the backend on a timer
+#                       (instant, always available)
+#   GET /host/docker  — the daemon's footprint, via the runner (~1s+, gone if
+#                       the sidecar is down)
+#   GET /labs/{name}/usage — per-node attribution (live-only, best-effort)
+#
+# The first two are ungated beyond authentication, like GET /catalog: they name
+# no lab and reveal nothing about who owns what, and every user deciding
+# whether to deploy needs them. Per-lab usage rides `lab:read`.
+
+
+@dataclass(frozen=True, slots=True)
+class HostCpu:
+    cores: int
+    utilization_percent: float  # host-wide, over the server's sample window
+    load1: float
+    load5: float
+    load15: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostMemory:
+    total_bytes: int
+    used_bytes: int
+    # What a new lab could actually claim. NOT total minus used: that counts
+    # reclaimable page cache as spent, and on a host that has deployed a few
+    # labs the difference is tens of gigabytes.
+    available_bytes: int
+    percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostSwap:
+    total_bytes: int
+    used_bytes: int
+    percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostDisk:
+    path: str  # the path asked about; the figures describe its FILESYSTEM
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+    percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostResources:
+    """`GET /host` — what the machine running the labs is spending (delta 30).
+
+    Read from /proc via psutil. The backend runs in a container, but
+    /proc/stat, /proc/meminfo and /proc/loadavg are NOT namespaced by Docker,
+    so a container reads the HOST's values there — no privilege, no mount, no
+    sidecar. Disk is the exception: statvfs needs the filesystem in the
+    backend's own mount namespace, so `disks` covers only what it has (today
+    the host-shared LAB_FILES_DIR, bind-mounted same-path)."""
+
+    # The reading's real age. The server samples on a timer and serves the
+    # last snapshot, so a timestamp older than a few seconds means sampling is
+    # FAILING — the snapshot is deliberately not silently refreshed on read.
+    sampled_at: datetime
+    cpu: HostCpu
+    memory: HostMemory
+    swap: HostSwap
+    disks: list[HostDisk]
+
+
+@dataclass(frozen=True, slots=True)
+class DockerDiskUsage:
+    """One row of `docker system df`, in raw bytes."""
+
+    kind: str  # "images" | "containers" | "volumes" | "build_cache".
+    #            Deliberately NOT a Literal: the daemon owns this vocabulary
+    #            and may grow a kind, which must not break a client.
+    total: int
+    active: int  # in use by something — an image with containers, a volume
+    #              with references, a build-cache record in use
+    size_bytes: int  # for images this is the DEDUPLICATED layer total, not
+    #                  the sum of per-image sizes (which double-counts shared
+    #                  layers) — the same number the docker CLI prints
+    reclaimable_bytes: int  # what a prune could return; an unused image counts
+    #                         only its UNSHARED layers, so this is smaller than
+    #                         size for anything shared
+
+
+@dataclass(frozen=True, slots=True)
+class DockerUsage:
+    """`GET /host/docker` — the Docker daemon's counts and disk footprint
+    (delta 30).
+
+    Read through the netlab-runner, the only component holding the Docker
+    socket. The runner reads the Engine API rather than the `docker` CLI on
+    purpose: the CLI emits only human-formatted sizes ("41.2MiB"), and a byte
+    count parsed back out of those would be invented precision.
+
+    Unreachable runner = 503 `docker_usage_unavailable`, NOT zeros. This is
+    the one place the "degrade, never 5xx" rule does not apply, because there
+    is no second source to fall back to — unlike the link table, which still
+    has the definition."""
+
+    root_dir: str  # the daemon's data root. Its filesystem is NOT necessarily
+    #                one of HostResources.disks — the backend can only measure
+    #                what it mounts, and /var/lib/docker is not mounted.
+    containers_running: int
+    containers_paused: int
+    containers_stopped: int
+    containers_total: int
+    images_total: int
+    disk: list[DockerDiskUsage]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeUsage:
+    """One node's live cost (delta 30).
+
+    Every measure is nullable and a node that is not running carries NONE of
+    them. The daemon answers for a stopped container with an empty payload,
+    and reporting 0% would claim an idle node where there is no running one —
+    the same distinction `image_present: None` draws in the catalog. `state`
+    says which case a reader is looking at."""
+
+    node: str  # short netlab name
+    container: str  # clab-<lab>-<node>
+    state: str  # docker vocabulary, as elsewhere in the API
+    cpu_percent: float | None  # a share of the WHOLE host (Docker's own
+    #                            formula), so a node pinning two cores reads
+    #                            200% — it is NOT normalized to one core
+    memory_bytes: int | None  # page cache excluded, matching `docker stats`
+    memory_limit_bytes: int | None  # the cgroup limit; the host's total where
+    #                                 the node sets none
+    net_rx_bytes: int | None  # summed over the node's interfaces
+    net_tx_bytes: int | None
+    pids: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class LabUsage:
+    """`GET /labs/{name}/usage` — what a lab's nodes cost right now
+    (`lab:read`). Live-only, like the link table's live half."""
+
+    lab: str
+    sampled_at: datetime
+    nodes: list[NodeUsage]
+    live: bool  # False = the MEASURES could not be collected (undeployed lab,
+    #             or clab-api / the runner unreachable). The node rows survive
+    #             a runner outage — they come from clab — so this reads as
+    #             unmeasured rather than idle. Never an error: an undeployed
+    #             lab legitimately costs nothing.
+
+
+# --------------------------------------------------------------------------- #
 # Template library shapes (delta 21, APPROVED)
 # --------------------------------------------------------------------------- #
 
@@ -1688,8 +1854,8 @@ class JobStep:
     (a client renders on it).
 
     THE VOCABULARY, per job kind:
-      deploy    topology_generated, image_preflight, host_prep,
-                clab_deploy_started, nodes_deployed, nodes_ready,
+      deploy    host_resources, topology_generated, image_preflight,
+                host_prep, clab_deploy_started, nodes_deployed, nodes_ready,
                 config_push_started, config_pushed, validation
       configure config_push_started, config_pushed, validation
       destroy   clab_destroy, files_removed, bridges_released,
@@ -2158,6 +2324,36 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         error would reveal a missing image anyway). Image presence is
         advisory — deploy does NOT pre-flight it; that check is a separate
         parked decision."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # Host resources (delta 30, PROPOSED 2026-08-11)
+    # ------------------------------------------------------------------ #
+
+    async def host_resources(self) -> HostResources:
+        """PROPOSED (delta 30) GET /host — what the machine running the labs
+        is spending: CPU, load, memory, swap, and the filesystems the backend
+        can see. Any authenticated user, for the same reason as the catalog.
+        Cheap: the backend samples on a timer and serves the last snapshot, so
+        polling it costs nothing and `sampled_at` is the reading's real age."""
+        raise NotImplementedError
+
+    async def docker_usage(self) -> DockerUsage:
+        """PROPOSED (delta 30) GET /host/docker — the container daemon's
+        counts and disk footprint, mirroring `docker system df`. Any
+        authenticated user. NOT cheap (the daemon walks every image, volume
+        and build-cache record — about a second on a modest host), which is
+        why it is a separate resource from `host_resources` rather than a
+        field on it. 503 `docker_usage_unavailable` when the runner is
+        unreachable."""
+        raise NotImplementedError
+
+    async def lab_usage(self, name: str) -> LabUsage:
+        """PROPOSED (delta 30) GET /labs/{name}/usage — per-node CPU, memory
+        and network for one lab (`lab:read`). Live-only and best-effort: an
+        undeployed lab or an unreachable upstream comes back `live=False`
+        rather than an error, and a node that is not running carries no
+        measures at all."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #

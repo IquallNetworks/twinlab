@@ -299,6 +299,121 @@ class DeviceCatalog:
 
 
 # --------------------------------------------------------------------------- #
+# Host resources (delta 30)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class HostCpu:
+    cores: int
+    utilization_percent: float  # host-wide, over the server's sample window
+    load1: float
+    load5: float
+    load15: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostMemory:
+    total_bytes: int
+    used_bytes: int
+    available_bytes: int  # what a new lab could claim — NOT total minus used,
+    #                       which counts reclaimable page cache as spent
+    percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostSwap:
+    total_bytes: int
+    used_bytes: int
+    percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostDisk:
+    path: str  # the path asked about; figures are for its filesystem
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+    percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class HostResources:
+    """`GET /host` — what the machine running the labs is spending (delta 30).
+
+    Sampled by the server on a timer, so `sampled_at` is the reading's real
+    age: a timestamp older than a few seconds means sampling is failing, not
+    that the values were just refreshed."""
+
+    sampled_at: datetime
+    cpu: HostCpu
+    memory: HostMemory
+    swap: HostSwap
+    disks: list[HostDisk]  # only filesystems the backend can see
+
+
+@dataclass(frozen=True, slots=True)
+class DockerDiskUsage:
+    """One row of the daemon's disk footprint, mirroring `docker system df`."""
+
+    kind: str  # "images" | "containers" | "volumes" | "build_cache" — the
+    #            vocabulary may grow with the daemon, so it is not pinned
+    total: int
+    active: int
+    size_bytes: int
+    reclaimable_bytes: int  # what a prune could return; an unused image counts
+    #                         only its UNSHARED layers
+
+
+@dataclass(frozen=True, slots=True)
+class DockerUsage:
+    """`GET /host/docker` — the Docker daemon's counts and disk footprint
+    (delta 30). Read through the netlab-runner, the only component holding the
+    Docker socket, so a runner outage is a 503 rather than zeros."""
+
+    root_dir: str  # the daemon's data root; its filesystem is NOT necessarily
+    #                one of HostResources.disks
+    containers_running: int
+    containers_paused: int
+    containers_stopped: int
+    containers_total: int
+    images_total: int
+    disk: list[DockerDiskUsage]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeUsage:
+    """One node's live cost (delta 30).
+
+    Every measure is nullable and a node that is not running carries none of
+    them: a stopped container has nothing to report, and 0% would claim an
+    idle node where there is no running one. `state` says which case this is."""
+
+    node: str
+    container: str
+    state: str
+    cpu_percent: float | None  # a share of the WHOLE host, so a node pinning
+    #                            two cores reads 200%
+    memory_bytes: int | None
+    memory_limit_bytes: int | None
+    net_rx_bytes: int | None
+    net_tx_bytes: int | None
+    pids: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class LabUsage:
+    """`GET /labs/{name}/usage` — what a lab's nodes cost right now."""
+
+    lab: str
+    sampled_at: datetime
+    nodes: list[NodeUsage]
+    live: bool  # False = the measures could not be collected (undeployed lab,
+    #             or clab-api / the runner unreachable). Never an error: an
+    #             undeployed lab legitimately costs nothing.
+
+
+# --------------------------------------------------------------------------- #
 # Template library shapes (delta 21)
 # --------------------------------------------------------------------------- #
 
@@ -1049,10 +1164,11 @@ class JobStep:
     """One thing an operation did, recorded as it happened (contract delta 29).
 
     `code` names the phase from a vocabulary pinned per job kind in the
-    contract appendix — deploy runs `topology_generated`, `image_preflight`,
-    `host_prep`, `clab_deploy_started`, `nodes_deployed`, `nodes_ready`,
-    `config_push_started`, `config_pushed`, `validation` — and `message`
-    carries the detail no vocabulary can anticipate ("7/7 nodes ok").
+    contract appendix — deploy runs `host_resources`, `topology_generated`,
+    `image_preflight`, `host_prep`, `clab_deploy_started`, `nodes_deployed`,
+    `nodes_ready`, `config_push_started`, `config_pushed`, `validation` — and
+    `message` carries the detail no vocabulary can anticipate ("7/7 nodes
+    ok").
 
     Steps are a NARRATIVE, not the record: the operation's typed payload stays
     on `Job.result`/`Job.error`, and nothing is derivable only from a step. A

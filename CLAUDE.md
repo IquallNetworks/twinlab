@@ -41,7 +41,7 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (twenty-nine deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (thirty deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
 2026-08-03, delta 18 the device/image catalog, delta 19 the deployed-definition snapshot +
@@ -100,13 +100,25 @@ config-time gate) runs inside the job task and never left the backend — so the
 progress a UI could show was clab-api's container churn, live-only and gone on reload, and
 the deploy dialog had to apologise in prose for its own quiet stretches. See the backend
 and frontend bullets for the shape.
+— and delta 30 HOST RESOURCES, implemented 2026-08-11 (the FIRST delta after the v0.9.0
+tag, which is what 0.9 held the door open for), design record `docs/host-resources.md`:
+a lab is a claim on a finite machine and nothing in the API said what was LEFT, so "is
+there room for this?" and "what is this lab costing?" were answerable only by ssh-ing to
+the host. THREE resources split by where the data lives and what it costs to read — `GET
+/host` (the machine's own CPU/load/memory/swap/disk, sampled by the backend on a 5s timer,
+instant, any authenticated user), `GET /host/docker` (the daemon's counts and `docker
+system df` footprint through the runner, ~1s+, any authenticated user) and `GET
+/labs/{name}/usage` (per-node cpu/memory/network, `lab:read`, live-only) — plus a
+`host_resources` deploy step. This CLOSES the ROADMAP's Phase 6 item 9 scope question in
+favour of the lightweight answer; a time-series/alerting stack stays parked (and carries a
+Grafana AGPL-3.0 licensing call before it can start).
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, versioned 0.9.0 like the whole tree, publication pending), **`blackbox/`**
-(the black-box test suite: 150+ tests
+(the black-box test suite: 160+ tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker) and **`e2e/`** (the Playwright UX suite, SHIPPED 2026-08-06 — ROADMAP item 14:
-pnpm + @playwright/test, chromium, 56 exact-string specs driving the real frontend against a
+pnpm + @playwright/test, chromium, 58 exact-string specs driving the real frontend against a
 dedicated **`twinlab-e2e`** parallel stack that every run resets to a REAL EMPTY backend via
 `e2e/scripts/stack.sh reset`; projects `setup` → `fast` (35 specs, no containers) → `journey`
 (20 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`);
@@ -213,7 +225,14 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   dashboard at `/`** (fleet stat tiles, recent operations across labs, recently-updated labs
   linking each caller to their tab, session-scoped SSE **activity feed** — module ring buffer in
   `lib/lab-event-store.ts`, no server history — and an admin card whose queries are
-  permission-gated); **lab detail is routed tabs** under `/labs/$name` (layout route; children
+  permission-gated; **since delta 30 it also carries the Host and Storage cards**
+  (`components/host/`), placed ABOVE the activity feed because "is there room" is the first
+  question a fleet operator asks — labelled `role="meter"` bars over `['host', …]` query keys of
+  their own so SSE lab bursts never churn them, the machine's reading polled at 5s to match the
+  server's sampler and the daemon's footprint left on a 60s staleTime with `retry: false`, since
+  its 503 is a card that says so rather than a spinner; the lab Nodes table gained CPU and Memory
+  columns off `['labs', name, 'usage']`, rendering `—` and never `0` for an unmeasured node);
+  **lab detail is routed tabs** under `/labs/$name` (layout route; children
   overview/build/nodes/operations/access; the index redirects role-aware via
   `defaultLabTab(lab.permissions)` — authors land on Overview, pure consumers on Nodes; Access
   renders only with `lab:grant`); a per-node **Connect drawer** (mgmt IP, web console + logs
@@ -472,6 +491,25 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   best-effort image presence via the runner's `GET /images` — matching policy stays in the
   backend, untagged names normalize to `:latest`; runner unreachable degrades to
   `image_present=null` + `live=false`, never an error; any authenticated user),
+  **host resources** (delta 30, design record `docs/host-resources.md`: **`GET /host`** is the
+  machine's own cpu/load/memory/swap/disk read from `/proc` via **psutil** (BSD-3) — the backend
+  container reads the HOST's values there, since `/proc/stat`, `/proc/meminfo` and
+  `/proc/loadavg` are NOT namespaced by docker, so no mount and no privilege (live-proven
+  byte-identical to `free -b`/`nproc`); `statvfs` IS namespaced, so `disks` covers only what the
+  backend mounts — today `LAB_FILES_DIR`. A lifespan sampler primes psutil's CPU baseline with
+  one 0.2s blocking sample and refreshes every 5s, so the endpoint is O(1) and never serves a
+  since-boot average; a FAILED sample keeps the previous snapshot (`sampled_at` is the reading's
+  real age) and only a never-sampled backend 503s `host_metrics_unavailable`. **`GET
+  /host/docker`** is the daemon's counts + `docker system df` footprint through the runner —
+  separate resource because it costs a full inventory walk (~1.2s measured) and 503s
+  `docker_usage_unavailable` when the runner is down, the one place the degrade-never-5xx rule
+  does NOT apply since there is no second source. Both ungated beyond authentication, like
+  `/catalog`. **`GET /labs/{name}/usage`** (`lab:read`) is per-node cpu/memory/network from ONE
+  clab inspect + the runner's concurrent stats, asked only about RUNNING containers; `live`
+  reports the MEASURES (the node rows survive a runner outage, so it reads as unmeasured, never
+  idle) and every measure is nullable because a stopped container answers 200 with an EMPTY
+  payload — 0% would claim an idle node where none is running. A deploy job records
+  `host_resources` as its FIRST step, the one phase whose value is entirely retrospective),
   the **template library** (delta 21: TWO sibling collections with independent namespaces —
   `GET /templates/network` (+`/{name}`) serves the builtin tier (packaged mirrors of
   `examples/` in `services/network_templates.py`, drift-guard test keeps them byte-identical)
@@ -662,7 +700,16 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   apparmor/systempaths unconfined (see compose comments; the Docker socket it already holds is
   root-equivalent, so none of this widens its reach). Script-configured nodes never appear in the
   PLAY RECAP, so they are absent from per-node results; their failures surface through netlab
-  initial's exit code as `status="config_failed"`.
+  initial's exit code as `status="config_failed"`. Because it holds the Docker socket it is also
+  the backend's only window onto the daemon (delta 30): **`GET /docker/usage`** (`/info` +
+  `/system/df`) and **`GET /docker/stats?container=…`** (repeated param, ≤64, sampled
+  CONCURRENTLY so a lab costs one sample's wall clock, not one per node) read the **Engine API
+  over the unix socket** — `docker_api.py`, a ~20-line stdlib `http.client` adapter — rather than
+  the `docker` CLI the rest of the module shells out to, because `docker stats`/`system df` emit
+  only HUMAN-formatted sizes ("41.2MiB") and a byte count parsed back out of those would be
+  invented precision. Disk figures are computed to match `docker system df` exactly, quirks
+  included (an unused image reclaims only its UNSHARED bytes; a SHARED build-cache record counts
+  toward size but not reclaim) — live-verified identical on both sides.
 - **`hostprep/`** — FastAPI (uv, Python 3.14) host-preparation sidecar: the ONE component allowed
   to touch host network devices. Does `netlab up`'s clab pre-start work, which Twinlab otherwise
   never runs: creates/deletes the **host Linux bridges multi-access (3+ endpoint) links need**

@@ -4,7 +4,10 @@ import {
   apiKeyCreatedSchema,
   apiKeyListSchema,
   deviceCatalogSchema,
+  dockerUsageSchema,
   grantSchema,
+  hostResourcesSchema,
+  labUsageSchema,
   grantListSchema,
   groupListSchema,
   groupSummarySchema,
@@ -196,6 +199,13 @@ export const api = {
   // support, default images, best-effort image presence. Any authenticated user.
   deviceCatalog: () => request('/catalog', deviceCatalogSchema),
 
+  // Host resources (delta 30). Both readable by any authenticated user: they
+  // name no lab, and anyone deciding whether to deploy needs to know whether
+  // there is room. `hostDocker` walks the daemon's whole inventory (~1s+) and
+  // 503s when the runner is down, so it is a separate query from the cheap one.
+  hostResources: () => request('/host', hostResourcesSchema),
+  hostDocker: () => request('/host/docker', dockerUsageSchema),
+
   // Minimal user+group directory (id + name) for the grant picker, available to any
   // authenticated caller (a lab owner may lack the global user/group-manage rights).
   listPrincipals: () => request('/principals', principalsResponseSchema),
@@ -364,6 +374,11 @@ export const api = {
   // active impairment; 409 no_definition on a bare created record.
   labLinks: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/links`, labLinksSchema),
+  // What the lab's nodes cost right now (delta 30). Live-only and best-effort
+  // like the link table: an undeployed lab or an unreachable upstream comes
+  // back live:false rather than an error.
+  labUsage: (name: string) =>
+    request(`/labs/${encodeURIComponent(name)}/usage`, labUsageSchema),
   labLayout: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/layout`, labLayoutSchema),
   // Full REPLACE of the whole resource ({} clears): the caller always sends

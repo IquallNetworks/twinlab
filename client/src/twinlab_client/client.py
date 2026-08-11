@@ -33,8 +33,10 @@ from twinlab_client.models import (
     CustomConfigResponse,
     DeviceCatalog,
     DiffSource,
+    DockerUsage,
     Grant,
     GroupSummary,
+    HostResources,
     ImportSource,
     Job,
     JobDetail,
@@ -48,6 +50,7 @@ from twinlab_client.models import (
     LabOwner,
     LabPowerAction,
     LabSummary,
+    LabUsage,
     LayoutGroupStyle,
     LayoutPosition,
     Liveness,
@@ -407,6 +410,33 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         not be checked). Image presence is advisory — deploy does not
         pre-flight it."""
         return _wire.parse_device_catalog(await self._send_json("GET", "/catalog"))
+
+    # ------------------------------------------------------------------ #
+    # Host resources (delta 30)
+    # ------------------------------------------------------------------ #
+
+    async def host_resources(self) -> HostResources:
+        """GET /host — what the machine running the labs is spending: CPU,
+        load, memory, swap and the filesystems the backend can see. Any
+        authenticated user may read it. The server samples on a timer, so
+        `sampled_at` is the reading's real age."""
+        return _wire.parse_host_resources(await self._send_json("GET", "/host"))
+
+    async def docker_usage(self) -> DockerUsage:
+        """GET /host/docker — the Docker daemon's counts and disk footprint,
+        mirroring `docker system df`. Read through the netlab-runner (the only
+        component with the socket) and noticeably slower than `host_resources`,
+        since the daemon walks every image and cache record; a runner outage
+        raises `docker_usage_unavailable` rather than reporting zeros."""
+        return _wire.parse_docker_usage(await self._send_json("GET", "/host/docker"))
+
+    async def lab_usage(self, name: str) -> LabUsage:
+        """GET /labs/{name}/usage — what a lab's nodes cost right now
+        (`lab:read`). Live-only and best-effort like the link table: an
+        undeployed lab or an unreachable upstream comes back `live=False`
+        rather than an error, and a node that is not running carries no
+        measures at all."""
+        return _wire.parse_lab_usage(await self._send_json("GET", f"/labs/{name}/usage"))
 
     # ------------------------------------------------------------------ #
     # Template library (delta 21)

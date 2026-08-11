@@ -620,7 +620,7 @@ async def test_deploy_job_records_its_phases(admin: TwinlabClient, make_lab: Lab
                 break
         await asyncio.sleep(1.0)
     assert running_steps, "no step became visible while the deploy ran"
-    assert running_steps[0] == "topology_generated"
+    assert running_steps[0] == "host_resources"
 
     done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
     assert done.status == "succeeded", done.error
@@ -628,15 +628,17 @@ async def test_deploy_job_records_its_phases(admin: TwinlabClient, make_lab: Lab
     codes = [step.code for step in done.steps]
     # A bare deploy's phases, in order. host_prep is absent on purpose: a
     # two-node p2p link needs no host bridge, and a "nothing to do" step
-    # would be noise.
+    # would be noise. host_resources leads (delta 30) because its value is
+    # entirely retrospective — what the host had left when this began.
     assert codes == [
+        "host_resources",
         "topology_generated",
         "image_preflight",
         "clab_deploy_started",
         "nodes_deployed",
         "nodes_ready",
     ]
-    assert "2 nodes" in done.steps[0].message
+    assert "2 nodes" in done.steps[1].message
     assert all(step.level == "info" for step in done.steps), [
         (s.code, s.level, s.message) for s in done.steps
     ]

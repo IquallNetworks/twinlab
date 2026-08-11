@@ -12,9 +12,27 @@ import {
 import { api } from '@/lib/api'
 
 /** Point-in-time container logs for one node (last 200 lines), fetched on
- * open with a manual refresh. */
-export function NodeLogsDialog({ name, node }: { name: string; node: string }) {
-  const [open, setOpen] = useState(false)
+ * open with a manual refresh.
+ *
+ * Owns its trigger button by default (the Connect drawer uses it that way).
+ * Pass `open`/`onOpenChange` to drive it from somewhere a button cannot go —
+ * the nodes table opens it from a menu item, where the trigger would be a
+ * second, competing button. */
+export function NodeLogsDialog({
+  name,
+  node,
+  open: openProp,
+  onOpenChange,
+}: {
+  name: string
+  node: string
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const controlled = openProp !== undefined
+  const open = controlled ? openProp : uncontrolledOpen
+  const setOpen = controlled ? (onOpenChange ?? (() => {})) : setUncontrolledOpen
   // Fetch on open, and let the user re-fetch; logs are a point-in-time snapshot.
   const { data, isFetching, isError, error, refetch } = useQuery({
     queryKey: ['labs', name, 'logs', node],
@@ -25,9 +43,11 @@ export function NodeLogsDialog({ name, node }: { name: string; node: string }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
-        Logs
-      </Button>
+      {!controlled && (
+        <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+          Logs
+        </Button>
+      )}
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Logs — {node}</DialogTitle>

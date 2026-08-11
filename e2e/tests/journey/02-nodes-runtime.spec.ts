@@ -17,12 +17,20 @@ test('the node table reports every container running with its identity', async (
     // Every node owns an address inside the lab's mgmt pool (10.79/16).
     await expect(row.getByText(/^10\.79\.\d+\.\d+$/)).toBeVisible()
   }
+  // The row shows the DEVICE; the image is a hover away, which is what keeps
+  // the table inside its width.
   const r1 = page.getByRole('row').filter({ hasText: `clab-${E2E_NET_NAME}-r1` })
-  // The pinned local tag (see the catalog's IMAGE_PINS) — proof the pin
-  // reaches the actually-deployed container, not just the catalog.
-  await expect(r1.getByText('twinlab/vyos:2026.05.30-0046-rolling')).toBeVisible()
+  await expect(r1.getByRole('button', { name: /^Image twinlab\/vyos/ })).toHaveText('vyos')
   const r3 = page.getByRole('row').filter({ hasText: `clab-${E2E_NET_NAME}-r3` })
-  await expect(r3.getByText(/frrouting\/frr/)).toBeVisible()
+  await expect(r3.getByRole('button', { name: /^Image .*frrouting\/frr/ })).toHaveText('frr')
+
+  // Hovering the device reveals the full reference: the pinned local tag (see
+  // the catalog's IMAGE_PINS), proof the pin reaches the actually-deployed
+  // container and not just the catalog.
+  await r1.getByRole('button', { name: /^Image twinlab\/vyos/ }).hover()
+  await expect(
+    page.locator('[data-slot="popover-content"]').getByText('twinlab/vyos:2026.05.30-0046-rolling'),
+  ).toBeVisible()
 
   // The copy affordance answers with a toast.
   await r1.getByRole('button', { name: /Copy address/ }).click()
@@ -75,7 +83,8 @@ test('logs stream and the web terminal answers a command', async ({ page }) => {
   await page.goto(`/labs/${E2E_NET_NAME}/nodes`)
   const r3 = page.getByRole('row').filter({ hasText: `clab-${E2E_NET_NAME}-r3` })
 
-  await r3.getByRole('button', { name: 'Logs' }).click()
+  await r3.getByRole('button', { name: 'Actions' }).click()
+  await page.getByRole('menuitem', { name: 'Logs' }).click()
   await expect(page.getByText('Logs — r3')).toBeVisible()
   await expect(page.getByText('last 200 lines')).toBeVisible()
   await expect(page.locator('pre').first()).not.toBeEmpty()
@@ -83,7 +92,10 @@ test('logs stream and the web terminal answers a command', async ({ page }) => {
   await page.keyboard.press('Escape')
 
   // The terminal over the shell transport (docker exec — credential-free).
-  await r3.getByRole('button', { name: 'Console' }).click()
+  // It lives in the Connect drawer, beside the SSH recipes that are the other
+  // way into the same node.
+  await r3.getByRole('button', { name: 'Connect' }).click()
+  await page.locator('[data-slot="sheet-content"]').getByRole('button', { name: 'Console' }).click()
   await page.getByRole('button', { name: 'shell', exact: true }).click()
   await expect(page.getByText('Connected · shell')).toBeVisible({ timeout: 30_000 })
   // Drive xterm through its hidden helper textarea — page-level keyboard

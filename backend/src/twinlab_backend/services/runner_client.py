@@ -32,6 +32,12 @@ _EXEC_TIMEOUT_SECONDS = 120.0
 _READY_TIMEOUT_SECONDS = 960.0
 # A local docker CLI read; outlive the runner's own 30s subprocess cap.
 _IMAGES_TIMEOUT_SECONDS = 40.0
+# `/system/df` walks every image, volume and build-cache record; the runner caps
+# it at 60s, so stay above that and let the runner's own error surface.
+_DOCKER_USAGE_TIMEOUT_SECONDS = 70.0
+# Per-container stats cost ~1s of daemon-side sampling each, but the runner runs
+# them concurrently — so this is one sample's wait plus headroom, not per node.
+_DOCKER_STATS_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +84,73 @@ class _ExecResponse(BaseModel):
 
 class _ImagesResponse(BaseModel):
     images: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class DiskEntry:
+    kind: str
+    total: int
+    active: int
+    size_bytes: int
+    reclaimable_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class DockerUsage:
+    root_dir: str
+    containers_running: int
+    containers_paused: int
+    containers_stopped: int
+    containers_total: int
+    images_total: int
+    disk: tuple[DiskEntry, ...]
+
+
+class _DiskEntryResponse(BaseModel):
+    kind: str
+    total: int
+    active: int
+    size_bytes: int
+    reclaimable_bytes: int
+
+
+class _DockerUsageResponse(BaseModel):
+    root_dir: str
+    containers_running: int
+    containers_paused: int
+    containers_stopped: int
+    containers_total: int
+    images_total: int
+    disk: list[_DiskEntryResponse]
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerStats:
+    """Every measure is nullable: the daemon answers for a stopped container
+    with an empty payload, and 0% would claim an idle container where there is
+    no running one."""
+
+    container: str
+    cpu_percent: float | None
+    memory_bytes: int | None
+    memory_limit_bytes: int | None
+    net_rx_bytes: int | None
+    net_tx_bytes: int | None
+    pids: int | None
+
+
+class _ContainerStatsResponse(BaseModel):
+    container: str
+    cpu_percent: float | None
+    memory_bytes: int | None
+    memory_limit_bytes: int | None
+    net_rx_bytes: int | None
+    net_tx_bytes: int | None
+    pids: int | None
+
+
+class _StatsResponse(BaseModel):
+    stats: list[_ContainerStatsResponse]
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +249,90 @@ class RunnerClient:
         except ValidationError as exc:
             return Err(RunnerError("runner", f"unexpected images response: {exc}"))
         return Ok(frozenset(parsed.images))
+
+    async def docker_usage(self) -> Result[DockerUsage, RunnerError]:
+        """The Docker daemon's counts and disk footprint (delta 30). The runner
+        is the only component with the socket, so this is the backend's only
+        window onto what images and volumes are costing."""
+        try:
+            resp = await self.client.get(
+                f"{self.base_url}/docker/usage", timeout=_DOCKER_USAGE_TIMEOUT_SECONDS
+            )
+        except httpx.HTTPError as exc:
+            return Err(RunnerError("transport", f"docker usage request failed: {exc}"))
+
+        if resp.status_code != HTTPStatus.OK:
+            return Err(RunnerError("runner", f"docker usage rejected: {resp.text}"))
+
+        try:
+            parsed = _DockerUsageResponse.model_validate_json(resp.content)
+        except ValidationError as exc:
+            return Err(RunnerError("runner", f"unexpected docker usage response: {exc}"))
+
+        return Ok(
+            DockerUsage(
+                root_dir=parsed.root_dir,
+                containers_running=parsed.containers_running,
+                containers_paused=parsed.containers_paused,
+                containers_stopped=parsed.containers_stopped,
+                containers_total=parsed.containers_total,
+                images_total=parsed.images_total,
+                disk=tuple(
+                    DiskEntry(
+                        kind=entry.kind,
+                        total=entry.total,
+                        active=entry.active,
+                        size_bytes=entry.size_bytes,
+                        reclaimable_bytes=entry.reclaimable_bytes,
+                    )
+                    for entry in parsed.disk
+                ),
+            )
+        )
+
+    async def container_stats(
+        self, containers: tuple[str, ...]
+    ) -> Result[dict[str, ContainerStats], RunnerError]:
+        """Live cost of the named containers, keyed by container name. A name
+        the daemon does not know is simply absent from the mapping.
+
+        The runner caps a request at 64 containers, so a lab larger than that
+        comes back as an error and its usage reads `live=false` — unmeasured
+        rather than wrong. Chunking would only be worth it if labs that size
+        turn up."""
+        if not containers:
+            return Ok({})
+        try:
+            resp = await self.client.get(
+                f"{self.base_url}/docker/stats",
+                params=[("container", name) for name in containers],
+                timeout=_DOCKER_STATS_TIMEOUT_SECONDS,
+            )
+        except httpx.HTTPError as exc:
+            return Err(RunnerError("transport", f"docker stats request failed: {exc}"))
+
+        if resp.status_code != HTTPStatus.OK:
+            return Err(RunnerError("runner", f"docker stats rejected: {resp.text}"))
+
+        try:
+            parsed = _StatsResponse.model_validate_json(resp.content)
+        except ValidationError as exc:
+            return Err(RunnerError("runner", f"unexpected docker stats response: {exc}"))
+
+        return Ok(
+            {
+                entry.container: ContainerStats(
+                    container=entry.container,
+                    cpu_percent=entry.cpu_percent,
+                    memory_bytes=entry.memory_bytes,
+                    memory_limit_bytes=entry.memory_limit_bytes,
+                    net_rx_bytes=entry.net_rx_bytes,
+                    net_tx_bytes=entry.net_tx_bytes,
+                    pids=entry.pids,
+                )
+                for entry in parsed.stats
+            }
+        )
 
     async def exec_command(
         self,

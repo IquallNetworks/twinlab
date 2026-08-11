@@ -10,9 +10,11 @@ import os
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import FastAPI
+from starlette.concurrency import run_in_threadpool
 
 from twinlab_backend.api.auth import router as auth_router
 from twinlab_backend.api.catalog import router as catalog_router
@@ -21,6 +23,7 @@ from twinlab_backend.api.events import router as events_router
 from twinlab_backend.api.grants import router as grants_router
 from twinlab_backend.api.groups import router as groups_router
 from twinlab_backend.api.health import router as health_router
+from twinlab_backend.api.host import router as host_router
 from twinlab_backend.api.imports import router as imports_router
 from twinlab_backend.api.internal import router as internal_router
 from twinlab_backend.api.jobs import fleet_router as fleet_jobs_router
@@ -35,8 +38,8 @@ from twinlab_backend.api_errors import register_error_handlers
 from twinlab_backend.auth.bootstrap import ensure_admin, seed_rbac
 from twinlab_backend.config import load_settings
 from twinlab_backend.db.base import create_engine, make_session_factory
-from twinlab_backend.result import Err
-from twinlab_backend.services import job_store
+from twinlab_backend.result import Err, Ok
+from twinlab_backend.services import host_metrics, job_store
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.custom_config import load_builtins
 from twinlab_backend.services.host_prep import HostPrepClient
@@ -46,6 +49,19 @@ from twinlab_backend.services.runner_client import RunnerClient
 
 _HTTP_TIMEOUT_SECONDS = 30.0
 _API_PREFIX = "/api/v1"
+
+
+async def _sample_host(app: FastAPI, disk_paths: tuple[str, ...]) -> None:
+    """Refresh the host snapshot on a timer (delta 30).
+
+    A failed sample KEEPS the previous snapshot rather than clearing it: its
+    `sampled_at` already tells a reader how stale the reading is, which beats
+    serving nothing over a transient /proc hiccup."""
+    while True:
+        await asyncio.sleep(host_metrics.SAMPLE_INTERVAL_SECONDS)
+        sample = await run_in_threadpool(host_metrics.collect, disk_paths, datetime.now(UTC))
+        if isinstance(sample, Ok):
+            app.state.host_snapshot = sample.value
 
 
 @asynccontextmanager
@@ -90,6 +106,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             message="the backend restarted while this job was running",
         )
 
+    # Host sampling (delta 30). Prime psutil's CPU baseline and take one
+    # reading BEFORE serving, so the first `GET /host` is a real measurement
+    # rather than a since-boot average. The disk figures cover the filesystems
+    # this container can see — today the host-shared lab files directory.
+    disk_paths = (settings.lab_files_dir,) if settings.lab_files_dir else ()
+    await run_in_threadpool(host_metrics.prime_cpu_sampling)
+    first_sample = await run_in_threadpool(host_metrics.collect, disk_paths, datetime.now(UTC))
+    app.state.host_snapshot = first_sample.value if isinstance(first_sample, Ok) else None
+
     # In-flight job tasks, keyed by job id — cancelled (then swept) at shutdown.
     job_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
     # Job lifecycle events are born in-process; this fans them out to the open
@@ -124,9 +149,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             if settings.hostprep_url and settings.hostprep_token is not None
             else None
         )
+        sampler = asyncio.create_task(_sample_host(app, disk_paths))
         try:
             yield
         finally:
+            _ = sampler.cancel()
             # Stop in-flight jobs, then record what the cancellation left
             # behind — before the engine (and the shared httpx client, whose
             # context closes after this) go away.
@@ -155,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(groups_router, prefix=_API_PREFIX)
     app.include_router(roles_router, prefix=_API_PREFIX)
     app.include_router(catalog_router, prefix=_API_PREFIX)
+    app.include_router(host_router, prefix=_API_PREFIX)
     app.include_router(templates_router, prefix=_API_PREFIX)
     app.include_router(imports_router, prefix=_API_PREFIX)
     app.include_router(directory_router, prefix=_API_PREFIX)

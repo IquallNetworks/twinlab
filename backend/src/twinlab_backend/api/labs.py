@@ -16,6 +16,7 @@ import asyncio
 import re
 import shutil
 import uuid
+from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path as FsPath
 from typing import Annotated, Literal, cast
@@ -65,6 +66,7 @@ from twinlab_backend.models import (
     LabStatus,
     LabSummary,
     LabTemplateSet,
+    LabUsageResponse,
     LayoutGroupStyle,
     LayoutPosition,
     LinkEndpoint,
@@ -77,6 +79,7 @@ from twinlab_backend.models import (
     NodeInterface,
     NodeInterfaces,
     NodeLogsResponse,
+    NodeUsage,
     Principal,
     PutLayoutRequest,
     RuntimeActionResult,
@@ -92,7 +95,7 @@ from twinlab_backend.models import (
     UpdateTestSuitesRequest,
 )
 from twinlab_backend.result import Err, Ok, Result
-from twinlab_backend.services import job_store, lab_store
+from twinlab_backend.services import host_metrics, job_store, lab_store
 from twinlab_backend.services.clab_api import (
     ClabApiClient,
     ClabApiError,
@@ -117,6 +120,7 @@ from twinlab_backend.services.device_catalog import (
     image_reference,
 )
 from twinlab_backend.services.fact_namespace import partition_node_facts
+from twinlab_backend.services.host_metrics import HostSnapshot
 from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
 from twinlab_backend.services.netlab import (
@@ -1207,6 +1211,7 @@ async def _deploy_job(
     previous_status: str,
     configure: bool,
     skip_config_time: bool,
+    host_snapshot: HostSnapshot | None,
 ) -> DeployResponse:
     """The deploy operation, run inside a job task: fresh session, lab re-fetched.
     Generate -> prepare the host (bridges/kernel modules via hostprep) -> clab
@@ -1214,6 +1219,10 @@ async def _deploy_job(
     status before re-raising; failures past mark_deployed (readiness, config
     push) leave the lab deployed."""
     async with session_factory() as db:
+        # First, because it is the only phase whose value is entirely
+        # retrospective: what the host had left when this deploy began.
+        if host_snapshot is not None:
+            await steps.record("host_resources", host_metrics.summary_line(host_snapshot))
         lab = await lab_store.get_lab(db, lab_name)
         if lab is None or lab.definition is None:
             # Unreachable via the API (the mutex holds and pre-checks passed at
@@ -1362,6 +1371,9 @@ async def deploy_lab(
             previous_status=previous_status,
             configure=body.configure,
             skip_config_time=body.skip_config_time_checks,
+            # Read when the job STARTS, not at submit — the sampler refreshes
+            # on its own timer and this closure runs in the job task.
+            host_snapshot=http_request.app.state.host_snapshot,
         )
 
     spawn_job(http_request, job, lab_name, work)
@@ -2181,6 +2193,49 @@ async def lab_interfaces(
     if node is None:
         return inventory
     return [entry for entry in inventory if entry.node == node]
+
+
+@router.get("/{lab_name}/usage", dependencies=[Depends(require_lab(perms.LAB_READ))])
+async def lab_usage(
+    lab_name: LabName, clab: ClabClientDep, runner: RunnerClientDep
+) -> LabUsageResponse:
+    """What the lab's nodes are costing the host right now (delta 30).
+
+    Live-only and best-effort, like the link table: an undeployed lab or an
+    unreachable upstream degrades to `live: false`, never a 5xx. Only RUNNING
+    containers are asked about — a stopped one has nothing to report, and its
+    row carries the state instead."""
+    sampled_at = datetime.now(UTC)
+    inspected = await clab.inspect(lab_name)
+    if isinstance(inspected, Err):
+        return LabUsageResponse(lab=lab_name, sampled_at=sampled_at, nodes=[], live=False)
+
+    nodes = sorted(inspected.value, key=lambda node: node.node_name)
+    running = tuple(node.container_name for node in nodes if node.state == "running")
+    measured = await runner.container_stats(running)
+    stats = measured.value if isinstance(measured, Ok) else {}
+
+    return LabUsageResponse(
+        lab=lab_name,
+        sampled_at=sampled_at,
+        nodes=[
+            NodeUsage(
+                node=node.node_name,
+                container=node.container_name,
+                state=node.state,
+                cpu_percent=stat.cpu_percent if stat else None,
+                memory_bytes=stat.memory_bytes if stat else None,
+                memory_limit_bytes=stat.memory_limit_bytes if stat else None,
+                net_rx_bytes=stat.net_rx_bytes if stat else None,
+                net_tx_bytes=stat.net_tx_bytes if stat else None,
+                pids=stat.pids if stat else None,
+            )
+            for node, stat in ((node, stats.get(node.container_name)) for node in nodes)
+        ],
+        # The nodes are known either way; `live` reports whether the MEASURES
+        # are real, so a runner outage reads as unmeasured rather than idle.
+        live=isinstance(measured, Ok),
+    )
 
 
 @router.get("/{lab_name}/links", dependencies=[Depends(require_lab(perms.LAB_READ))])

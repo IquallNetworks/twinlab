@@ -168,6 +168,32 @@ empty. That is expected, not a fault. The jobs list is the durable record.
 A reconnect after a dropped stream misses whatever happened while it was down.
 Twinlab falls back to a slow poll, so a running job still updates.
 
+## What the labs are costing
+
+A lab is a claim on a finite machine, so the dashboard says what is left.
+
+**Host** shows the machine's CPU, memory and the filesystem holding lab files,
+each as a bar that turns red past 90%. Read the memory bar as *available*, not
+free — Linux spends idle memory on cache it will hand back, so "available" is
+what a new lab can actually claim, and it is usually much larger than "free".
+The line underneath carries the load averages and when the reading was taken;
+that timestamp is the reading's real age, so one that stops moving means
+sampling has stopped, not that nothing is happening.
+
+**Storage** shows what the container daemon is holding, the same four rows
+`docker system df` prints. The number that matters is **Reclaimable**: node
+images are large, and pulling a few platforms fills a disk faster than running
+labs do. Twinlab never prunes anything on your behalf — reclaiming is
+`docker system prune` on the host, deliberately your decision.
+
+The lab's **Nodes** tab adds CPU and Memory columns for a deployed lab. A node
+that is not running shows `—` rather than `0`: a stopped container has nothing
+to report, and zero would read as an idle node. CPU is a share of the whole
+host, so a node using two cores of eight reads 200%, not 25%.
+
+Every deploy also records the host's state as its first step, so a deploy that
+failed on a full machine still says so a week later.
+
 ## Redeploying
 
 Deploying a lab that is already deployed replaces it in place. You do this after

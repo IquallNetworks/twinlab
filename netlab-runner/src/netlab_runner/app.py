@@ -7,11 +7,18 @@ the per-node breakdown, so the backend decides how to surface it.
 """
 
 import asyncio
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from netlab_runner.docker_api import (
+    ContainerStats,
+    DockerUsage,
+    container_stats,
+    docker_usage,
+)
 from netlab_runner.runner import (
     ConfigureOutcome,
     ExecOutcome,
@@ -82,6 +89,113 @@ async def images_endpoint() -> ImagesResponse:
             "message": outcome.message,
             "output": outcome.output[-2000:],
         },
+    )
+
+
+class DiskEntryModel(BaseModel):
+    kind: str
+    total: int
+    active: int
+    size_bytes: int
+    reclaimable_bytes: int
+
+
+class DockerUsageResponse(BaseModel):
+    root_dir: str
+    containers_running: int
+    containers_paused: int
+    containers_stopped: int
+    containers_total: int
+    images_total: int
+    disk: list[DiskEntryModel]
+
+
+@app.get("/docker/usage")
+async def docker_usage_endpoint() -> DockerUsageResponse:
+    # Daemon reads over the mounted socket — no netlab state, so no lock.
+    outcome = await run_in_threadpool(docker_usage)
+    if isinstance(outcome, DockerUsage):
+        return DockerUsageResponse(
+            root_dir=outcome.root_dir,
+            containers_running=outcome.containers_running,
+            containers_paused=outcome.containers_paused,
+            containers_stopped=outcome.containers_stopped,
+            containers_total=outcome.containers_total,
+            images_total=outcome.images_total,
+            disk=[
+                DiskEntryModel(
+                    kind=entry.kind,
+                    total=entry.total,
+                    active=entry.active,
+                    size_bytes=entry.size_bytes,
+                    reclaimable_bytes=entry.reclaimable_bytes,
+                )
+                for entry in outcome.disk
+            ],
+        )
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "stage": outcome.stage,
+            "message": outcome.message,
+            "output": outcome.output[-2000:],
+        },
+    )
+
+
+class ContainerStatsModel(BaseModel):
+    container: str
+    cpu_percent: float | None
+    memory_bytes: int | None
+    memory_limit_bytes: int | None
+    net_rx_bytes: int | None
+    net_tx_bytes: int | None
+    pids: int | None
+
+
+class ContainerStatsResponse(BaseModel):
+    # Only the containers the daemon could report on. A name it does not know
+    # is simply absent — the caller asked about a node, and "no container" is
+    # the answer, not an error for the whole request.
+    stats: list[ContainerStatsModel]
+
+
+# One lab's nodes, bounded well above any real topology.
+_MAX_STATS_CONTAINERS = 64
+
+
+@app.get("/docker/stats")
+async def docker_stats_endpoint(
+    container: Annotated[list[str], Query(min_length=1)],
+) -> ContainerStatsResponse:
+    if len(container) > _MAX_STATS_CONTAINERS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "stage": "docker-api",
+                "message": f"at most {_MAX_STATS_CONTAINERS} containers per request",
+                "output": "",
+            },
+        )
+    # Each request costs ~1s of daemon-side sampling, so they run CONCURRENTLY:
+    # a lab's wall clock is one sample, not one per node.
+    outcomes = await asyncio.gather(
+        *(run_in_threadpool(container_stats, name) for name in container)
+    )
+    return ContainerStatsResponse(
+        stats=[
+            ContainerStatsModel(
+                container=outcome.container,
+                cpu_percent=outcome.cpu_percent,
+                memory_bytes=outcome.memory_bytes,
+                memory_limit_bytes=outcome.memory_limit_bytes,
+                net_rx_bytes=outcome.net_rx_bytes,
+                net_tx_bytes=outcome.net_tx_bytes,
+                pids=outcome.pids,
+            )
+            for outcome in outcomes
+            if isinstance(outcome, ContainerStats)
+        ]
     )
 
 

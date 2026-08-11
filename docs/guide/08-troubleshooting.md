@@ -92,6 +92,27 @@ message.
 **`lab_not_running`** (409) — you asked for something that needs live
 containers, and there are none. Destroy is the usual one.
 
+A deploy that failed for no stated reason is worth checking against the host it
+ran on. The job's first step, `host_resources`, records what the machine had
+left when the deploy began — a host that was out of memory or disk explains a
+lot of otherwise mysterious container failures.
+
+## Host resources
+
+**`host_metrics_unavailable`** (503) — the backend has never managed to sample
+the host. It samples once at startup and every few seconds after, so this means
+`/proc` itself is refusing, which is a host or container-runtime problem rather
+than a Twinlab one.
+
+**`docker_usage_unavailable`** (503) — the Storage card could not read the
+container daemon. That read goes through the netlab-runner, the one component
+holding the Docker socket, so this usually means the runner is down. The Host
+card is unaffected: the machine's own figures come from the backend directly.
+
+A host reading whose timestamp stops advancing means sampling has stopped.
+Twinlab keeps serving the last good snapshot rather than inventing a fresh one,
+so the age is visible instead of hidden.
+
 ## Configuration and validation
 
 **`config_push_failed`** (502) — the push could not run at all.

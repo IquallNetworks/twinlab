@@ -42,6 +42,29 @@ export function testStatusBadgeVariant(status: string): BadgeVariant {
   return 'secondary'
 }
 
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const
+
+/** Binary byte sizes, the unit `free`/`docker system df` speak. Three
+ * significant figures keeps a column aligned without inventing precision. */
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes)) return '—'
+  const sign = bytes < 0 ? '-' : ''
+  let value = Math.abs(bytes)
+  let unit = 0
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  const digits = unit === 0 ? 0 : value >= 100 ? 0 : value >= 10 ? 1 : 2
+  return `${sign}${value.toFixed(digits)} ${BYTE_UNITS[unit]}`
+}
+
+/** A CPU share as the daemon reports it: a percentage of the WHOLE host, so
+ * values above 100% are real (a node pinning two cores reads 200%). */
+export function formatPercent(percent: number | null): string {
+  return percent === null || !Number.isFinite(percent) ? '—' : `${percent.toFixed(1)}%`
+}
+
 export function formatDateTime(iso: string): string {
   const date = new Date(iso)
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()

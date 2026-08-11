@@ -673,6 +673,37 @@ class NodeInterfaces(BaseModel):
     interfaces: list[NodeInterface]
 
 
+class NodeUsage(BaseModel):
+    """What one node is costing the host right now (delta 30).
+
+    Every measure is nullable and a node that is not running carries none of
+    them: the daemon answers for a stopped container with an empty payload,
+    and reporting 0% would claim an idle node where there is no running one.
+    `state` says which case a reader is looking at."""
+
+    node: str
+    container: str
+    state: str
+    # A share of the WHOLE host, so a node pinning two cores reads 200%.
+    cpu_percent: float | None
+    memory_bytes: int | None
+    # The container's cgroup limit — the host's total where a node sets none.
+    memory_limit_bytes: int | None
+    net_rx_bytes: int | None
+    net_tx_bytes: int | None
+    pids: int | None
+
+
+class LabUsageResponse(BaseModel):
+    lab: str
+    sampled_at: datetime
+    nodes: list[NodeUsage]
+    # False = the figures could not be collected (the lab is not deployed, or
+    # clab-api / the runner could not be reached). Never an error: an
+    # undeployed lab legitimately costs nothing.
+    live: bool
+
+
 class SaveConfigResponse(BaseModel):
     message: str
     output: str  # per-node save output from containerlab

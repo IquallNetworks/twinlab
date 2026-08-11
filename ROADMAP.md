@@ -131,7 +131,10 @@ file.
 
 - **Phase 6 (packet capture + metrics stack) is deferred** — "to be defined
   later". Do not start without an explicit go-ahead and a scope decision (see the
-  open question under Phase 6).
+  open question under Phase 6). **Partly resolved 2026-08-11**: item 9's scope
+  question was answered (lightweight, not an observability stack) and the
+  lightweight half SHIPPED as delta 30. Packet capture and the observability
+  half stay deferred on the same terms.
 - **Whole-lab freeze is per-node fan-out, non-atomic.** clab-api v0.5.0 has no
   whole-lab pause endpoint. "Pause the network" iterates `pause` over each node;
   we accept that it is not atomic.
@@ -487,9 +490,21 @@ clab-api `exec`):**
    and an **OSI/Apache-2.0-compat licensing pass on Edgeshark** before committing.
 9. **Metrics stack** — not served by clab-api; a separate build (e.g.
    Prometheus/Grafana/cAdvisor scraping the lab containers, or lightweight
-   per-node CPU/mem/traffic straight from the Docker API). **Open scope question
+   per-node CPU/mem/traffic straight from the Docker API). ~~**Open scope question
    to resolve when this is picked up:** full observability stack vs. lightweight
-   Docker-API stats.
+   Docker-API stats.~~ **SCOPE SETTLED 2026-08-11 in favour of the LIGHTWEIGHT
+   answer, and built** — contract delta 30, design record `docs/host-resources.md`:
+   `GET /host` (the machine, sampled from `/proc` via psutil), `GET /host/docker`
+   (the daemon's `system df` footprint through the runner) and
+   `GET /labs/{name}/usage` (per-node cpu/memory/network), plus a `host_resources`
+   deploy step. No new service, no time series, no retention.
+   **What is STILL deferred here** is the observability half: history, alerting,
+   dashboards and a Prometheus exposition. If it is picked up, `services/
+   host_metrics.py` is the collector it reads from — and one decision comes
+   FIRST: **Grafana has been AGPL-3.0 since v8**, which sits awkwardly against
+   the Apache-2.0-compatibility rule. cAdvisor and Prometheus are Apache-2.0;
+   Perses and VictoriaMetrics are the Apache-licensed dashboard side. A
+   maintainer call, not an implementation detail.
 
 ### Validation-gate parallelization · **deferred** (until gate wall-time warrants it)
 

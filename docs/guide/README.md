@@ -20,7 +20,7 @@ the Python client.
 3. **[The Build tab](03-build-tab.md)** — every canvas control and inspector
    setting, and the definition key each one writes
 4. **[Operating a lab](04-operating.md)** — power, logs, terminals, links,
-   impairment, drift, jobs
+   impairment, drift, jobs, host resources
 5. **[Test suites](05-test-suites.md)** — writing assertions that run against a
    deployed lab
 6. **[Real configurations in](06-config-import.md)** — config import, templates,

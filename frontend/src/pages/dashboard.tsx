@@ -3,6 +3,8 @@ import { Link } from '@tanstack/react-router'
 import { ArrowRight, Plus } from 'lucide-react'
 
 import { ActivityFeed } from '@/components/activity-feed'
+import { HostResourcesCard } from '@/components/host/host-resources-card'
+import { HostStorageCard } from '@/components/host/host-storage-card'
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { LabStatusBadge } from '@/components/lab/status-badge'
 import { Badge } from '@/components/ui/badge'
@@ -274,6 +276,11 @@ export function DashboardPage() {
         </Card>
 
         <div className="flex flex-col gap-6">
+          {/* Above the activity feed on purpose: "is there room" is the
+              question a fleet operator asks before anything else. */}
+          <HostResourcesCard />
+          <HostStorageCard />
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Activity</CardTitle>

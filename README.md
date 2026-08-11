@@ -43,6 +43,10 @@ and the clab-api deploy boundary.
   request.
 - **Live surfaces** — a Server-Sent Events stream of container and job activity, and a WebSocket
   terminal into any node.
+- **Host resources** — what the machine has left (CPU, load, memory, disk), what the container
+  daemon is holding and how much of it is reclaimable, and what each lab's nodes cost right now.
+  Every deploy records the host's state as its first step, so a deploy that failed on a full
+  machine still says so afterwards.
 - **Access control that delegates** — scoped RBAC over users and groups, API keys, and an SSH jump
   host that makes a deployed lab reachable — and Ansible-ready — with plain `ssh -J`.
 
@@ -302,8 +306,8 @@ Three projects sit beside the stack, none of them a service:
 | Project | What it is |
 | --- | --- |
 | [`client/`](client/) | `twinlab-client` — the distributable async Python client. |
-| [`blackbox/`](blackbox/) | The contract's enforcement: 154 tests driving a live stack through the client only, including real containerlab deploys behind a `deploy` marker. |
-| [`e2e/`](e2e/) | The browser layer's: 56 Playwright specs driving the real frontend against a dedicated stack that every run resets to an empty backend. |
+| [`blackbox/`](blackbox/) | The contract's enforcement: 163 tests driving a live stack through the client only, including real containerlab deploys behind a `deploy` marker. |
+| [`e2e/`](e2e/) | The browser layer's: 58 Playwright specs driving the real frontend against a dedicated stack that every run resets to an empty backend. |
 
 ## Documentation
 
@@ -319,8 +323,8 @@ each of the six supported platforms.
 
 The rest of [`docs/`](docs/) is design records, written for people changing the code:
 `twinlab_client_shape.py` is the reviewed API contract, and `rbac-v2.md`, `config-import.md`,
-`fact-namespace.md`, `frontend-rework.md`, `operator-guide-plan.md` and `nos-sweep/` cover the
-rest. [`ROADMAP.md`](ROADMAP.md) records what is shipped, deferred and why.
+`fact-namespace.md`, `frontend-rework.md`, `host-resources.md`, `operator-guide-plan.md` and
+`nos-sweep/` cover the rest. [`ROADMAP.md`](ROADMAP.md) records what is shipped, deferred and why.
 
 ## Development
 

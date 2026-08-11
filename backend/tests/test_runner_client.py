@@ -96,3 +96,75 @@ async def test_ready_maps_not_ready_to_typed_error() -> None:
     result = await _client(handler).ready("name: tl-1\n", {})
     assert isinstance(result, Err)
     assert result.error.reason == "runner"
+
+
+async def test_docker_usage_parses_the_daemon_footprint() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/docker/usage"
+        return httpx.Response(
+            200,
+            json={
+                "root_dir": "/var/lib/docker",
+                "containers_running": 3,
+                "containers_paused": 0,
+                "containers_stopped": 1,
+                "containers_total": 4,
+                "images_total": 45,
+                "disk": [
+                    {
+                        "kind": "images",
+                        "total": 45,
+                        "active": 3,
+                        "size_bytes": 24423156815,
+                        "reclaimable_bytes": 22467784404,
+                    }
+                ],
+            },
+        )
+
+    result = await _client(handler).docker_usage()
+    assert isinstance(result, Ok), result
+    assert result.value.root_dir == "/var/lib/docker"
+    assert result.value.containers_running == 3
+    assert result.value.disk[0].kind == "images"
+    assert result.value.disk[0].reclaimable_bytes == 22467784404
+
+
+async def test_container_stats_are_keyed_by_container_name() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/docker/stats"
+        # One repeated query parameter per container, so the runner samples
+        # them concurrently in a single round trip.
+        assert request.url.params.get_list("container") == ["clab-l-r1", "clab-l-r2"]
+        return httpx.Response(
+            200,
+            json={
+                "stats": [
+                    {
+                        "container": "clab-l-r1",
+                        "cpu_percent": 10.5,
+                        "memory_bytes": 4096,
+                        "memory_limit_bytes": 8192,
+                        "net_rx_bytes": 1,
+                        "net_tx_bytes": 2,
+                        "pids": 3,
+                    }
+                ]
+            },
+        )
+
+    result = await _client(handler).container_stats(("clab-l-r1", "clab-l-r2"))
+    assert isinstance(result, Ok), result
+    # r2 is simply absent — a name the daemon does not know is not an error for
+    # the whole request.
+    assert sorted(result.value) == ["clab-l-r1"]
+    assert result.value["clab-l-r1"].cpu_percent == 10.5
+
+
+async def test_container_stats_with_no_containers_skips_the_round_trip() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no containers means nothing to ask about")
+
+    result = await _client(handler).container_stats(())
+    assert isinstance(result, Ok), result
+    assert result.value == {}

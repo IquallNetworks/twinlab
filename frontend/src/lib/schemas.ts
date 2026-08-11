@@ -222,6 +222,87 @@ export const deviceCatalogSchema = z.object({
 })
 export type DeviceCatalogWire = z.infer<typeof deviceCatalogSchema>
 
+// --- Host resources (delta 30): what the machine running the labs is
+// spending. GET /host is sampled locally by the backend and always available;
+// GET /host/docker goes through the runner (the only Docker-socket holder) and
+// is noticeably slower, so they are separate queries. ---
+export const hostResourcesSchema = z.object({
+  // The reading's real age — the server samples on a timer.
+  sampled_at: z.string(),
+  cpu: z.object({
+    cores: z.number(),
+    utilization_percent: z.number(),
+    load1: z.number(),
+    load5: z.number(),
+    load15: z.number(),
+  }),
+  memory: z.object({
+    total_bytes: z.number(),
+    used_bytes: z.number(),
+    // What a new lab could claim — NOT total minus used.
+    available_bytes: z.number(),
+    percent: z.number(),
+  }),
+  swap: z.object({
+    total_bytes: z.number(),
+    used_bytes: z.number(),
+    percent: z.number(),
+  }),
+  disks: z.array(
+    z.object({
+      path: z.string(),
+      total_bytes: z.number(),
+      used_bytes: z.number(),
+      free_bytes: z.number(),
+      percent: z.number(),
+    }),
+  ),
+})
+export type HostResources = z.infer<typeof hostResourcesSchema>
+
+export const dockerUsageSchema = z.object({
+  root_dir: z.string(),
+  containers_running: z.number(),
+  containers_paused: z.number(),
+  containers_stopped: z.number(),
+  containers_total: z.number(),
+  images_total: z.number(),
+  disk: z.array(
+    z.object({
+      // images | containers | volumes | build_cache — the daemon's vocabulary,
+      // deliberately not pinned to an enum here.
+      kind: z.string(),
+      total: z.number(),
+      active: z.number(),
+      size_bytes: z.number(),
+      reclaimable_bytes: z.number(),
+    }),
+  ),
+})
+export type DockerUsage = z.infer<typeof dockerUsageSchema>
+
+export const labUsageSchema = z.object({
+  lab: z.string(),
+  sampled_at: z.string(),
+  nodes: z.array(
+    z.object({
+      node: z.string(),
+      container: z.string(),
+      state: z.string(),
+      // All nullable: a node that is not running is UNMEASURED, not idle.
+      cpu_percent: z.number().nullable(),
+      memory_bytes: z.number().nullable(),
+      memory_limit_bytes: z.number().nullable(),
+      net_rx_bytes: z.number().nullable(),
+      net_tx_bytes: z.number().nullable(),
+      pids: z.number().nullable(),
+    }),
+  ),
+  live: z.boolean(),
+})
+export type LabUsage = z.infer<typeof labUsageSchema>
+export type NodeUsage = LabUsage['nodes'][number]
+
 // --- Template library (delta 21): two sibling collections with independent
 // namespaces — /templates/network (complete definitions; builtin tier is
 // shipped, user tier is a PUBLISHED lab served live) and /templates/node

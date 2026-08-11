@@ -107,6 +107,6 @@ records, covered in the authoring and imports slices; delta 28 added the test-co
 `mode: shell|cli` split, covered in the authoring slice; delta 29 the job step log, asserted
 in the jobs and deploy slices — delta 25 was withdrawn),
 and the suite is
-**entirely green** (154 tests with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+**entirely green** (163 tests with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

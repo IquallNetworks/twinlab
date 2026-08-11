@@ -1468,3 +1468,133 @@ async def test_import_network_wiring_error_slug(make_client: ClientFactory) -> N
             )
     assert excinfo.value.code == "wiring_conflict"
     assert excinfo.value.extras == {"entry": 0}
+
+
+async def test_host_resources_parses(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/host"
+        return httpx.Response(
+            200,
+            json={
+                "sampled_at": "2026-08-11T12:00:00Z",
+                "cpu": {
+                    "cores": 8,
+                    "utilization_percent": 34.2,
+                    "load1": 1.5,
+                    "load5": 1.0,
+                    "load15": 0.8,
+                },
+                "memory": {
+                    "total_bytes": 68719476736,
+                    "used_bytes": 12884901888,
+                    "available_bytes": 53687091200,
+                    "percent": 18.75,
+                },
+                "swap": {"total_bytes": 0, "used_bytes": 0, "percent": 0.0},
+                "disks": [
+                    {
+                        "path": "/var/lib/twinlab/lab-files",
+                        "total_bytes": 536870912000,
+                        "used_bytes": 311385128960,
+                        "free_bytes": 225485783040,
+                        "percent": 58.0,
+                    }
+                ],
+            },
+        )
+
+    async with make_client(handler) as client:
+        host = await client.host_resources()
+    assert host.cpu.cores == 8
+    assert host.cpu.load1 == 1.5
+    # Available is its own measure, not total minus used.
+    assert host.memory.available_bytes == 53687091200
+    assert [disk.path for disk in host.disks] == ["/var/lib/twinlab/lab-files"]
+    assert host.sampled_at.year == 2026
+
+
+async def test_docker_usage_parses(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/host/docker"
+        return httpx.Response(
+            200,
+            json={
+                "root_dir": "/var/lib/docker",
+                "containers_running": 12,
+                "containers_paused": 0,
+                "containers_stopped": 1,
+                "containers_total": 13,
+                "images_total": 45,
+                "disk": [
+                    {
+                        "kind": "images",
+                        "total": 45,
+                        "active": 6,
+                        "size_bytes": 24423156815,
+                        "reclaimable_bytes": 22467784404,
+                    },
+                    {
+                        "kind": "build_cache",
+                        "total": 463,
+                        "active": 0,
+                        "size_bytes": 21130000000,
+                        "reclaimable_bytes": 9372546591,
+                    },
+                ],
+            },
+        )
+
+    async with make_client(handler) as client:
+        usage = await client.docker_usage()
+    assert usage.root_dir == "/var/lib/docker"
+    assert usage.containers_running == 12
+    assert [entry.kind for entry in usage.disk] == ["images", "build_cache"]
+    # Reclaimable is smaller than size for anything shared.
+    assert usage.disk[0].reclaimable_bytes < usage.disk[0].size_bytes
+
+
+async def test_lab_usage_parses_unmeasured_nodes(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/usage"
+        return httpx.Response(
+            200,
+            json={
+                "lab": "lab1",
+                "sampled_at": "2026-08-11T12:00:00Z",
+                "nodes": [
+                    {
+                        "node": "r1",
+                        "container": "clab-lab1-r1",
+                        "state": "running",
+                        "cpu_percent": 12.5,
+                        "memory_bytes": 268435456,
+                        "memory_limit_bytes": 68719476736,
+                        "net_rx_bytes": 1024,
+                        "net_tx_bytes": 2048,
+                        "pids": 21,
+                    },
+                    {
+                        "node": "r2",
+                        "container": "clab-lab1-r2",
+                        "state": "stopped",
+                        "cpu_percent": None,
+                        "memory_bytes": None,
+                        "memory_limit_bytes": None,
+                        "net_rx_bytes": None,
+                        "net_tx_bytes": None,
+                        "pids": None,
+                    },
+                ],
+                "live": True,
+            },
+        )
+
+    async with make_client(handler) as client:
+        usage = await client.lab_usage("lab1")
+    assert usage.live
+    r1, r2 = usage.nodes
+    assert r1.cpu_percent == 12.5
+    assert r1.pids == 21
+    # A stopped node is unmeasured, NOT idle — every measure is None.
+    assert r2.state == "stopped"
+    assert (r2.cpu_percent, r2.memory_bytes, r2.pids) == (None, None, None)

@@ -88,9 +88,10 @@ Deploy is a **job**. Submitting it returns at once and the work continues on the
 server, so closing the dialog or the browser changes nothing. The dialog even
 says so: its close button reads "Close (keeps running)".
 
-The job reports its own steps as it goes — `topology_generated`,
-`image_preflight`, `host_prep`, `clab_deploy_started`, `nodes_deployed`,
-`nodes_ready`, `config_push_started`, `config_pushed`. Three places show them:
+The job reports its own steps as it goes — `host_resources`,
+`topology_generated`, `image_preflight`, `host_prep`, `clab_deploy_started`,
+`nodes_deployed`, `nodes_ready`, `config_push_started`, `config_pushed`. Three
+places show them:
 
 - the deploy dialog, while it is open,
 - the jobs drawer, from the row on `/jobs` or the lab's own job list,

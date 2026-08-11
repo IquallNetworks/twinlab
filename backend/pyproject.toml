@@ -15,7 +15,13 @@ dependencies = [
     "jinja2>=3.1.6",
     "napalm>=5.2.0",
     "netutils>=1.18.0",
-    "networklab>=26.7",
+    # EXACT, unlike everything else here: Twinlab mirrors netlab internals it
+    # cannot import (DEVICE_KMODS, IMAGE_PINS, the catalog's module support) and
+    # promises netlab's expanded-node shape as the fact namespace's contract
+    # tier, so a version change is a reviewable event rather than a resolve.
+    # Both Dockerfiles `uv sync --frozen`, so the lock already governs shipped
+    # images; this keeps an unlocked resolve from floating past it too.
+    "networklab==26.7",
     "ntc-templates>=9.2.0",
     "pwdlib[argon2]>=0.3.0",
     "pyyaml>=6.0.3",

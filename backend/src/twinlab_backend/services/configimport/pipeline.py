@@ -7,7 +7,6 @@ Pure orchestration; every failure is a typed problem the API maps onto its
 422 slugs.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -21,23 +20,17 @@ from twinlab_backend.services.configimport.emit import (
     emit_definition,
     sanitize_node_name,
 )
-from twinlab_backend.services.configimport.ios import parse_ios
 from twinlab_backend.services.configimport.model import (
     Note,
     ParsedSource,
-    ParseError,
     QuarantineClass,
 )
-from twinlab_backend.services.configimport.rewrite import (
-    rewrite_ios,
-    rewrite_vyos,
-    wrap_raw,
-)
+from twinlab_backend.services.configimport.platforms import PlatformImporter, importer_for
+from twinlab_backend.services.configimport.rewrite import wrap_raw
 from twinlab_backend.services.configimport.suggestion import (
     WiringSuggestion,
     suggest_wiring,
 )
-from twinlab_backend.services.configimport.vyos import parse_vyos
 from twinlab_backend.services.configimport.wiring import (
     NodeSource,
     Wiring,
@@ -46,16 +39,6 @@ from twinlab_backend.services.configimport.wiring import (
 )
 from twinlab_backend.services.custom_config import ConfigTemplate, TemplateVariant
 from twinlab_backend.services.netlab import ClabArtifacts, create_clab_topology
-
-_PARSERS: dict[str, Callable[[str], Result[ParsedSource, ParseError]]] = {
-    "iol": parse_ios,
-    "vyos": parse_vyos,
-}
-
-
-def import_capable_devices() -> frozenset[str]:
-    """The devices with a parser — the catalog's `config_import` flag."""
-    return frozenset(_PARSERS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,15 +95,23 @@ class ImportProblem:
     entry: int | None = None
 
 
-def _parse_one(spec: ImportSourceSpec, label: str) -> Result[ParsedSource, ImportProblem]:
-    parser = _PARSERS.get(spec.device)
-    if parser is None:
+def _platform(device: str, label: str) -> Result[PlatformImporter, ImportProblem]:
+    """The importer for a device. Every stage resolves the platform through
+    here, so parse, classify and rewrite can never disagree about which NOS a
+    source is."""
+    platform = importer_for(device)
+    if platform is None:
         return Err(
-            ImportProblem(
-                "unsupported_device", f"{label}: device {spec.device!r} is not import-capable"
-            )
+            ImportProblem("unsupported_device", f"{label}: device {device!r} is not import-capable")
         )
-    parsed = parser(spec.content)
+    return Ok(platform)
+
+
+def _parse_one(spec: ImportSourceSpec, label: str) -> Result[ParsedSource, ImportProblem]:
+    platform = _platform(spec.device, label)
+    if isinstance(platform, Err):
+        return platform
+    parsed = platform.value.parse(spec.content)
     if isinstance(parsed, Err):
         return Err(ImportProblem("config_unparseable", f"{label}: {parsed.error.message}"))
     return parsed
@@ -252,10 +243,19 @@ def import_network(
     for node, pin in topology.loopbacks.items():
         per_node_addresses[node][pin.interface] = pin.ipv4
 
+    # Resolved once per node and reused by the split and the carry rewrite, so
+    # both stages are guaranteed to speak the same platform.
+    platforms: dict[str, PlatformImporter] = {}
+    for source in sources:
+        platform = _platform(source.device, source.node)
+        if isinstance(platform, Err):
+            return platform
+        platforms[source.node] = platform.value
+
     splits: dict[str, BucketSplit] = {
         source.node: split_buckets(
             source.parsed,
-            device=source.device,
+            spec=platforms[source.node].classify,
             modeled_addresses=per_node_addresses[source.node],
             mgmt_interfaces=topology.mgmt_interfaces.get(source.node, frozenset()),
             mgmt_vrfs=topology.mgmt_vrfs.get(source.node, frozenset()),
@@ -283,8 +283,7 @@ def import_network(
         mapping = interface_map.get(source.node, {})
         if split.carried:
             all_lines = tuple(line for block in split.carried for line in block.lines)
-            rewriter = rewrite_vyos if source.device == "vyos" else rewrite_ios
-            rewritten, notes = rewriter(all_lines, mapping, source.node)
+            rewritten, notes = platforms[source.node].rewrite(all_lines, mapping, source.node)
             warnings.extend(notes)
             carry_variants.append(
                 TemplateVariant(source=wrap_raw("\n".join(rewritten)), node=source.node)
@@ -332,6 +331,9 @@ def import_node(device: str, content: str) -> Result[NodeImportResult, ImportPro
     """The single-node granularity: a stampable fragment plus its carry.
     No peers -> no inference -> the carry keeps SOURCE interface names (the
     contract QUIRK); the fragment models the device and the loopback pin."""
+    platform = _platform(device, "the config")
+    if isinstance(platform, Err):
+        return platform
     parsed = _parse_one(ImportSourceSpec(device=device, content=content), "the config")
     if isinstance(parsed, Err):
         return parsed
@@ -357,7 +359,7 @@ def import_node(device: str, content: str) -> Result[NodeImportResult, ImportPro
     modeled_addresses = {pin.name: pin.ipv4} if pin is not None and pin.ipv4 is not None else {}
     split = split_buckets(
         source,
-        device=device,
+        spec=platform.value.classify,
         modeled_addresses=modeled_addresses,
         mgmt_interfaces=mgmt_interfaces,
         mgmt_vrfs=mgmt_vrfs,

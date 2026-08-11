@@ -75,6 +75,24 @@ def test_diff_parse_errors_are_typed() -> None:
 
 
 def test_dump_commands_cover_the_import_set() -> None:
-    from twinlab_backend.services.configimport.pipeline import import_capable_devices
+    from twinlab_backend.services.configimport.platforms import import_capable_devices
 
     assert set(DUMP_COMMANDS) == set(import_capable_devices())
+
+
+def test_platform_table_entries_match_their_key() -> None:
+    """The one copy-paste hazard the table itself cannot prevent: an entry
+    whose `device` field disagrees with the key it is filed under would parse
+    as one platform and report as another."""
+    from twinlab_backend.services.configimport.platforms import PLATFORMS
+
+    assert all(device == platform.device for device, platform in PLATFORMS.items())
+
+
+def test_an_unknown_device_is_refused_rather_than_treated_as_ios() -> None:
+    """The regression this table exists for: the dispatch used to be
+    `parse_vyos if device == "vyos" else parse_ios`, so ANY unknown device was
+    silently parsed, classified and rewritten as Cisco."""
+    outcome = diff_node("r1", "frr", _SOURCE, _RUNNING)
+    assert isinstance(outcome, Err)
+    assert "not import-capable" in outcome.error

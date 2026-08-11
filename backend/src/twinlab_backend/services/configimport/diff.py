@@ -17,21 +17,15 @@ from dataclasses import dataclass
 
 from twinlab_backend.result import Err, Ok, Result
 from twinlab_backend.services.configimport.classify import split_buckets
-from twinlab_backend.services.configimport.ios import parse_ios
-from twinlab_backend.services.configimport.model import ParsedSource, ParseError
-from twinlab_backend.services.configimport.rewrite import rewrite_ios, rewrite_vyos
-from twinlab_backend.services.configimport.vyos import parse_vyos
+from twinlab_backend.services.configimport.platforms import PLATFORMS
 from twinlab_backend.services.configimport.wiring import is_mgmt_vrf
 
-# The dump command per import-capable device, written in the DEVICE'S OWN CLI.
-# Reaching that CLI from the exec transport is `cli_adapters`' job (delta 28) —
-# the caller adapts these with mode "cli", which is what puts VyOS's op-mode
-# wrapper back in front of the bare spelling that would otherwise return an
-# empty stdout. Config-diff is pinned to the exec transport deliberately: it
-# must work on a lab whose config is broken, which is when it is worth running.
+# The dump command per import-capable device, derived from the platform table
+# so it cannot drift from the parser set — a platform that can be imported can
+# be diffed, by construction. See `PlatformImporter.dump_command` for why the
+# spelling is the device's own CLI.
 DUMP_COMMANDS: dict[str, str] = {
-    "iol": "show running-config",
-    "vyos": "show configuration commands",
+    device: platform.dump_command for device, platform in PLATFORMS.items()
 }
 
 
@@ -44,10 +38,6 @@ class NodeDiffData:
     quarantined: int
 
 
-def _parse(device: str, content: str) -> Result[ParsedSource, ParseError]:
-    return parse_vyos(content) if device == "vyos" else parse_ios(content)
-
-
 def diff_node(
     node: str,
     device: str,
@@ -55,10 +45,13 @@ def diff_node(
     running_output: str,
     interface_map: dict[str, str] | None = None,
 ) -> Result[NodeDiffData, str]:
-    source = _parse(device, source_content)
+    platform = PLATFORMS.get(device)
+    if platform is None:
+        return Err(f"device {device!r} is not import-capable")
+    source = platform.parse(source_content)
     if isinstance(source, Err):
         return Err(f"source config: {source.error.message}")
-    running = _parse(device, running_output)
+    running = platform.parse(running_output)
     if isinstance(running, Err):
         return Err(f"running config: {running.error.message}")
 
@@ -75,7 +68,7 @@ def diff_node(
     )
     split = split_buckets(
         source.value,
-        device=device,
+        spec=platform.classify,
         modeled_addresses={},
         mgmt_interfaces=mgmt_interfaces,
         mgmt_vrfs=mgmt_vrfs,
@@ -102,8 +95,7 @@ def diff_node(
         mapping.update(interface_map)
 
     source_lines = tuple(line for block in split.carried for line in block.lines)
-    rewriter = rewrite_vyos if device == "vyos" else rewrite_ios
-    rewritten, _ = rewriter(source_lines, mapping, node)
+    rewritten, _ = platform.rewrite(source_lines, mapping, node)
 
     running_lines = [line for stanza in running.value.stanzas for line in stanza.lines]
     running_set = {line.strip() for line in running_lines}

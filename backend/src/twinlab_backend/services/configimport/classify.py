@@ -11,11 +11,18 @@ Everything else is CARRIED verbatim.
 The rule lists are code, not contract: the four classes are pinned
 (`QUARANTINE_CLASSES`), the line lists may grow. Routing policy, ACLs, QoS
 and non-mgmt VRFs are NEVER quarantined — they carry and apply.
+
+Per-platform behaviour is a `ClassifySpec` record, never a branch: `split_buckets`
+reads the spec it is handed and knows no device names. The specs live here rather
+than in each platform's module so the pinned classes can be audited across
+platforms side by side — `auth` must mean the same thing everywhere.
 """
 
 import ipaddress
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from twinlab_backend.services.configimport.model import (
     ParsedSource,
@@ -26,6 +33,38 @@ from twinlab_backend.services.configimport.model import (
 # (class, stanza-key prefix): a stanza whose key starts with the prefix is
 # quarantined under the class.
 type KeyRule = tuple[QuarantineClass, tuple[str, ...]]
+
+# How a platform's interface stanza carries its identity — the one genuine
+# syntactic axis in this module:
+#   "flat"  — every line is an independent command (VyOS `set …`). Consuming a
+#             modeled address just drops that line; there is no header.
+#   "block" — an indented body under a header line (IOS `interface Gi0/0`). The
+#             header is carried while any child survives and modeled when the
+#             address was the stanza's only content.
+type StanzaForm = Literal["flat", "block"]
+
+# The regex matching the ONE line the skeleton models for an interface, built
+# from (interface name, pinned CIDR).
+type AddressPattern = Callable[[str, str], re.Pattern[str]]
+
+# Structural quarantine beyond the key rules, given the source's mgmt VRFs.
+type MgmtRule = Callable[[Stanza, frozenset[str]], QuarantineClass | None]
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifySpec:
+    """Everything `split_buckets` needs to know about one platform's syntax.
+
+    Adding a platform is a new value of this record — never a new branch, and
+    never an `else` that silently means an existing platform."""
+
+    quarantine_rules: tuple[KeyRule, ...]
+    address_pattern: AddressPattern
+    stanza_form: StanzaForm
+    # None where the platform expresses management scope only through interface
+    # VRF membership, which `split_buckets` already handles generically.
+    mgmt_rule: MgmtRule | None = None
+
 
 _IOS_RULES: tuple[KeyRule, ...] = (
     ("auth", ("aaa",)),
@@ -111,7 +150,7 @@ def _vyos_address_re(interface: str, cidr: str) -> re.Pattern[str]:
 def split_buckets(
     parsed: ParsedSource,
     *,
-    device: str,
+    spec: ClassifySpec,
     modeled_addresses: dict[str, str],
     mgmt_interfaces: frozenset[str],
     mgmt_vrfs: frozenset[str],
@@ -120,10 +159,6 @@ def split_buckets(
     `modeled_addresses` maps interface name -> the primary CIDR the skeleton
     pins (link endpoints, stubs, the loopback pin); an interface absent from
     it keeps its address line in the carry."""
-    is_vyos = device == "vyos"
-    rules = _VYOS_RULES if is_vyos else _IOS_RULES
-    address_re_for = _vyos_address_re if is_vyos else _ios_address_re
-
     modeled: list[str] = []
     carried: list[CarriedBlock] = []
     quarantined: list[QuarantinedBlock] = []
@@ -139,28 +174,29 @@ def split_buckets(
             if cidr is None:
                 carried.append(CarriedBlock(lines=stanza.lines, interface=stanza.interface))
                 continue
-            pattern = address_re_for(stanza.interface, cidr)
+            pattern = spec.address_pattern(stanza.interface, cidr)
             kept = [line for line in stanza.lines if pattern.match(line) is None]
             taken = [line for line in stanza.lines if pattern.match(line) is not None]
             modeled.extend(taken)
-            if is_vyos:
-                # Set-form lines are independent commands; no header exists.
+            if spec.stanza_form == "flat" or not kept:
                 if kept:
                     carried.append(CarriedBlock(lines=tuple(kept), interface=stanza.interface))
                 continue
-            # IOS: the `interface X` header follows its content — it is
-            # carried while any child survives, modeled when the whole
-            # stanza was consumed.
+            # A block stanza's header line survives the address match by
+            # construction (the pattern matches an address line only), so
+            # `kept` is non-empty here for every real block platform; the
+            # guard above keeps an empty one from unpacking.
             header, *children = kept
             if children:
                 carried.append(CarriedBlock(lines=(header, *children), interface=stanza.interface))
             else:
                 modeled.append(header)
             continue
-        # Non-interface stanzas: rule lists, then (IOS) mgmt-VRF constructs.
-        reason = _key_rule(rules, stanza)
-        if reason is None and not is_vyos:
-            reason = _ios_mgmt_reason(stanza, mgmt_vrfs)
+        # Non-interface stanzas: rule lists, then the platform's own structural
+        # management rule (IOS mgmt-VRF routes and definitions).
+        reason = _key_rule(spec.quarantine_rules, stanza)
+        if reason is None and spec.mgmt_rule is not None:
+            reason = spec.mgmt_rule(stanza, mgmt_vrfs)
         if reason is not None:
             quarantined.append(QuarantinedBlock(reason=reason, lines=stanza.lines))
         else:
@@ -184,3 +220,19 @@ def _ios_mgmt_reason(stanza: Stanza, mgmt_vrfs: frozenset[str]) -> QuarantineCla
     ):
         return "mgmt"
     return None
+
+
+# The per-platform specs. Defined last so they can name the rules and helpers
+# above; assembled into the full importer records in `platforms.py`.
+IOS_CLASSIFY = ClassifySpec(
+    quarantine_rules=_IOS_RULES,
+    address_pattern=_ios_address_re,
+    stanza_form="block",
+    mgmt_rule=_ios_mgmt_reason,
+)
+
+VYOS_CLASSIFY = ClassifySpec(
+    quarantine_rules=_VYOS_RULES,
+    address_pattern=_vyos_address_re,
+    stanza_form="flat",
+)

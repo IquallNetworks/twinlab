@@ -1472,6 +1472,57 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     Note also that mgmt IPs are already stable per lab (durable subnet +
     netlab-pinned node ids), so names buy readability, not stability.
 
+### Post-v1.0 · config import for more source platforms · **planned, after the v1.0 tag**
+
+24. **Widen config import beyond VyOS and IOS.** Research recorded 2026-08-11 in
+    `docs/import-platforms-and-netlab-dependency.md`; the file-by-file procedure
+    is `docs/adding-an-import-platform.md`.
+
+    **Why this is cheap, and why it is strategically the right widening.** An
+    imported lab's definition carries **no `module:` key at all** — the skeleton
+    is `{provider, nodes, links}`, netlab generates only interface addressing,
+    and every protocol line rides the carry verbatim. So import uses none of
+    netlab's 654 config templates. Each platform added extends Twinlab's reach
+    without adding a single netlab-template dependency, in the direction a
+    declarative module system inherently cannot serve: somebody's actual
+    production config.
+
+    **Deployable and importable are independent axes, and only the intersection
+    is a complete story.** VyOS is the only platform today where import →
+    deploy → config-diff works end to end. FRR/routeros7/linux/bird/dnsmasq
+    deploy but cannot be imported; IOL imports but was withdrawn on licensing,
+    so an imported IOS lab is promised nothing. Widening the parser set past the
+    deployable set manufactures more of the IOL situation.
+
+    **Done first, 2026-08-11 (commit "config import: one platform table"):** the
+    dispatch was four `device == "vyos"` ternaries whose `else` meant IOS, so a
+    third platform would have been silently parsed and rewritten as Cisco rather
+    than failing. `PlatformImporter` is now the single dispatch point and
+    `split_buckets` reads a `ClassifySpec` instead of branching on device names.
+    That work is **shipped**; what follows is the parsers.
+
+    **Order.** (1) **FRR** — admitted, and its vtysh config is IOS-flavoured
+    `"block"` form reusing machinery that exists; settle first whether
+    `show running-config` or the per-daemon files are the better source.
+    (2) **RouterOS 7** — admitted, `"flat"` form; `/export` line continuations
+    need normalizing and its quarantine list is the least predictable of the
+    three. (3) **Stop and decide** — every further candidate (EOS, NX-OS, Junos)
+    is undeployable here.
+
+    Rough sizes, reasoned from the two existing parsers rather than measured
+    against a real dump: ~150–220 lines of parser each, 2–3 days per platform
+    including a live config-diff proof. The first hour against a real
+    `show running-config` would firm that up.
+
+    **Ruled out, recorded so they are not re-derived:** cross-platform import
+    (the carry is verbatim same-NOS config; crossing platforms means
+    translation, which destroys the auditability that makes import
+    trustworthy); Batfish as a universal parser (models rather than partitions,
+    so the completeness invariant is lost — and a JVM service). **Structure-only
+    import** — topology modeled, everything else quarantined, many platforms
+    from one thin parser — is a legitimate alternative tier and a *product*
+    decision: it trades the fidelity promise for breadth. Not planned.
+
 ### i18n · **deferred**
 
 Internationalization is deferred project-wide, not just for the frontend rework

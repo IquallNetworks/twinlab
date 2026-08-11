@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from twinlab_backend.auth.dependencies import CurrentUserDep
 from twinlab_backend.deps import RunnerClientDep
 from twinlab_backend.result import Ok
-from twinlab_backend.services.configimport.pipeline import import_capable_devices
+from twinlab_backend.services.configimport.platforms import import_capable_devices
 from twinlab_backend.services.device_catalog import (
     SUPPORTED_DEVICES,
     DeviceRole,

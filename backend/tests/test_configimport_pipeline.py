@@ -6,7 +6,11 @@ the real dry `netlab create` (the same one a PUT runs).
 """
 
 from twinlab_backend.result import Err, Ok
-from twinlab_backend.services.configimport.classify import split_buckets
+from twinlab_backend.services.configimport.classify import (
+    IOS_CLASSIFY,
+    VYOS_CLASSIFY,
+    split_buckets,
+)
 from twinlab_backend.services.configimport.ios import parse_ios
 from twinlab_backend.services.configimport.pipeline import (
     ImportSourceSpec,
@@ -46,7 +50,7 @@ def _ios_split():
     assert isinstance(parsed, Ok)
     return parsed.value, split_buckets(
         parsed.value,
-        device="iol",
+        spec=IOS_CLASSIFY,
         modeled_addresses={
             "Loopback0": "10.0.0.1/32",
             "Ethernet0/1": "10.1.2.1/30",
@@ -107,7 +111,7 @@ def test_vyos_bucket_split() -> None:
     assert isinstance(parsed, Ok)
     split = split_buckets(
         parsed.value,
-        device="vyos",
+        spec=VYOS_CLASSIFY,
         modeled_addresses={"eth1": "10.1.2.1/30"},
         mgmt_interfaces=frozenset(),
         mgmt_vrfs=frozenset(),

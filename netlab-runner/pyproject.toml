@@ -9,7 +9,10 @@ dependencies = [
     # netlab (generator + config push) and ansible (its push engine). netlab
     # shells out to the `ansible-playbook` on PATH; keeping both in one venv also
     # silences netlab's "cannot import ansible" version-probe wart.
-    "networklab",
+    # Pinned EXACT, and to the same version as the backend: the two run `netlab
+    # create` on the same definition and must expand it identically, or the
+    # runner regenerates an inventory that disagrees with the deployed topology.
+    "networklab==26.7",
     "ansible-core",
     # SSH transport for Ansible's network_cli connection (MikroTik CHR config
     # push). VyOS and the daemons use the docker connection and need none of

@@ -195,14 +195,23 @@ async function buildTheCore(page: Page) {
   }
 
   // The IOL walkthrough attaches Twinlab's built-in `mpls_te` and `ip_sla`
-  // templates here. They are offered on every lab — but they are IOS-only,
-  // and netlab REJECTS this definition with "Cannot find mpls_te
-  // configuration template for pe1/device vyos" if a vyos node carries them
-  // (proven: the save came back as a netlab_invalid panel). So the VyOS build
-  // keeps the groups and leaves them unattached. That the picker offers them
-  // regardless is checked here rather than assumed.
-  await expect(aside.getByRole('checkbox', { name: 'mpls_te', exact: true })).toBeVisible()
-  await expect(aside.getByRole('checkbox', { name: 'ip_sla', exact: true })).toBeVisible()
+  // templates here — but they are IOS-only, and netlab would REJECT this
+  // definition with "Cannot find mpls_te configuration template for
+  // pe1/device vyos" if a vyos node carried them (proven: the save came back
+  // as a netlab_invalid panel). Since delta 27 the picker KNOWS that: the
+  // built-ins are offered greyed with the reason, so the mistake can no
+  // longer be made. The VyOS build keeps the groups and leaves them
+  // unattached; the scoping is what gets checked here.
+  for (const template of ['mpls_te', 'ip_sla']) {
+    const checkbox = aside.getByRole('checkbox', { name: template, exact: true })
+    await expect(checkbox).toBeVisible()
+    await expect(checkbox).toBeDisabled()
+  }
+  await expect(
+    aside
+      .locator('[title="No variant for member pe1 (vyos) — a group attaches to every member"]')
+      .first(),
+  ).toBeVisible()
 
   await aside.getByPlaceholder('group name').fill('core')
   await aside.getByRole('button', { name: 'Add', exact: true }).click()

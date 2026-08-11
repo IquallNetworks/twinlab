@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from twinlab_backend.api_errors import ApiError
 from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import CurrentUserDep, require_global
+from twinlab_backend.models import ConfigTemplateIn, TemplateVariantModel
 from twinlab_backend.result import Err
 from twinlab_backend.services.configimport.model import QuarantineClass
 from twinlab_backend.services.configimport.pipeline import (
@@ -87,7 +88,8 @@ class QuarantineEntryOut(BaseModel):
 
 class NetworkImportOut(BaseModel):
     definition: str
-    custom_config: dict[str, str]
+    # Template records ready for PUT custom-config verbatim (delta 27).
+    custom_config: list[ConfigTemplateIn]
     interface_map: dict[str, dict[str, str]]
     name_map: dict[str, str]
     quarantine: dict[str, list[QuarantineEntryOut]]
@@ -121,7 +123,17 @@ def _specs(sources: list[ImportSourceIn]) -> list[ImportSourceSpec]:
 def _network_out(result: NetworkImportResult) -> NetworkImportOut:
     return NetworkImportOut(
         definition=result.definition,
-        custom_config=result.custom_config,
+        custom_config=[
+            ConfigTemplateIn(
+                name=record.name,
+                description=record.description,
+                variants=[
+                    TemplateVariantModel(source=v.source, device=v.device, node=v.node)
+                    for v in record.variants
+                ],
+            )
+            for record in result.custom_config
+        ],
         interface_map=result.interface_map,
         name_map=result.name_map,
         quarantine={

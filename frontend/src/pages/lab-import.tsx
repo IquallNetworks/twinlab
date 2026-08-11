@@ -141,7 +141,10 @@ function SourceRow({
 }
 
 function ReviewNodeCard({ node, result }: { node: string; result: NetworkImport }) {
-  const carry = result.custom_config[`imported/${node}.j2`]
+  // Delta 27: the carry is the `imported` record's node variant.
+  const carry = result.custom_config
+    .find((record) => record.name === 'imported')
+    ?.variants.find((variant) => variant.node === node)?.source
   const quarantine = result.quarantine[node] ?? []
   const mapping = result.interface_map[node] ?? {}
   const [showCarry, setShowCarry] = useState(false)
@@ -303,7 +306,7 @@ export function LabImportPage() {
       const lab = await api.createLab(labName)
       // Custom config FIRST: the definition references the carry templates,
       // and the PUT's dry netlab create validates them against the STORED
-      // fileset. A failure past this point leaves a partial record — say so.
+      // records. A failure past this point leaves a partial record — say so.
       try {
         await api.putCustomConfig(lab.name, result.custom_config)
         await api.updateLabDefinition(lab.name, result.definition)

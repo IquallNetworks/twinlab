@@ -42,7 +42,8 @@ from twinlab_backend.deps import (
     SettingsDep,
 )
 from twinlab_backend.models import (
-    BuiltinTemplateOut,
+    ConfigTemplateIn,
+    ConfigTemplateOut,
     ConfigTimeStatus,
     ConfigureRequest,
     ConfigureResponse,
@@ -83,6 +84,7 @@ from twinlab_backend.models import (
     RuntimeActionsRequest,
     SaveConfigResponse,
     SuiteReport,
+    TemplateVariantModel,
     TestSuite,
     TestSuitesResponse,
     UpdateCustomConfigRequest,
@@ -102,8 +104,17 @@ from twinlab_backend.services.clab_api import NetemImpairment as ClabNetemImpair
 from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfaces
 from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
 from twinlab_backend.services.configimport import diff as configimport_diff
-from twinlab_backend.services.custom_config import BuiltinLibrary
-from twinlab_backend.services.device_catalog import LOCAL_ONLY_DEVICES, image_reference
+from twinlab_backend.services.custom_config import (
+    BuiltinLibrary,
+    ConfigTemplate,
+    TemplateVariant,
+    materialize,
+)
+from twinlab_backend.services.device_catalog import (
+    CATALOG_DEVICE_SLUGS,
+    LOCAL_ONLY_DEVICES,
+    image_reference,
+)
 from twinlab_backend.services.fact_namespace import partition_node_facts
 from twinlab_backend.services.host_prep import HostPrepClient
 from twinlab_backend.services.mgmt_subnet import MgmtSubnetError, allocate_subnet
@@ -478,19 +489,34 @@ async def _resolve_container(clab: ClabApiClient, lab_name: str, node_name: str)
     raise ApiError(404, "node_not_found", f"node '{node_name}' not found in lab '{lab_name}'")
 
 
-def _user_fileset(lab: Lab) -> dict[str, str]:
-    """A lab's stored user templates as a {relpath: source} fileset. Values were
-    validated as strings on write; a non-string is a corrupt row and dropped."""
-    raw = lab.custom_config or {}
-    return {path: content for path, content in raw.items() if isinstance(content, str)}
+def _user_templates(lab: Lab) -> list[ConfigTemplateIn]:
+    """A lab's stored user template records (delta 27). The stored JSON was
+    validated on write, so a parse failure here is a corrupt row (a real
+    error), not a caller mistake."""
+    raw = lab.custom_config or []
+    return [ConfigTemplateIn.model_validate(entry) for entry in raw]
+
+
+def _template_records(specs: list[ConfigTemplateIn]) -> tuple[ConfigTemplate, ...]:
+    return tuple(
+        ConfigTemplate(
+            name=spec.name,
+            description=spec.description,
+            variants=tuple(
+                TemplateVariant(source=v.source, device=v.device, node=v.node)
+                for v in spec.variants
+            ),
+        )
+        for spec in specs
+    )
 
 
 def _config_fileset(library: BuiltinLibrary, lab: Lab) -> dict[str, str]:
-    """The custom-config fileset shipped to the runner for a configure: the whole
-    built-in library plus the lab's user templates. Collisions are prevented at
-    write time (a user path may not shadow a built-in), so the merge is safe;
+    """The custom-config fileset shipped to the runner for a configure: the
+    materialized built-in library plus the lab's materialized user records.
+    Names are disjoint across tiers (409 at write time), so the merge is safe;
     netlab renders only the templates the definition's `config:` references."""
-    return library.fileset | _user_fileset(lab)
+    return library.fileset | materialize(_template_records(_user_templates(lab)))
 
 
 # How ONE endpoint reads. Not the link vocabulary: an endpoint is never
@@ -695,13 +721,27 @@ async def _live_link_state(
 
 
 def _custom_config_response(library: BuiltinLibrary, lab: Lab) -> CustomConfigResponse:
-    return CustomConfigResponse(
-        builtin=[
-            BuiltinTemplateOut(name=t.name, description=t.description, files=t.files)
-            for t in library.templates
-        ],
-        custom_config=_user_fileset(lab),
-    )
+    # One merged list, builtins first — the tier field carries what the old
+    # two-field shape spelled structurally.
+    builtin = [
+        ConfigTemplateOut(
+            name=t.name,
+            description=t.description,
+            tier="builtin",
+            variants=[
+                TemplateVariantModel(source=v.source, device=v.device, node=v.node)
+                for v in t.variants
+            ],
+        )
+        for t in library.templates
+    ]
+    user = [
+        ConfigTemplateOut(
+            name=spec.name, description=spec.description, tier="user", variants=spec.variants
+        )
+        for spec in _user_templates(lab)
+    ]
+    return CustomConfigResponse(templates=builtin + user)
 
 
 async def _push_config(
@@ -1480,9 +1520,11 @@ async def run_test_suite(
 
 
 # --- Custom-config templates: the seam for config netlab doesn't model (MPLS-TE,
-# IP SLA, QoS, …). Built-in templates are shipped read-only; user templates are
-# per-lab. Read with lab:read, author with lab:create (like test-suite authoring).
-# Both tiers ride the config push (built-ins always, user templates when stored). ---
+# IP SLA, QoS, …). Structured records since delta 27 — name + description +
+# node/device/universal variants; the netlab-facing fileset is materialized at
+# the push/create boundary, never stored. Built-ins ship read-only; user records
+# are per-lab. Read with lab:read, author with lab:edit (like test-suite
+# authoring). Both tiers ride the config push (netlab renders the referenced). ---
 
 
 @router.get("/{lab_name}/custom-config", dependencies=[Depends(require_lab(perms.LAB_READ))])
@@ -1502,14 +1544,26 @@ async def put_custom_config(
     library: BuiltinLibraryDep,
     db: SessionDep,
 ) -> CustomConfigResponse:
-    # Authoring a lab's templates is authoring the lab, so it takes lab:create
-    # (like editing the definition or suites). A user template may not shadow a
-    # built-in. Stored on the record; applied on the next configure/redeploy.
-    fileset = dict(request.custom_config)
-    collision = library.collision(fileset)
-    if collision is not None:
-        raise _builtin_collision(collision)
-    updated = await lab_store.update_custom_config(db, lab_name, dict(fileset))
+    # Authoring a lab's templates is authoring the lab, so it takes lab:edit
+    # (like editing the definition or suites). Shape rules (scope exclusivity,
+    # dupes, filename collisions) are pydantic's; here the two policy gates:
+    # a user name may not equal a built-in's, and a user device variant must
+    # name a catalog device (builtin variants are trusted code and may carry a
+    # non-catalog label like `ios`). Stored on the record; applied on the next
+    # configure/redeploy.
+    for template in request.templates:
+        if template.name in library.names:
+            raise _builtin_collision(template.name)
+        for variant in template.variants:
+            if variant.device is not None and variant.device not in CATALOG_DEVICE_SLUGS:
+                raise ApiError(
+                    422,
+                    "invalid_template",
+                    f"template '{template.name}': device '{variant.device}' is not "
+                    "a catalog device",
+                )
+    stored = [template.model_dump(exclude_none=True) for template in request.templates]
+    updated = await lab_store.update_custom_config(db, lab_name, stored)
     if isinstance(updated, lab_store.LabStoreError):
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     return _custom_config_response(library, updated)
@@ -2118,11 +2172,11 @@ def _mgmt_subnet_failed(error: MgmtSubnetError) -> ApiError:
     return ApiError(503, "mgmt_subnet_exhausted", error.message)
 
 
-def _builtin_collision(relpath: str) -> ApiError:
-    # A user template path uses a built-in's reserved namespace; a built-in is
-    # non-deletable and cannot be shadowed. 409 so the caller renames its template.
+def _builtin_collision(name: str) -> ApiError:
+    # A user template takes a built-in's name; a built-in is non-deletable and
+    # cannot be shadowed. 409 so the caller renames its template.
     return ApiError(
-        409, "builtin_template_shadowed", f"template path '{relpath}' shadows a built-in template"
+        409, "builtin_template_shadowed", f"template name '{name}' shadows a built-in template"
     )
 
 

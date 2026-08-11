@@ -273,10 +273,37 @@ export const wiringSuggestionSchema = z.object({
 })
 export type WiringSuggestion = z.infer<typeof wiringSuggestionSchema>
 
+// Delta 27: a config template is a structured record; a variant is scoped by
+// exactly one of node/device (present key) or neither (universal). The scopes
+// mirror netlab's lookup precedence — node beats device beats universal.
+export const templateVariantSchema = z.object({
+  source: z.string(),
+  device: z.string().nullish(), // catalog slug (builtins may carry `ios`)
+  node: z.string().nullish(),
+})
+export type TemplateVariant = z.infer<typeof templateVariantSchema>
+
+export const configTemplateSchema = z.object({
+  name: z.string(), // the `config:` reference a definition uses
+  description: z.string(),
+  tier: z.enum(['builtin', 'user']),
+  variants: z.array(templateVariantSchema),
+})
+export type ConfigTemplate = z.infer<typeof configTemplateSchema>
+
+// The import factory's template output: ConfigTemplate minus tier (delta 27 —
+// everything an import produces is user tier), ready for the PUT verbatim.
+export const configTemplateSpecSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  variants: z.array(templateVariantSchema),
+})
+export type ConfigTemplateSpec = z.infer<typeof configTemplateSpecSchema>
+
 export const networkImportSchema = z.object({
   definition: z.string(), // no name:/mgmt — the receiving lab's PUT pins both
-  custom_config: z.record(z.string(), z.string()), // ready for the custom-config
-  //   PUT verbatim; quarantine files are present but UNREFERENCED
+  custom_config: z.array(configTemplateSpecSchema), // ready for the custom-config
+  //   PUT verbatim; the `imported_quarantine` record is UNREFERENCED
   interface_map: z.record(z.string(), z.record(z.string(), z.string())),
   name_map: z.record(z.string(), z.string()),
   quarantine: z.record(z.string(), z.array(quarantineEntrySchema)),
@@ -324,16 +351,10 @@ export const testSuitesResponseSchema = z.object({
 })
 export type TestSuitesResponse = z.infer<typeof testSuitesResponseSchema>
 
-export const builtinTemplateSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  files: z.record(z.string(), z.string()),
-})
-export type BuiltinTemplate = z.infer<typeof builtinTemplateSchema>
-
 export const customConfigResponseSchema = z.object({
-  builtin: z.array(builtinTemplateSchema),
-  custom_config: z.record(z.string(), z.string()),
+  // ONE merged list, builtins first; the netlab-facing fileset is derived
+  // server-side and never travels the wire.
+  templates: z.array(configTemplateSchema),
 })
 export type CustomConfigResponse = z.infer<typeof customConfigResponseSchema>
 

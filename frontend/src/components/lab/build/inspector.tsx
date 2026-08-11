@@ -80,6 +80,7 @@ import { catalogDevice, deviceSupports, offeredModules } from '@/lib/device-cata
 import { toastError } from '@/lib/error-toast'
 import { GROUP_PALETTE, groupColor, type GroupStyles } from '@/lib/group-colors'
 import { customConfigQueryOptions, meQueryOptions, nodeTemplatesQueryOptions } from '@/lib/queries'
+import type { ConfigTemplate } from '@/lib/schemas'
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { cn } from '@/lib/utils'
 
@@ -202,47 +203,149 @@ const groupNameError = (draft: string, doc: BuildDoc, current?: string): string 
   return null
 }
 
+/** One picker entry: a template name plus whether it applies to the current
+ * target — delta 27's applicability rule: a variant matches by node name,
+ * else by (effective) device, else universally; a group applies only when
+ * every member is covered. Templates that don't apply are offered greyed
+ * with the reason (the module-greying pattern), never hidden — attaching one
+ * would fail the save's dry `netlab create` in netlab's voice. */
+interface TemplateOffer {
+  name: string
+  applies: boolean
+  reason?: string
+}
+
+/** A node's device as netlab resolves it: its own, else the lab default.
+ * Undefined for an undeclared name (an `_auto_create` member) or a
+ * device-less `include:` node — only node-scoped or universal variants can
+ * match those. */
+const effectiveDevice = (doc: BuildDoc, nodeName: string): string | undefined => {
+  const node = doc.nodes.find((entry) => entry.name === nodeName)
+  return node === undefined ? undefined : (node.device ?? doc.defaultDevice)
+}
+
+const variantMatches = (
+  template: ConfigTemplate,
+  nodeName: string,
+  device: string | undefined,
+): boolean =>
+  template.variants.some(
+    (variant) =>
+      variant.node === nodeName ||
+      (device !== undefined && variant.device === device) ||
+      (variant.node == null && variant.device == null),
+  )
+
+function nodeTemplateOffers(
+  templates: readonly ConfigTemplate[],
+  doc: BuildDoc,
+  nodeName: string,
+): TemplateOffer[] {
+  const device = effectiveDevice(doc, nodeName)
+  return templates.map((template) => {
+    if (variantMatches(template, nodeName, device)) return { name: template.name, applies: true }
+    return {
+      name: template.name,
+      applies: false,
+      reason: `No variant for ${device ?? 'this node'} — attaching it would fail the save`,
+    }
+  })
+}
+
+/** The group's node members, nested groups resolved transitively (netlab
+ * groups nest); cycle-safe. */
+function groupMemberNodes(doc: BuildDoc, group: BuildGroup): string[] {
+  const members: string[] = []
+  const seen = new Set<string>()
+  const visit = (current: BuildGroup) => {
+    if (seen.has(current.name)) return
+    seen.add(current.name)
+    for (const member of current.members) {
+      const nested = doc.groups.find((entry) => entry.name === member)
+      if (nested !== undefined) visit(nested)
+      else members.push(member)
+    }
+  }
+  visit(group)
+  return members
+}
+
+function groupTemplateOffers(
+  templates: readonly ConfigTemplate[],
+  doc: BuildDoc,
+  group: BuildGroup,
+): TemplateOffer[] {
+  const members = groupMemberNodes(doc, group)
+  return templates.map((template) => {
+    const failing = members.find(
+      (member) => !variantMatches(template, member, effectiveDevice(doc, member)),
+    )
+    if (failing === undefined) return { name: template.name, applies: true }
+    const device = effectiveDevice(doc, failing)
+    return {
+      name: template.name,
+      applies: false,
+      reason: `No variant for member ${failing}${device !== undefined ? ` (${device})` : ''} — a group attaches to every member`,
+    }
+  })
+}
+
 /** netlab's `config: [...]` — the custom-config templates attached to a
  * group's members or to one node. Shared by both, so the two spellings of the
  * same netlab key are edited the same way. */
 function ConfigTemplatePicker({
   idPrefix,
-  knownTemplates,
+  offers,
   config,
   onChange,
 }: {
   idPrefix: string
-  knownTemplates: readonly string[]
+  offers: readonly TemplateOffer[]
   config: readonly string[]
   onChange: (next: string[]) => void
 }) {
   // A stored document may reference templates this lab doesn't carry — keep
   // them visible and removable rather than dropping them from the picker.
-  const unknown = config.filter((entry) => !knownTemplates.includes(entry))
+  const unknown = config.filter((entry) => !offers.some((offer) => offer.name === entry))
   return (
     <div className="flex flex-col gap-1">
       <span className="text-xs text-muted-foreground">Config templates</span>
-      {knownTemplates.length === 0 && unknown.length === 0 ? (
+      {offers.length === 0 && unknown.length === 0 ? (
         <p className="text-xs text-muted-foreground">No templates available.</p>
       ) : (
         <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {knownTemplates.map((template) => {
-            const id = `${idPrefix}-config-${template}`
+          {offers.map((offer) => {
+            const id = `${idPrefix}-config-${offer.name}`
+            const checked = config.includes(offer.name)
             return (
-              <div key={template} className="flex items-center gap-1.5">
+              <div
+                key={offer.name}
+                className="flex items-center gap-1.5"
+                title={offer.applies ? undefined : offer.reason}
+              >
                 <Checkbox
                   id={id}
-                  checked={config.includes(template)}
-                  onCheckedChange={(checked) =>
+                  checked={checked}
+                  // A stored doc may already attach a non-applicable template
+                  // — keep it uncheckable so the user can remove it.
+                  disabled={!offer.applies && !checked}
+                  onCheckedChange={(next) =>
                     onChange(
-                      checked === true
-                        ? [...config, template]
-                        : config.filter((entry) => entry !== template),
+                      next === true
+                        ? [...config, offer.name]
+                        : config.filter((entry) => entry !== offer.name),
                     )
                   }
                 />
-                <Label htmlFor={id} className="font-mono text-xs font-normal">
-                  {template}
+                <Label
+                  htmlFor={id}
+                  className={
+                    offer.applies
+                      ? 'font-mono text-xs font-normal'
+                      : 'font-mono text-xs font-normal text-muted-foreground'
+                  }
+                >
+                  {offer.name}
                 </Label>
               </div>
             )
@@ -325,7 +428,7 @@ function GroupColorDot({
 function GroupBlock({
   doc,
   group,
-  knownTemplates,
+  templates,
   groupStyles,
   onGroupColor,
   expanded,
@@ -335,7 +438,7 @@ function GroupBlock({
 }: {
   doc: BuildDoc
   group: BuildGroup
-  knownTemplates: readonly string[]
+  templates: readonly ConfigTemplate[]
   groupStyles: GroupStyles
   onGroupColor: (group: string, color: string) => void
   expanded: boolean
@@ -500,7 +603,7 @@ function GroupBlock({
 
       <ConfigTemplatePicker
         idPrefix={`build-group-${group.name}`}
-        knownTemplates={knownTemplates}
+        offers={groupTemplateOffers(templates, doc, group)}
         config={config}
         onChange={setConfig}
       />
@@ -532,10 +635,7 @@ function GroupsSection({
   dispatch: Dispatch<BuilderAction>
 }) {
   const templates = useQuery(customConfigQueryOptions(labName))
-  const knownTemplates = [
-    ...(templates.data?.builtin.map((template) => template.name) ?? []),
-    ...Object.keys(templates.data?.custom_config ?? {}).map((path) => path.replace(/\.j2$/, '')),
-  ]
+  const templateRecords = templates.data?.templates ?? []
   const [draft, setDraft] = useState('')
   // One group edits at a time — the rest collapse to summary rows.
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -569,7 +669,7 @@ function GroupsSection({
           key={group.name}
           doc={doc}
           group={group}
-          knownTemplates={knownTemplates}
+          templates={templateRecords}
           groupStyles={groupStyles}
           onGroupColor={onGroupColor}
           expanded={expanded === group.name}
@@ -971,10 +1071,7 @@ function NodeInspector({
 }) {
   const { devices } = useDeviceCatalog()
   const templates = useQuery(customConfigQueryOptions(labName))
-  const knownTemplates = [
-    ...(templates.data?.builtin.map((template) => template.name) ?? []),
-    ...Object.keys(templates.data?.custom_config ?? {}).map((path) => path.replace(/\.j2$/, '')),
-  ]
+  const templateRecords = templates.data?.templates ?? []
   // Everything this node may legally attach to, judged by the SAME rule the
   // canvas drag uses — including itself (netlab gives a self-link two
   // interfaces on one link).
@@ -1447,7 +1544,7 @@ function NodeInspector({
           </div>
           <ConfigTemplatePicker
             idPrefix={`build-node-${node.name}`}
-            knownTemplates={knownTemplates}
+            offers={nodeTemplateOffers(templateRecords, doc, node.name)}
             config={node.config ?? []}
             onChange={(next) =>
               dispatch({

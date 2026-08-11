@@ -47,15 +47,22 @@ _LabName = Annotated[
 # or failed parse is an "error" result — never a silent raw fallback.
 type ParseMode = Literal["json", "textfsm"]
 
-# A custom-config template path: a relative, traversal-free `.j2` path (flat like
-# `nat.j2` or per-device like `nat/ios.j2`). The runner enforces the same contract
-# at its write boundary; keeping it here rejects a bad path before it is stored.
-_TemplatePath = Annotated[
-    str,
-    StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_./-]*\.j2$", min_length=1, max_length=128),
+# A custom-config template name — the `config:` reference a definition uses
+# (contract delta 27). Also the materialized fileset's directory segment, so it
+# must be path-safe: letters/digits/underscore/dash, letter-or-underscore
+# first, no dots (a dot would collide with netlab's dotted lookup spellings).
+_ConfigTemplateName = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$", min_length=1, max_length=64)
 ]
-# A fileset of custom-config templates: path -> Jinja source.
-type CustomConfigFileset = dict[_TemplatePath, str]
+# A variant's node scope: netlab's node-id rule (must_be_id, 16 chars), since
+# it materializes as `<name>/<node>.j2` and only ever matches a netlab node.
+_VariantNode = Annotated[str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_-]{0,15}$")]
+# A variant's device scope: shaped like a netlab device slug. Catalog
+# membership is policy, checked in the route (builtin variants may carry a
+# non-catalog label like `ios`; user variants may not).
+_VariantDevice = Annotated[
+    str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$", min_length=1, max_length=32)
+]
 
 
 class TestExpectation(BaseModel):
@@ -211,28 +218,84 @@ class LabFactsResponse(BaseModel):
     nodes: dict[str, dict[str, object]]
 
 
-class BuiltinTemplateOut(BaseModel):
-    """A built-in custom-config template as the API exposes it: the `config:` name,
-    a description, and its per-device source files. Read-only (non-deletable)."""
+class TemplateVariantModel(BaseModel):
+    """One source of a config template (contract delta 27), scoped by exactly
+    one of `node` / `device` / neither (universal). The scopes mirror netlab's
+    lookup precedence — node beats device beats universal — via the filenames
+    the backend materializes."""
 
-    name: str
-    description: str
-    files: dict[str, str]
+    # 64KB — the node-template library's source bound, adopted for parity.
+    source: str = Field(max_length=65536)
+    device: _VariantDevice | None = None
+    node: _VariantNode | None = None
+
+    @model_validator(mode="after")
+    def _one_scope(self) -> TemplateVariantModel:
+        if self.device is not None and self.node is not None:
+            raise ValueError("a variant is scoped by device OR node, not both")
+        return self
+
+
+class ConfigTemplateIn(BaseModel):
+    """A user-tier template record as PUT takes it (and as the lab row stores
+    it — validated on write, read back through this same model)."""
+
+    name: _ConfigTemplateName
+    description: str = Field(max_length=1000)
+    variants: list[TemplateVariantModel] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _variants_disjoint(self) -> ConfigTemplateIn:
+        devices = [v.device for v in self.variants if v.device is not None]
+        nodes = [v.node for v in self.variants if v.node is not None]
+        universal = sum(1 for v in self.variants if v.device is None and v.node is None)
+        if len(devices) != len(set(devices)):
+            raise ValueError("duplicate device variant")
+        if len(nodes) != len(set(nodes)):
+            raise ValueError("duplicate node variant")
+        if universal > 1:
+            raise ValueError("at most one universal variant")
+        # A node named like a device variant would materialize the same
+        # `<name>/<x>.j2` file — reject rather than let one silently win.
+        collision = set(nodes) & set(devices)
+        if collision:
+            raise ValueError(f"node and device variants collide: {sorted(collision)[0]}")
+        return self
 
 
 class UpdateCustomConfigRequest(BaseModel):
-    # Replace a lab's user-defined template fileset. Stored on the record, never
-    # sent to `netlab create`. Paths are validated (relative, .j2) and may not
-    # shadow a built-in (rejected with 409).
-    custom_config: CustomConfigFileset
+    # Full replace of the lab's USER-tier template records (delta 27). Stored
+    # on the record; the netlab-facing fileset is materialized at the config
+    # push / dry-create boundary, never stored. A name may not equal a
+    # built-in's (409).
+    templates: list[ConfigTemplateIn]
+
+    @model_validator(mode="after")
+    def _names_unique(self) -> UpdateCustomConfigRequest:
+        names = [template.name for template in self.templates]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate template name")
+        return self
+
+
+type ConfigTemplateTier = Literal["builtin", "user"]
+
+
+class ConfigTemplateOut(BaseModel):
+    """A template record as the API serves it: `ConfigTemplateIn` + tier
+    (builtins ship in code, read-only; user records live on the lab row)."""
+
+    name: str
+    description: str
+    tier: ConfigTemplateTier
+    variants: list[TemplateVariantModel]
 
 
 class CustomConfigResponse(BaseModel):
-    """A lab's custom config: the shipped built-in library (read-only) plus the
-    lab's own user-defined templates ({relpath: source}, editable)."""
+    """The lab's whole config-template library, one merged list — builtins
+    first (identical for every lab), then the lab's user records."""
 
-    builtin: list[BuiltinTemplateOut]
-    custom_config: dict[str, str]
+    templates: list[ConfigTemplateOut]
 
 
 class CreateLabRequest(BaseModel):

@@ -11,6 +11,7 @@ from uuid import UUID
 
 from twinlab_client.errors import TwinlabProtocolError
 from twinlab_client.models import (
+    CONFIG_TEMPLATE_TIERS,
     CONFIG_TIME_STATUSES,
     CONFIGURE_STATUSES,
     CONTAINER_STATES,
@@ -33,9 +34,10 @@ from twinlab_client.models import (
     TEST_STATUSES,
     ApiKey,
     ApiKeyCreated,
-    BuiltinTemplate,
     CatalogDevice,
     ConfigDiffReport,
+    ConfigTemplate,
+    ConfigTemplateSpec,
     ConfigureResponse,
     CustomConfigResponse,
     DeployResponse,
@@ -90,6 +92,7 @@ from twinlab_client.models import (
     SshKey,
     SshKeyGenerated,
     SuiteReport,
+    TemplateVariant,
     TestCase,
     TestExpectation,
     TestResult,
@@ -491,7 +494,9 @@ def parse_network_import(value: object) -> NetworkImport:
     }
     return NetworkImport(
         definition=_get_str(obj, "definition", where),
-        custom_config=_get_str_dict(obj, "custom_config", where),
+        custom_config=[
+            parse_config_template_spec(v) for v in as_list(_req(obj, "custom_config", where), where)
+        ],
         interface_map=interface_map,
         name_map=_get_str_dict(obj, "name_map", where),
         quarantine=quarantine,
@@ -1064,23 +1069,56 @@ def parse_job(value: object) -> Job:
 # --------------------------------------------------------------------------- #
 
 
+def parse_template_variant(value: object) -> TemplateVariant:
+    where = "TemplateVariant"
+    obj = as_object(value, where)
+    return TemplateVariant(
+        source=_get_str(obj, "source", where),
+        device=_get_opt_str(obj, "device", where),
+        node=_get_opt_str(obj, "node", where),
+    )
+
+
+def parse_config_template(value: object) -> ConfigTemplate:
+    where = "ConfigTemplate"
+    obj = as_object(value, where)
+    return ConfigTemplate(
+        name=_get_str(obj, "name", where),
+        description=_get_str(obj, "description", where),
+        tier=_get_literal(obj, "tier", where, CONFIG_TEMPLATE_TIERS),
+        variants=[parse_template_variant(v) for v in as_list(_req(obj, "variants", where), where)],
+    )
+
+
+def parse_config_template_spec(value: object) -> ConfigTemplateSpec:
+    where = "ConfigTemplateSpec"
+    obj = as_object(value, where)
+    return ConfigTemplateSpec(
+        name=_get_str(obj, "name", where),
+        description=_get_str(obj, "description", where),
+        variants=[parse_template_variant(v) for v in as_list(_req(obj, "variants", where), where)],
+    )
+
+
 def parse_custom_config_response(value: object) -> CustomConfigResponse:
     where = "CustomConfigResponse"
     obj = as_object(value, where)
-    builtin: list[BuiltinTemplate] = []
-    for template_value in as_list(_req(obj, "builtin", where), where):
-        template = as_object(template_value, "BuiltinTemplate")
-        builtin.append(
-            BuiltinTemplate(
-                name=_get_str(template, "name", "BuiltinTemplate"),
-                description=_get_str(template, "description", "BuiltinTemplate"),
-                files=_get_str_dict(template, "files", "BuiltinTemplate"),
-            )
-        )
     return CustomConfigResponse(
-        builtin=builtin,
-        custom_config=_get_str_dict(obj, "custom_config", where),
+        templates=[parse_config_template(v) for v in as_list(_req(obj, "templates", where), where)]
     )
+
+
+def config_template_spec_to_wire(spec: ConfigTemplateSpec) -> dict[str, object]:
+    """Scope keys are omitted when absent — the server reads presence."""
+    variants: list[dict[str, object]] = []
+    for variant in spec.variants:
+        wire: dict[str, object] = {"source": variant.source}
+        if variant.device is not None:
+            wire["device"] = variant.device
+        if variant.node is not None:
+            wire["node"] = variant.node
+        variants.append(wire)
+    return {"name": spec.name, "description": spec.description, "variants": variants}
 
 
 # --------------------------------------------------------------------------- #

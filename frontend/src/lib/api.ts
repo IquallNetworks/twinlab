@@ -419,13 +419,13 @@ export const api = {
 
   // Custom-config templates. Read (lab:read) returns the shipped built-in library
   // plus the lab's user templates; author (lab:create) replaces the user fileset.
-  // `customConfig` is a { relpath: source } map, validated server-side.
+  // `templates` is the user-tier record list (delta 27), validated server-side.
   getCustomConfig: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/custom-config`, customConfigResponseSchema),
-  putCustomConfig: (name: string, customConfig: unknown) =>
+  putCustomConfig: (name: string, templates: unknown) =>
     request(`/labs/${encodeURIComponent(name)}/custom-config`, customConfigResponseSchema, {
       method: 'PUT',
-      body: JSON.stringify({ custom_config: customConfig }),
+      body: JSON.stringify({ templates }),
     }),
 
   // Self-service API keys (Bearer credentials). The secret is shown once at

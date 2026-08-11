@@ -207,7 +207,9 @@ def test_emitted_skeleton_shape() -> None:
     assert doc["nodes"]["r1"] == {
         "device": "iol",
         "loopback": {"ipv4": "10.0.0.1/32"},
-        "config": ["imported/r1.j2"],
+        # The NAME form (delta 27): netlab resolves it per node to
+        # imported/<node>.j2 at push AND create-time validation.
+        "config": ["imported"],
     }
     assert "config" not in doc["nodes"]["r2"]  # empty carry -> no reference
     p2p = next(link for link in doc["links"] if link.get("prefix") == "10.1.2.0/30")

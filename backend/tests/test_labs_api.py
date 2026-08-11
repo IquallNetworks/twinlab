@@ -334,17 +334,51 @@ def test_create_lab_request_accepts_the_full_identifier_width() -> None:
     assert CreateLabRequest(name="Sixteen-chars_16").name == "Sixteen-chars_16"
 
 
-def test_custom_config_accepts_fileset() -> None:
-    request = UpdateCustomConfigRequest(custom_config={"nat/ios.j2": "conf"})
-    assert request.custom_config == {"nat/ios.j2": "conf"}
+def test_custom_config_accepts_records() -> None:
+    request = UpdateCustomConfigRequest.model_validate(
+        {
+            "templates": [
+                {
+                    "name": "nat",
+                    "description": "NAT overload",
+                    "variants": [
+                        {"source": "generic"},
+                        {"source": "vyos flavor", "device": "vyos"},
+                        {"source": "pe1 override", "node": "pe1"},
+                    ],
+                }
+            ]
+        }
+    )
+    assert request.templates[0].name == "nat"
+    assert [v.device for v in request.templates[0].variants] == [None, "vyos", None]
 
 
-def test_custom_config_rejects_unsafe_template_path() -> None:
-    # Template paths are relative .j2 files; a traversal or bad suffix is rejected.
+def test_custom_config_rejects_bad_shapes() -> None:
+    # A variant is scoped by device OR node, never both; scope keys are unique
+    # per template; a node named like a device variant would materialize the
+    # same file; template names are unique; a dotted name would collide with
+    # netlab's dotted lookup spellings.
+    template: dict[str, object] = {"name": "nat", "description": "", "variants": [{"source": "x"}]}
+    bad_shapes: list[dict[str, object]] = [
+        {**template, "variants": [{"source": "x", "device": "vyos", "node": "pe1"}]},
+        {
+            **template,
+            "variants": [{"source": "a", "device": "vyos"}, {"source": "b", "device": "vyos"}],
+        },
+        {**template, "variants": [{"source": "a"}, {"source": "b"}]},
+        {
+            **template,
+            "variants": [{"source": "a", "device": "vyos"}, {"source": "b", "node": "vyos"}],
+        },
+        {**template, "name": "with.dot"},
+        {**template, "variants": []},
+    ]
+    for bad in bad_shapes:
+        with pytest.raises(pydantic.ValidationError):
+            _ = UpdateCustomConfigRequest.model_validate({"templates": [bad]})
     with pytest.raises(pydantic.ValidationError):
-        _ = UpdateCustomConfigRequest(custom_config={"../x.j2": "c"})
-    with pytest.raises(pydantic.ValidationError):
-        _ = UpdateCustomConfigRequest(custom_config={"x.cfg": "c"})
+        _ = UpdateCustomConfigRequest.model_validate({"templates": [template, template]})
 
 
 def _endpoint(node: str, clab_name: str = "eth1") -> TopologyLinkEndpoint:

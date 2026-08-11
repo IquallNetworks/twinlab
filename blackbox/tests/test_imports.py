@@ -5,7 +5,13 @@ survive the fidelity diff.
 """
 
 import pytest
-from twinlab_client import DiffSource, ImportSource, TwinlabApiError, TwinlabClient
+from twinlab_client import (
+    ConfigTemplateSpec,
+    DiffSource,
+    ImportSource,
+    TwinlabApiError,
+    TwinlabClient,
+)
 
 from _config import LabFactory, UserClientFactory
 
@@ -42,6 +48,17 @@ _SOURCES = [
 
 # The addressed p2p only — the wiring the suggestion can propose.
 _WIRING = [["r1:eth1", "r2:eth1"]]
+
+
+def _variants_by_node(specs: list[ConfigTemplateSpec], name: str) -> dict[str | None, str]:
+    """A record's node-variant map — the delta 27 spelling of the old
+    per-node carry/quarantine files."""
+    record = next(spec for spec in specs if spec.name == name)
+    return {variant.node: variant.source for variant in record.variants}
+
+
+def _carry_nodes(specs: list[ConfigTemplateSpec]) -> set[str | None]:
+    return set(_variants_by_node(specs, "imported"))
 
 # Plus the unnumbered wire: an L2 link no addressing could infer.
 _WIRING_WITH_L2 = [*_WIRING, ["r1:eth2", "r2:eth2"]]
@@ -81,7 +98,7 @@ async def test_import_keeps_hyphenated_hostnames(admin: TwinlabClient) -> None:
     result = await admin.import_network(sources, [["core-r1:eth1", "core-r2:eth1"]])
     assert result.name_map == {"core-r1": "core-r1", "core-r2": "core-r2"}
     assert "core-r1:" in result.definition
-    assert "imported/core-r1.j2" in result.custom_config
+    assert "core-r1" in _carry_nodes(result.custom_config)
 
 
 async def test_import_network_factory_output(admin: TwinlabClient) -> None:
@@ -93,14 +110,13 @@ async def test_import_network_factory_output(admin: TwinlabClient) -> None:
     assert "module" not in result.definition
     assert result.name_map == {"r1": "r1", "r2": "r2"}
 
-    # Carry referenced by the definition, quarantine kept unattached.
-    assert "imported/r1.j2" in result.custom_config
-    assert "imported/r1.j2" in result.definition
-    assert (
-        "set protocols ospf area 0 network '10.77.0.0/30'" in result.custom_config["imported/r1.j2"]
-    )
-    assert "imported/r1.quarantine.j2" in result.custom_config
-    assert "imported/r1.quarantine.j2" not in result.definition
+    # Carry referenced by NAME from the definition (delta 27: netlab resolves
+    # `config: [imported]` per node), quarantine kept as an unreferenced record.
+    carries = _variants_by_node(result.custom_config, "imported")
+    assert "- imported" in result.definition
+    assert "set protocols ospf area 0 network '10.77.0.0/30'" in carries["r1"]
+    assert "r1" in _variants_by_node(result.custom_config, "imported_quarantine")
+    assert "imported_quarantine" not in result.definition
     assert [q.reason for q in result.quarantine["r1"]] == ["telemetry"]
 
     # Identity interface map (same platform), loopback realized as dum0.
@@ -212,8 +228,8 @@ async def test_imported_definition_lands_through_the_normal_lifecycle(
     imported = await admin.import_network(_SOURCES, _WIRING_WITH_L2)
     lab = await make_lab(None)
     stored = await admin.put_custom_config(lab.name, imported.custom_config)
-    assert "imported/r1.j2" in stored.custom_config
-    assert "imported/r1.quarantine.j2" in stored.custom_config
+    user_tier = {t.name for t in stored.templates if t.tier == "user"}
+    assert {"imported", "imported_quarantine"} <= user_tier
     detail = await admin.update_definition(lab.name, imported.definition)
     assert detail.definition is not None
 

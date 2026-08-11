@@ -29,6 +29,7 @@ from twinlab_client.models import (
     ApiKey,
     ApiKeyCreated,
     ConfigDiffReport,
+    ConfigTemplateSpec,
     CustomConfigResponse,
     DeviceCatalog,
     DiffSource,
@@ -510,7 +511,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         quarantine + maps out. PURE (no lab is touched): compose create_lab
         -> put_custom_config -> update_definition (custom config FIRST — the
         definition PUT validates its `config:` references against the stored
-        fileset). GLOBAL lab:create.
+        templates). GLOBAL lab:create.
 
         `wiring` is REQUIRED (delta 23): adjacency is never inferred. Each
         entry lists "node:interface" endpoints — 2 = p2p, 3+ = LAN,
@@ -777,12 +778,20 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         payload = await self._send_json("GET", f"/labs/{name}/custom-config")
         return _wire.parse_custom_config_response(payload)
 
-    async def put_custom_config(self, name: str, fileset: dict[str, str]) -> CustomConfigResponse:
+    async def put_custom_config(
+        self, name: str, templates: list[ConfigTemplateSpec]
+    ) -> CustomConfigResponse:
         """PUT /labs/{name}/custom-config — lab:edit. Full replace of the USER
-        fileset. 409 if a path shadows a built-in. Applies on the next
+        tier (delta 27). 409 ``builtin_template_shadowed`` if a name equals a
+        built-in's; 422 on shape violations (duplicate names or scope keys,
+        both device+node set, a non-catalog device). Applies on the next
         configure/deploy."""
         payload = await self._send_json(
-            "PUT", f"/labs/{name}/custom-config", json_body={"custom_config": fileset}
+            "PUT",
+            f"/labs/{name}/custom-config",
+            json_body={
+                "templates": [_wire.config_template_spec_to_wire(spec) for spec in templates]
+            },
         )
         return _wire.parse_custom_config_response(payload)
 

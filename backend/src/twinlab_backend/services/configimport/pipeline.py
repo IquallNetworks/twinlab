@@ -19,7 +19,6 @@ from twinlab_backend.services.configimport.emit import (
     NODE_NAME_MAX,
     carry_relpath,
     emit_definition,
-    quarantine_relpath,
     sanitize_node_name,
 )
 from twinlab_backend.services.configimport.ios import parse_ios
@@ -45,6 +44,7 @@ from twinlab_backend.services.configimport.wiring import (
     is_mgmt_vrf,
     wire,
 )
+from twinlab_backend.services.custom_config import ConfigTemplate, TemplateVariant
 from twinlab_backend.services.netlab import ClabArtifacts, create_clab_topology
 
 _PARSERS: dict[str, Callable[[str], Result[ParsedSource, ParseError]]] = {
@@ -74,7 +74,10 @@ class QuarantineOut:
 @dataclass(frozen=True, slots=True)
 class NetworkImportResult:
     definition: str
-    custom_config: dict[str, str]
+    # Template records ready for PUT custom-config verbatim (delta 27): the
+    # carries as node variants of `imported`, the quarantines as node variants
+    # of `imported_quarantine` — unreferenced but attachable per node.
+    custom_config: tuple[ConfigTemplate, ...]
     interface_map: dict[str, dict[str, str]]
     name_map: dict[str, str]
     quarantine: dict[str, list[QuarantineOut]]
@@ -272,7 +275,8 @@ def import_network(
 
     interface_map = _interface_map(topology, created.value, warnings)
 
-    custom_config: dict[str, str] = {}
+    carry_variants: list[TemplateVariant] = []
+    quarantine_variants: list[TemplateVariant] = []
     quarantine: dict[str, list[QuarantineOut]] = {}
     for source in sources:
         split = splits[source.node]
@@ -282,18 +286,40 @@ def import_network(
             rewriter = rewrite_vyos if source.device == "vyos" else rewrite_ios
             rewritten, notes = rewriter(all_lines, mapping, source.node)
             warnings.extend(notes)
-            custom_config[carry_relpath(source.node)] = wrap_raw("\n".join(rewritten))
+            carry_variants.append(
+                TemplateVariant(source=wrap_raw("\n".join(rewritten)), node=source.node)
+            )
         if split.quarantined:
             quarantine[source.node] = [
                 QuarantineOut(block.reason, "\n".join(block.lines)) for block in split.quarantined
             ]
             text = "\n".join(line for block in split.quarantined for line in block.lines)
-            custom_config[quarantine_relpath(source.node)] = wrap_raw(text)
+            quarantine_variants.append(TemplateVariant(source=wrap_raw(text), node=source.node))
+
+    records: list[ConfigTemplate] = []
+    if carry_variants:
+        records.append(
+            ConfigTemplate(
+                name="imported",
+                description="Config carried from the imported sources, applied verbatim "
+                "via each carry node's `config: [imported]`.",
+                variants=tuple(carry_variants),
+            )
+        )
+    if quarantine_variants:
+        records.append(
+            ConfigTemplate(
+                name="imported_quarantine",
+                description="Config quarantined at import (mgmt/auth/telemetry/hardware) — "
+                "unreferenced; attach deliberately per node if wanted.",
+                variants=tuple(quarantine_variants),
+            )
+        )
 
     return Ok(
         NetworkImportResult(
             definition=definition,
-            custom_config=custom_config,
+            custom_config=tuple(records),
             interface_map=interface_map,
             name_map=name_map,
             quarantine=quarantine,

@@ -6,8 +6,10 @@ configure, which never happens here.
 
 import pytest
 from twinlab_client import (
+    ConfigTemplateSpec,
     LayoutGroupStyle,
     LayoutPosition,
+    TemplateVariant,
     TestCase,
     TestExpectation,
     TestSuite,
@@ -239,48 +241,84 @@ async def test_run_unknown_suite_is_404(admin: TwinlabClient, make_lab: LabFacto
 async def test_builtin_templates_listed(admin: TwinlabClient, make_lab: LabFactory) -> None:
     lab = await make_lab(None)
     response = await admin.get_custom_config(lab.name)
-    assert response.custom_config == {}
 
     # Pinned in the contract's shipped-catalogs appendix: renaming a builtin
-    # is a contract + suite change.
-    builtin = {template.name: template for template in response.builtin}
+    # is a contract + suite change. A fresh lab carries no user tier, and
+    # each builtin ships its `ios` device variant (delta 27's record shape —
+    # a label matching no catalog device, so clients grey it with the reason).
+    assert [t for t in response.templates if t.tier == "user"] == []
+    builtin = {t.name: t for t in response.templates if t.tier == "builtin"}
     assert {"mpls_te", "ip_sla"} <= set(builtin)
     for template in builtin.values():
-        assert template.files, template.name
-        assert all(path.endswith(".j2") for path in template.files)
+        assert template.variants, template.name
+        assert [variant.device for variant in template.variants] == ["ios"], template.name
 
 
 async def test_custom_config_roundtrip_and_full_replace(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:
     lab = await make_lab(None)
-    fileset = {"bb_probe.j2": "! {{ inventory_hostname }}\n"}
+    spec = ConfigTemplateSpec(
+        name="bb_probe",
+        description="probe",
+        variants=[
+            TemplateVariant(source="! {{ inventory_hostname }}\n"),
+            TemplateVariant(source="! vyos flavor\n", device="vyos"),
+            TemplateVariant(source="! just r1\n", node="r1"),
+        ],
+    )
 
-    stored = await admin.put_custom_config(lab.name, fileset)
-    assert stored.custom_config == fileset
+    stored = await admin.put_custom_config(lab.name, [spec])
+    user = [t for t in stored.templates if t.tier == "user"]
+    assert [t.name for t in user] == ["bb_probe"]
+    assert [(v.device, v.node) for v in user[0].variants] == [
+        (None, None),
+        ("vyos", None),
+        (None, "r1"),
+    ]
 
     fetched = await admin.get_custom_config(lab.name)
-    assert fetched.custom_config == fileset
+    assert [t for t in fetched.templates if t.tier == "user"] == user
 
-    cleared = await admin.put_custom_config(lab.name, {})
-    assert cleared.custom_config == {}
+    cleared = await admin.put_custom_config(lab.name, [])
+    assert [t for t in cleared.templates if t.tier == "user"] == []
 
 
 async def test_custom_config_cannot_shadow_builtin(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:
     lab = await make_lab(None)
+    spec = ConfigTemplateSpec(
+        name="mpls_te", description="", variants=[TemplateVariant(source="! shadow\n")]
+    )
     with pytest.raises(TwinlabApiError) as excinfo:
-        _ = await admin.put_custom_config(lab.name, {"mpls_te.j2": "! shadow\n"})
+        _ = await admin.put_custom_config(lab.name, [spec])
     assert excinfo.value.status_code == 409
+    assert excinfo.value.code == "builtin_template_shadowed"
 
 
-async def test_custom_config_rejects_traversal_paths(
+async def test_custom_config_rejects_invalid_shapes(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:
     lab = await make_lab(None)
+    # A user device variant must name a catalog device (builtin `ios` labels
+    # are trusted code, not an open namespace).
+    off_catalog = ConfigTemplateSpec(
+        name="bb_probe", description="", variants=[TemplateVariant(source="!", device="ios")]
+    )
     with pytest.raises(TwinlabApiError) as excinfo:
-        _ = await admin.put_custom_config(lab.name, {"../evil.j2": "!\n"})
+        _ = await admin.put_custom_config(lab.name, [off_catalog])
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "invalid_template"
+
+    # Scope exclusivity is shape validation (422 before any policy runs).
+    both_scopes = ConfigTemplateSpec(
+        name="bb_probe",
+        description="",
+        variants=[TemplateVariant(source="!", device="vyos", node="r1")],
+    )
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.put_custom_config(lab.name, [both_scopes])
     assert excinfo.value.status_code == 422
 
 

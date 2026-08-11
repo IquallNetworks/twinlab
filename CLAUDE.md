@@ -53,7 +53,30 @@ import — input methods part two, approved 2026-08-04, design record in
 import surface the same day: the wiring list became a required input and
 inferred adjacency was removed — and delta 24 batch runtime actions, approved
 2026-08-04: the v1.0 remnant of the SHELVED scenario item, many netem
-impairments + node power events in one request). Three non-compose
+impairments + node power events in one request — and delta 27 custom-config
+template RECORDS, approved 2026-08-07, design record
+`docs/custom-config-templates.md`: the `{relpath: content}` fileset — whose
+path carried the whole metadata model — became `{name, description, tier,
+variants}` records with node/device/universal scopes mirroring netlab's own
+lookup precedence; the netlab-facing fileset is MATERIALIZED at the config-
+push/dry-create boundary (`name/<node>.j2` | `name/<slug>.j2` | `name.j2` —
+relies on netlab_device_type == catalog slug, drift-guarded) and never stored
+or wired; applicability is ONE rule (a variant matches by node name, else
+device — own else lab default — else universal; a group needs every member,
+nested groups resolved) driving the builder picker's greyed-with-reason
+offers, so `mpls_te` on a VyOS lab stopped being an attachable mistake that
+failed the save in netlab's voice; user device variants are catalog-gated,
+builtins keep their non-catalog `ios` label and simply apply nowhere; config
+import emits `imported`/`imported_quarantine` records with node variants and
+the NAME-form `config: [imported]` (create-time validation walks the per-node
+lookup — proven live), old direct-path references still resolving since the
+materialized carry paths are byte-identical; migration 0020 reshapes stored
+rows exactly and fails loudly on an unmappable path; deliberately NO
+arbitrary-relpath side door, NO OS-version axis — netlab splits devices per
+major version (routeros/routeros7), minor versions ride the image override —
+and NOT absorbed into the delta-21 library, which is a different concept
+(client-composed authoring seeds vs netlab-rendered per-node config)).
+Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, published at v1.0), **`blackbox/`** (the black-box test suite: 140+ tests
 exercising a live stack through the client only; all green, README documents env config and the
@@ -120,7 +143,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   p2p/LAN badge; the import consumes only what the user confirms) → analyze via
   the pure factory → review warnings/renames/definition/per-node maps + carry + quarantine →
   create composes createLab → putCustomConfig → updateLabDefinition, custom config FIRST
-  because the definition PUT validates its `config:` refs against the STORED fileset — plus an
+  because the definition PUT validates its `config:` refs against the STORED templates — plus an
   Import button on the labs page and the builder Add menu's "From config file…", which stamps
   the fragment through the shared `stampFragment` path and saves carry + quarantine into the
   lab's custom config UNATTACHED, since a single config infers no links and keeps SOURCE
@@ -424,7 +447,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `imported/<node>.j2` (`{% raw %}`-wrapped, referenced by the definition) and quarantine files
   sit beside them UNREFERENCED; quarantine classes mgmt/auth/telemetry/hardware are pinned
   vocabulary, the line lists are code. COMPOSE ORDER: put_custom_config BEFORE
-  update_definition — the PUT's dry create validates `config:` refs against the STORED fileset
+  update_definition — the PUT's dry create validates `config:` refs against the STORED templates
   (live-proven). `POST /labs/{name}/config-diff` (lab:validate, deployed lab) is the STATELESS
   fidelity proof: collects running configs over the runner exec transport (VyOS needs
   `/opt/vyatta/bin/vyatta-op-cmd-wrapper` — bare op-mode commands return empty over docker

@@ -9,9 +9,17 @@ round trip: import two VyOS configs → compose → deploy with configure → th
 reports zero missing lines) and frontend (the `/labs/import` wizard + the builder's "From
 config file…"). Two facts were live-proven en route and folded back into the contract text:
 the compose order is `put_custom_config` BEFORE `update_definition` (the definition PUT's dry
-create validates `config:` references against the STORED fileset), and VyOS op-mode
+create validates `config:` references against the STORED templates), and VyOS op-mode
 collection over docker exec needs `/opt/vyatta/bin/vyatta-op-cmd-wrapper` (bare op-mode
 commands return empty stdout).
+
+**Revised by delta 27 (2026-08-07, `docs/custom-config-templates.md`):** custom config became
+structured records, so the import emits ONE `imported` template with a node variant per carry
+node — referenced by NAME (`config: [imported]`; netlab's create-time validation walks the
+per-node lookup, proven live) — and one unreferenced `imported_quarantine` record. The
+materialized carry paths are byte-identical to the old `imported/<node>.j2` files, so
+definitions from before the revision (direct-path references) keep resolving. Everything else
+in this record stands.
 
 ## Goal
 

@@ -405,6 +405,29 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     (Shipped 2026-08-05; the previous wire — delta 17's raw
     unpartitioned dict — is gone.)
 
+27. Custom-config templates remodeled as STRUCTURED RECORDS (APPROVED
+    2026-08-07 — design record docs/custom-config-templates.md; a breaking
+    rework of this surface, done while the contract has no external
+    consumers). The raw ``{relpath: content}`` fileset — where the path did
+    double duty as storage key AND the whole metadata model — is replaced
+    by records: ``{name, description, tier, variants}``, each variant
+    ``{source}`` scoped by exactly one of ``node`` / ``device`` (a catalog
+    slug) / neither (universal) — mirroring netlab's own lookup precedence
+    (node > device > universal), so the picker can finally answer "does
+    this template apply HERE?" (`mpls_te` on a VyOS lab was offered and
+    failed two steps later in netlab's voice). The netlab-facing fileset is
+    MATERIALIZED from the records at the config-push/create boundary
+    (``name/<node>.j2`` | ``name/<slug>.j2`` | ``name.j2``); the runner
+    contract and the PUT's dry ``netlab create`` are unchanged. GET returns
+    ONE merged list (builtins first); PUT full-replaces the user tier only.
+    409 ``builtin_template_shadowed`` becomes plain NAME equality; user
+    ``device`` variants must name a catalog device (422). Config import
+    emits records (``imported`` + ``imported_quarantine``, node variants) —
+    carry paths materialize byte-identical to the old scheme, so existing
+    definitions' direct-path ``config:`` references keep resolving.
+    Deliberately NOT absorbed: the delta-21 template library (authoring
+    seeds the client composes — different concept, no shared defect).
+
 Conventions:
 
 - Base path ``/api/v1``; OpenAPI at ``openapi.json`` (schema-check the real
@@ -828,19 +851,20 @@ class NetworkImport:
     lab is touched; the client composes create_lab → put_custom_config →
     update_definition — custom config FIRST, because the definition PUT's
     dry `netlab create` validates its `config:` references against the
-    lab's STORED fileset. The definition carries no `name:` and no mgmt
+    lab's STORED templates. The definition carries no `name:` and no mgmt
     addressing — the receiving lab's PUT pins both.
 
-    `custom_config` is ready for put_custom_config verbatim: per node one
-    CARRY file `imported/<node>.j2` (referenced by that node's `config:`
-    list in the definition; content is `{% raw %}`-wrapped so device config
-    containing brace sequences survives netlab's Jinja render byte-exact)
-    and, when its quarantine is non-empty, one UNATTACHED file
-    `imported/<node>.quarantine.j2` — kept visible and re-attachable, never
-    silently lost; `quarantine` carries the classified breakdown."""
+    `custom_config` is ready for put_custom_config verbatim (delta 27:
+    template RECORDS): the carries land as node variants of ONE template
+    named `imported` (referenced by each carry node's `config:` list in the
+    definition; sources are `{% raw %}`-wrapped so device config containing
+    brace sequences survives netlab's Jinja render byte-exact) and non-empty
+    quarantines as node variants of `imported_quarantine` — UNREFERENCED but
+    visible and deliberately attachable per node, never silently lost;
+    `quarantine` carries the classified breakdown."""
 
     definition: str
-    custom_config: dict[str, str]
+    custom_config: list[ConfigTemplateSpec]
     interface_map: dict[str, dict[str, str]]  # node → {source-if: lab-if}.
     #   The rename applied to the carry, from the dry create's expanded
     #   topology; the identity map for same-platform imports.
@@ -1599,22 +1623,57 @@ class JobEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class BuiltinTemplate:
-    """Shipped read-only template: `config:` name, description, per-device
-    files ({relpath: jinja source})."""
+class TemplateVariant:
+    """One source of a config template, scoped by exactly one of: ``node``
+    (that one node), ``device`` (any node of that catalog device slug), or
+    neither (universal). Delta 27: the scopes mirror netlab's own lookup
+    precedence — node beats device beats universal — enforced by the
+    filenames the backend materializes, not by any code. Setting both is
+    422; a user variant's ``device`` must be a catalog slug (422) — builtin
+    variants may carry a non-catalog label (``ios``), which simply applies
+    to no node."""
+
+    source: str  # Jinja2, rendered by netlab over the node model; ≤64KB
+    device: str | None = None
+    node: str | None = None
+
+
+ConfigTemplateTier = Literal["builtin", "user"]
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigTemplate:
+    """A custom-config template record (delta 27): the ``config:`` name a
+    definition references (``[A-Za-z_][A-Za-z0-9_-]*``, ≤64), a description
+    (may be empty), its tier, and ≥1 scoped variants. APPLICABILITY is one
+    rule everywhere: the template applies to a node if some variant matches
+    it (node name, else device, else universal); to a group iff it applies
+    to every member. Builtins are code-shipped and read-only."""
 
     name: str
     description: str
-    files: dict[str, str]
+    tier: ConfigTemplateTier
+    variants: list[TemplateVariant]
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigTemplateSpec:
+    """PUT's input shape: a user-tier template — ``ConfigTemplate`` minus
+    ``tier`` (everything a caller PUTs is user tier)."""
+
+    name: str
+    description: str
+    variants: list[TemplateVariant]
 
 
 @dataclass(frozen=True, slots=True)
 class CustomConfigResponse:
-    """Built-in library (identical for every lab) + this lab's user fileset.
-    Relpaths match `^[A-Za-z0-9][A-Za-z0-9_./-]*\\.j2$`, max 128."""
+    """The lab's whole template library, ONE merged list — builtins first
+    (identical for every lab), then the lab's user records. Delta 27: the
+    netlab-facing fileset is derived server-side (``name/<node>.j2`` |
+    ``name/<slug>.j2`` | ``name.j2``) and never travels the wire."""
 
-    builtin: list[BuiltinTemplate]
-    custom_config: dict[str, str]
+    templates: list[ConfigTemplate]
 
 
 # --------------------------------------------------------------------------- #
@@ -2319,11 +2378,13 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         raise NotImplementedError
 
     async def put_custom_config(
-        self, name: str, fileset: dict[str, str]
+        self, name: str, templates: list[ConfigTemplateSpec]
     ) -> CustomConfigResponse:
         """PUT /labs/{name}/custom-config — lab:edit. Full replace of the USER
-        fileset. 409 if a path shadows a built-in. Applies on the next
-        configure/deploy."""
+        tier (delta 27). 409 ``builtin_template_shadowed`` if a name equals a
+        built-in's; 422 on shape violations (duplicate names, duplicate scope
+        keys, both device+node set, non-catalog device, materialized-filename
+        collision within a template). Applies on the next configure/deploy."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
@@ -2555,11 +2616,12 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 #   lab_operator    lab    — lab:read, lab:configure, lab:validate, lab:terminal
 #   lab_viewer      lab    — lab:read
 #
-# Shipped builtin custom-config templates: mpls_te, ip_sla. Both ship an
-# `ios.j2` variant only, so since IOL's withdrawal (2026-08-05) neither
-# targets a catalogued device; they remain because they ARE this library and
-# the mechanism is device-agnostic (netlab picks the variant matching a node's
-# declared device).
+# Shipped builtin custom-config templates: mpls_te, ip_sla. Both carry ONE
+# device variant labeled `ios` (delta 27's record shape), so since IOL's
+# withdrawal (2026-08-05) neither applies to any catalogued device — clients
+# grey them with the reason rather than offering them; they remain because
+# they ARE this library and the mechanism is device-agnostic (netlab picks
+# the variant matching a node's declared device).
 #
 # Shipped builtin library templates (delta 21, APPROVED) — the repo examples,
 # all in the NETWORK collection: example-mpls-l3vpn (VyOS),

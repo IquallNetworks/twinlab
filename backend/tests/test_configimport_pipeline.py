@@ -215,22 +215,27 @@ def test_import_network_end_to_end() -> None:
     assert result.interface_map["r3-vyos"]["lo"] == "dum0"
     assert "GigabitEthernet0/0" not in result.interface_map["r1"]  # mgmt never maps
 
-    # Carry: rewritten, raw-wrapped, referenced by the definition.
-    r1_carry = result.custom_config["imported/r1.j2"]
-    assert r1_carry.startswith("{% raw %}")
+    # Carry: rewritten, raw-wrapped node variants of ONE `imported` record
+    # (delta 27), referenced by name from the definition.
+    records = {record.name: record for record in result.custom_config}
+    carries = {v.node: v.source for v in records["imported"].variants}
+    r1_carry = carries["r1"]
+    assert r1_carry is not None and r1_carry.startswith("{% raw %}")
     assert " ip ospf network point-to-point" in r1_carry
     assert "ip address 10.1.2.1" not in r1_carry  # modeled, not carried
-    assert "imported/r1.j2" in result.definition
+    assert "- imported" in result.definition
     # r3's eth1 has no subnet peer -> stub -> netlab realizes it as a dummy;
     # the carry followed the map, type segment included.
     assert result.interface_map["r3-vyos"]["eth1"] == "dum1"
-    vyos_carry = result.custom_config["imported/r3-vyos.j2"]
+    vyos_carry = carries["r3-vyos"]
+    assert vyos_carry is not None
     assert "set interfaces dummy dum1 description 'lan leg'" in vyos_carry
 
-    # Quarantine: classified AND kept as an unattached file.
+    # Quarantine: classified AND kept as unattached node variants.
     assert {q.reason for q in result.quarantine["r1"]} >= {"mgmt", "auth", "telemetry"}
-    assert "imported/r1.quarantine.j2" in result.custom_config
-    assert "imported/r1.quarantine.j2" not in result.definition
+    quarantines = {v.node for v in records["imported_quarantine"].variants}
+    assert "r1" in quarantines
+    assert "imported_quarantine" not in result.definition
     assert any(q.reason == "auth" for q in result.quarantine["r3-vyos"])
 
 

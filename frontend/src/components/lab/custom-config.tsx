@@ -19,21 +19,20 @@ import { CodeEditor } from '@/components/code-editor'
 import { api } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
 import { customConfigQueryOptions } from '@/lib/queries'
-import type { BuiltinTemplate } from '@/lib/schemas'
+import type { ConfigTemplate, TemplateVariant } from '@/lib/schemas'
 
-/** An expandable entry showing a template's source files. Built-in entries carry
- * a description and a read-only badge; user entries are a single file each. */
-function TemplateRow({
-  title,
-  description,
-  files,
-  builtin,
-}: {
-  title: string
-  description?: string
-  files: Record<string, string>
-  builtin: boolean
-}) {
+/** The scope a variant declares (delta 27): a node, a device, or universal.
+ * netlab's lookup precedence — node beats device beats universal — falls out
+ * of the filenames the backend materializes, so the label is documentation. */
+function variantScope(variant: TemplateVariant): string {
+  if (variant.node != null) return `node: ${variant.node}`
+  if (variant.device != null) return `device: ${variant.device}`
+  return 'universal'
+}
+
+/** An expandable entry showing a template record: its tier, description, and
+ * each scoped variant's Jinja source. */
+function TemplateRow({ template }: { template: ConfigTemplate }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="rounded-md border p-3">
@@ -46,18 +45,22 @@ function TemplateRow({
         >
           {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
         </button>
-        <span className="font-mono text-sm">{title}</span>
-        <Badge variant={builtin ? 'default' : 'secondary'}>{builtin ? 'built-in' : 'user'}</Badge>
+        <span className="font-mono text-sm">{template.name}</span>
+        <Badge variant={template.tier === 'builtin' ? 'default' : 'secondary'}>
+          {template.tier === 'builtin' ? 'built-in' : 'user'}
+        </Badge>
       </div>
-      {description !== undefined && description !== '' && (
-        <p className="text-muted-foreground mt-2 text-sm">{description}</p>
+      {template.description !== '' && (
+        <p className="text-muted-foreground mt-2 text-sm">{template.description}</p>
       )}
       {open && (
         <div className="mt-3 flex flex-col gap-3">
-          {Object.entries(files).map(([path, content]) => (
-            <div key={path}>
-              <p className="text-muted-foreground mb-1 font-mono text-xs">{path}</p>
-              <CodeEditor value={content} language="jinja2" className="max-h-64" />
+          {template.variants.map((variant) => (
+            <div key={variantScope(variant)}>
+              <p className="text-muted-foreground mb-1 font-mono text-xs">
+                {variantScope(variant)}
+              </p>
+              <CodeEditor value={variant.source} language="jinja2" className="max-h-64" />
             </div>
           ))}
         </div>
@@ -66,12 +69,14 @@ function TemplateRow({
   )
 }
 
-/** Author the user template fileset as JSON ({ "relpath.j2": "source" }). Parsed
- * here for syntax; the backend validates paths and rejects built-in collisions. */
-function TemplatesEditor({ name, filesetJson }: { name: string; filesetJson: string }) {
+/** Author the user template records as JSON — a list of {name, description,
+ * variants: [{source, device? | node?}]}. Parsed here for syntax; the backend
+ * validates shapes (one scope per variant, catalog devices, unique names) and
+ * rejects built-in name collisions. */
+function TemplatesEditor({ name, templatesJson }: { name: string; templatesJson: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const [text, setText] = useState(filesetJson)
+  const [text, setText] = useState(templatesJson)
 
   const save = useMutation({
     mutationFn: (parsed: unknown) => api.putCustomConfig(name, parsed),
@@ -99,7 +104,7 @@ function TemplatesEditor({ name, filesetJson }: { name: string; filesetJson: str
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (next) setText(filesetJson) // reset to the current fileset on open
+        if (next) setText(templatesJson) // reset to the current records on open
       }}
     >
       <DialogTrigger asChild>
@@ -111,10 +116,12 @@ function TemplatesEditor({ name, filesetJson }: { name: string; filesetJson: str
         <DialogHeader>
           <DialogTitle>Edit custom-config templates</DialogTitle>
           <DialogDescription>
-            A JSON map of template path → Jinja source, e.g.{' '}
-            {'{ "nat/ios.j2": "ip nat ..." }'}. Reference a template by name from a node/group{' '}
-            <span className="font-mono">config:</span> attribute in the definition. A path may not
-            shadow a built-in.
+            A JSON list of template records, e.g.{' '}
+            {'[{ "name": "nat", "description": "", "variants": [{ "source": "...", "device": "vyos" }] }]'}
+            . A variant applies to one <span className="font-mono">node</span>, one{' '}
+            <span className="font-mono">device</span>, or (with neither key) everywhere. Reference
+            a template by name from a node/group <span className="font-mono">config:</span>{' '}
+            attribute; a name may not shadow a built-in.
           </DialogDescription>
         </DialogHeader>
         <CodeEditor
@@ -138,21 +145,32 @@ function TemplatesEditor({ name, filesetJson }: { name: string; filesetJson: str
 }
 
 /** Custom config: the seam for device config netlab doesn't model (MPLS-TE, IP
- * SLA, QoS, …). Built-in templates ship with Twinlab (read-only); user templates
- * are per-lab. Everyone with lab:read sees them; lab:create authors the user set.
- * They apply on the next configure/redeploy when referenced from `config:`. */
+ * SLA, QoS, …). Built-in templates ship with Twinlab (read-only); user records
+ * are per-lab. Everyone with lab:read sees them; lab:edit authors the user
+ * tier. They apply on the next configure/redeploy when referenced from
+ * `config:` — and only on nodes a variant matches. */
 export function CustomConfig({ name, canEdit }: { name: string; canEdit: boolean }) {
   const { data, isPending, isError, error } = useQuery(customConfigQueryOptions(name))
 
-  const userEntries = data ? Object.entries(data.custom_config) : []
-  const filesetJson = data ? JSON.stringify(data.custom_config, null, 2) : '{}'
-  const byName = (a: BuiltinTemplate, b: BuiltinTemplate) => a.name.localeCompare(b.name)
+  const user = data ? data.templates.filter((t) => t.tier === 'user') : []
+  const templatesJson = JSON.stringify(
+    user.map(({ tier: _tier, ...spec }) => ({
+      ...spec,
+      variants: spec.variants.map((v) => ({
+        source: v.source,
+        ...(v.device != null ? { device: v.device } : {}),
+        ...(v.node != null ? { node: v.node } : {}),
+      })),
+    })),
+    null,
+    2,
+  )
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base">Custom config</CardTitle>
-        {canEdit && data && <TemplatesEditor name={name} filesetJson={filesetJson} />}
+        {canEdit && data && <TemplatesEditor name={name} templatesJson={templatesJson} />}
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {isPending ? (
@@ -163,23 +181,17 @@ export function CustomConfig({ name, canEdit }: { name: string; canEdit: boolean
           </p>
         ) : (
           <>
-            {[...data.builtin].sort(byName).map((t) => (
-              <TemplateRow
-                key={t.name}
-                title={t.name}
-                description={t.description}
-                files={t.files}
-                builtin
-              />
-            ))}
-            {userEntries.length === 0 ? (
+            {data.templates
+              .filter((t) => t.tier === 'builtin')
+              .map((t) => (
+                <TemplateRow key={t.name} template={t} />
+              ))}
+            {user.length === 0 ? (
               <p className="text-muted-foreground text-sm">
                 No user templates{canEdit ? ' — add some with “Edit templates”.' : '.'}
               </p>
             ) : (
-              userEntries.map(([path, content]) => (
-                <TemplateRow key={path} title={path} files={{ [path]: content }} builtin={false} />
-              ))
+              user.map((t) => <TemplateRow key={t.name} template={t} />)
             )}
           </>
         )}

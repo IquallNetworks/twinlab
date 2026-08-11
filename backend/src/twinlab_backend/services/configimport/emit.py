@@ -49,23 +49,22 @@ def sanitize_node_name(hostname: str) -> str:
 
 
 def carry_relpath(node: str) -> str:
-    """The custom-config fileset path of a node's carry template (the
-    contract's `imported/<node>.j2`; netlab accepts the subdir reference —
-    verified live)."""
+    """Where the `imported` record's node variant materializes (delta 27) —
+    the path netlab's per-node lookup resolves `config: [imported]` to, and
+    the path the dry create's placeholder must occupy. Byte-identical to the
+    pre-record carry path, so definitions from before the remodel (direct
+    `config: [imported/<node>.j2]` references) keep resolving."""
     return f"imported/{node}.j2"
-
-
-def quarantine_relpath(node: str) -> str:
-    """The UNATTACHED quarantine file's fileset path."""
-    return f"imported/{node}.quarantine.j2"
 
 
 def emit_definition(
     sources: list[NodeSource], topology: Wiring, carry_nodes: frozenset[str]
 ) -> str:
     """The thin skeleton as netlab YAML. `carry_nodes` are the nodes whose
-    carry template is non-empty — only they get a `config:` reference
-    (netlab create validates that referenced templates exist)."""
+    carry template is non-empty — only they reference the `imported` template
+    (the NAME form: netlab resolves it per node to `imported/<node>.j2`, and
+    its create-time validation walks the same lookup — both directions proven
+    live 2026-08-07, delta 27)."""
     nodes: dict[str, object] = {}
     for source in sources:
         node: dict[str, object] = {"device": source.device}
@@ -73,7 +72,7 @@ def emit_definition(
         if loopback is not None:
             node["loopback"] = {"ipv4": loopback.ipv4}
         if source.node in carry_nodes:
-            node["config"] = [carry_relpath(source.node)]
+            node["config"] = ["imported"]
         nodes[source.node] = node
 
     links: list[dict[str, object]] = []

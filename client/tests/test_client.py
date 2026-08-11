@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from twinlab_client import (
+    ConfigTemplateSpec,
     DeployResponse,
     DiffSource,
     Duration,
@@ -27,6 +28,7 @@ from twinlab_client import (
     SshAccess,
     SshKey,
     SshKeyGenerated,
+    TemplateVariant,
     TestCase,
     TestExpectation,
     TestSuite,
@@ -1155,10 +1157,20 @@ async def test_lab_detail_serves_template_published(make_client: ClientFactory) 
 
 _NETWORK_IMPORT_PAYLOAD = {
     "definition": "provider: clab\nnodes:\n  r1:\n    device: iol\n",
-    "custom_config": {
-        "imported/r1.j2": "{% raw %}\ninterface Ethernet0/1\n{% endraw %}\n",
-        "imported/r1.quarantine.j2": "{% raw %}\naaa new-model\n{% endraw %}\n",
-    },
+    "custom_config": [
+        {
+            "name": "imported",
+            "description": "Config carried from the imported sources.",
+            "variants": [
+                {"source": "{% raw %}\ninterface Ethernet0/1\n{% endraw %}\n", "node": "r1"}
+            ],
+        },
+        {
+            "name": "imported_quarantine",
+            "description": "Config quarantined at import.",
+            "variants": [{"source": "{% raw %}\naaa new-model\n{% endraw %}\n", "node": "r1"}],
+        },
+    ],
     "interface_map": {"r1": {"GigabitEthernet0/0/1": "Ethernet0/1"}},
     "name_map": {"prod-r1": "prod_r1"},
     "quarantine": {"r1": [{"reason": "auth", "content": "aaa new-model"}]},
@@ -1186,7 +1198,63 @@ async def test_import_network_round_trip(make_client: ClientFactory) -> None:
     assert result.name_map == {"prod-r1": "prod_r1"}
     assert result.quarantine["r1"][0].reason == "auth"
     assert result.warnings[0].node == "r1"
-    assert "imported/r1.quarantine.j2" in result.custom_config
+    # Records ready for put_custom_config verbatim (delta 27).
+    assert [spec.name for spec in result.custom_config] == ["imported", "imported_quarantine"]
+    assert result.custom_config[0].variants[0].node == "r1"
+
+
+async def test_custom_config_round_trip(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/custom-config"
+        body = json.loads(request.content)
+        # Scope keys travel by presence — a universal variant carries none.
+        assert body == {
+            "templates": [
+                {
+                    "name": "nat",
+                    "description": "NAT overload",
+                    "variants": [
+                        {"source": "generic"},
+                        {"source": "vyos flavor", "device": "vyos"},
+                        {"source": "pe1 override", "node": "pe1"},
+                    ],
+                }
+            ]
+        }
+        served = {
+            "templates": [
+                {
+                    "name": "mpls_te",
+                    "description": "MPLS-TE. IOS variant only.",
+                    "tier": "builtin",
+                    "variants": [{"source": "mpls traffic-eng tunnels", "device": "ios"}],
+                },
+                {"name": "nat", "description": "NAT overload", "tier": "user"}
+                | {"variants": body["templates"][0]["variants"]},
+            ]
+        }
+        return httpx.Response(200, json=served)
+
+    async with make_client(handler) as client:
+        stored = await client.put_custom_config(
+            "lab1",
+            [
+                ConfigTemplateSpec(
+                    name="nat",
+                    description="NAT overload",
+                    variants=[
+                        TemplateVariant(source="generic"),
+                        TemplateVariant(source="vyos flavor", device="vyos"),
+                        TemplateVariant(source="pe1 override", node="pe1"),
+                    ],
+                )
+            ],
+        )
+    assert [template.tier for template in stored.templates] == ["builtin", "user"]
+    nat = stored.templates[1]
+    assert nat.name == "nat"
+    assert [variant.device for variant in nat.variants] == [None, "vyos", None]
+    assert nat.variants[2].node == "pe1"
 
 
 async def test_import_network_error_slug(make_client: ClientFactory) -> None:

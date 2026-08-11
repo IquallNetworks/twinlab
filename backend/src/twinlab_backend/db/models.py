@@ -212,11 +212,13 @@ class Lab(Base):
     # presentation data — ids are never validated against the definition.
     # NULL = never saved (renders as an empty layout; auto-layout applies).
     layout: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
-    # User-authored netlab custom-config templates: a {relpath: content} fileset
-    # (e.g. {"nat/ios.j2": "..."}), shipped to the runner alongside the built-in
-    # library on every configure. Built-ins live in code, not here. Never sent to
-    # `netlab create`. NULL means the lab has no user templates.
-    custom_config: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # User-authored custom-config template RECORDS (contract delta 27): a list
+    # of {name, description, variants: [{source, device?, node?}]} entries,
+    # validated as ConfigTemplateIn on write and read back through the same
+    # model. The netlab-facing {relpath: content} fileset is materialized from
+    # these at the config-push/create boundary, never stored. Built-ins live in
+    # code, not here. NULL means the lab has no user templates.
+    custom_config: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB(), default=None)
     # Template publication (contract delta 21): while True this lab's stored
     # definition is served as a user-tier NETWORK template — a live view of
     # this row, never a copy. The description is the library-card text, set on

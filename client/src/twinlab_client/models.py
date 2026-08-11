@@ -419,14 +419,15 @@ class NetworkImport:
     lab is touched; compose create_lab -> put_custom_config ->
     update_definition — custom config FIRST, because the definition PUT's
     dry netlab create validates its `config:` references against the lab's
-    STORED fileset. The definition carries no `name:` and no mgmt
+    STORED templates. The definition carries no `name:` and no mgmt
     addressing — the receiving lab's PUT pins both."""
 
     definition: str
-    custom_config: dict[str, str]  # ready for put_custom_config verbatim:
-    #   per node a carry file `imported/<node>.j2` (referenced by the
-    #   definition, {% raw %}-wrapped) and, when non-empty, an UNATTACHED
-    #   `imported/<node>.quarantine.j2`
+    custom_config: list["ConfigTemplateSpec"]  # ready for put_custom_config
+    #   verbatim (delta 27): the carries as node variants of `imported`
+    #   (referenced by the definition's `config: [imported]`, {% raw %}-
+    #   wrapped) and non-empty quarantines as node variants of
+    #   `imported_quarantine` — unreferenced but attachable per node
     interface_map: dict[str, dict[str, str]]  # node -> {source-if: lab-if}
     name_map: dict[str, str]  # source hostname -> sanitized node name
     quarantine: dict[str, list[QuarantineEntry]]
@@ -1046,20 +1047,50 @@ class JobEvent:
 # --------------------------------------------------------------------------- #
 
 
+ConfigTemplateTier = Literal["builtin", "user"]
+CONFIG_TEMPLATE_TIERS: Final[tuple[ConfigTemplateTier, ...]] = ("builtin", "user")
+
+
 @dataclass(frozen=True, slots=True)
-class BuiltinTemplate:
-    """Shipped read-only template: `config:` name, description, per-device
-    files ({relpath: jinja source})."""
+class TemplateVariant:
+    """One source of a config template (delta 27), scoped by exactly one of
+    ``node`` (that one node) / ``device`` (any node of that catalog device
+    slug) / neither (universal). The scopes mirror netlab's lookup precedence
+    — node beats device beats universal. A builtin variant may carry a
+    non-catalog device label (``ios``), which simply applies to no node."""
+
+    source: str
+    device: str | None = None
+    node: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigTemplate:
+    """A custom-config template record: the ``config:`` name a definition
+    references, a description (may be empty), its tier, and >=1 scoped
+    variants. Applicability is one rule: a template applies to a node if some
+    variant matches it (node name, else device, else universal)."""
 
     name: str
     description: str
-    files: dict[str, str]
+    tier: ConfigTemplateTier
+    variants: list[TemplateVariant]
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigTemplateSpec:
+    """PUT's input shape: a user-tier template — ``ConfigTemplate`` minus
+    ``tier`` (everything a caller PUTs is user tier)."""
+
+    name: str
+    description: str
+    variants: list[TemplateVariant]
 
 
 @dataclass(frozen=True, slots=True)
 class CustomConfigResponse:
-    """Built-in library (identical for every lab) + this lab's user fileset.
-    Relpaths match `^[A-Za-z0-9][A-Za-z0-9_./-]*\\.j2$`, max 128."""
+    """The lab's whole config-template library, ONE merged list — builtins
+    first (identical for every lab), then the lab's user records. The
+    netlab-facing fileset is derived server-side and never travels."""
 
-    builtin: list[BuiltinTemplate]
-    custom_config: dict[str, str]
+    templates: list[ConfigTemplate]

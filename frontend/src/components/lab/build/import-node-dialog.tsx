@@ -63,18 +63,45 @@ export function ImportNodeDialog({
       const result = await api.importNode(device, content)
       const stamped = onStamp(result.fragment, device)
       if (stamped === null) return null
-      // Nothing is dropped: carry + quarantine land in the lab's custom
-      // config, deliberately unreferenced until the user wires links.
+      // Nothing is dropped: carry + quarantine land as node variants of the
+      // `imported` / `imported_quarantine` records (delta 27), deliberately
+      // unreferenced until the user wires links.
       if (result.config !== '' || result.quarantine.length > 0) {
         const current = await api.getCustomConfig(labName)
-        const fileset: Record<string, string> = { ...current.custom_config }
-        if (result.config !== '') fileset[`imported/${stamped}.j2`] = result.config
-        if (result.quarantine.length > 0) {
-          fileset[`imported/${stamped}.quarantine.j2`] = rawWrap(
-            result.quarantine.map((entry) => entry.content).join('\n'),
+        const specs = current.templates
+          .filter((template) => template.tier === 'user')
+          .map(({ tier: _tier, ...spec }) => ({
+            ...spec,
+            variants: spec.variants.map((variant) => ({ ...variant })),
+          }))
+        const upsert = (name: string, description: string, source: string) => {
+          const variant = { source, node: stamped }
+          const existing = specs.find((spec) => spec.name === name)
+          if (existing === undefined) {
+            specs.push({ name, description, variants: [variant] })
+          } else {
+            existing.variants = [
+              ...existing.variants.filter((entry) => entry.node !== stamped),
+              variant,
+            ]
+          }
+        }
+        if (result.config !== '') {
+          upsert(
+            'imported',
+            'Config carried from imported sources, applied verbatim via `config: [imported]`.',
+            result.config,
           )
         }
-        await api.putCustomConfig(labName, fileset)
+        if (result.quarantine.length > 0) {
+          upsert(
+            'imported_quarantine',
+            'Config quarantined at import (mgmt/auth/telemetry/hardware) — unreferenced; ' +
+              'attach deliberately per node if wanted.',
+            rawWrap(result.quarantine.map((entry) => entry.content).join('\n')),
+          )
+        }
+        await api.putCustomConfig(labName, specs)
         await queryClient.invalidateQueries({
           queryKey: customConfigQueryOptions(labName).queryKey,
         })
@@ -88,9 +115,9 @@ export function ImportNodeDialog({
       setFilename(null)
       toast.success(`Stamped ${outcome.stamped}`, {
         description: outcome.kept
-          ? `Its remaining config is saved UNATTACHED as imported/${outcome.stamped}.j2 — ` +
-            'wire the node’s links, review the interface names, then attach it via the ' +
-            'node’s config list.'
+          ? `Its remaining config is saved UNATTACHED as the imported template's ` +
+            `${outcome.stamped} variant — wire the node’s links, review the interface ` +
+            'names, then attach it via the node’s config list.'
           : undefined,
       })
       for (const warning of outcome.warnings) toast.warning(warning.message)

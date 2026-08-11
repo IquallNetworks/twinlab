@@ -136,6 +136,10 @@ LOCAL_ONLY_DEVICES: frozenset[str] = frozenset(
     spec.device for spec in SUPPORTED_DEVICES if spec.local_only
 )
 
+# The supported slugs, derived for membership checks (a user config-template
+# variant's `device` scope must name one — contract delta 27).
+CATALOG_DEVICE_SLUGS: frozenset[str] = frozenset(spec.device for spec in SUPPORTED_DEVICES)
+
 
 def image_reference(image: str) -> str:
     """Docker-normalized repo:tag for presence matching: an untagged name

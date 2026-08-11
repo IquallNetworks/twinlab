@@ -106,6 +106,10 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+      # The operator guide the app serves at /docs. src/content/guide is a
+      # symlink to ../../../docs/guide, which resolves to /docs/guide in here —
+      # so the markdown has one home and cannot drift from the repository.
+      - ./docs:/docs:ro
     depends_on:
       backend:
         condition: service_healthy

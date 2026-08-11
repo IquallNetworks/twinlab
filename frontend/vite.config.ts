@@ -31,6 +31,17 @@ export default defineConfig({
     host: true, // listen on 0.0.0.0 so the port is reachable from outside the container
     port,
     allowedHosts,
+    fs: {
+      // The operator guide is imported from src/content/guide, which is a
+      // SYMLINK to the repository's docs/guide. Vite resolves symlinks, so the
+      // real path sits outside the project root and the dev server must be
+      // told it may read it. Both entries resolve correctly under compose too,
+      // where the root is /app and ./docs is mounted at /docs.
+      allow: [
+        fileURLToPath(new URL('.', import.meta.url)),
+        fileURLToPath(new URL('../docs', import.meta.url)),
+      ],
+    },
     proxy: {
       // `ws: true` so the WebSocket upgrade for the node terminal
       // (/api/v1/labs/.../terminal) is proxied too, not just HTTP requests.

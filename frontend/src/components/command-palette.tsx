@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
 import {
+  BookOpen,
   Boxes,
   KeyRound,
   LayoutDashboard,
@@ -153,6 +154,13 @@ export function CommandPalette({ className }: { className?: string }) {
             <CommandItem onSelect={() => go(() => navigate({ to: '/account' }))}>
               <KeyRound />
               Account
+            </CommandItem>
+            <CommandItem
+              keywords={['guide', 'help', 'documentation', 'manual']}
+              onSelect={() => go(() => navigate({ to: '/docs' }))}
+            >
+              <BookOpen />
+              Docs
             </CommandItem>
           </CommandGroup>
           {currentLab !== undefined && (

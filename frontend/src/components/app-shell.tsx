@@ -65,6 +65,8 @@ export function AppShell() {
             {canManageGroups && <NavLink to="/groups">Groups</NavLink>}
             {/* Self-service credentials — no permission gate. */}
             <NavLink to="/account">Account</NavLink>
+            {/* The operator guide, served by this deployment. */}
+            <NavLink to="/docs">Docs</NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-1 text-sm">
             <CommandPalette className={HEADER_GHOST} />

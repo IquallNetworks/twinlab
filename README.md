@@ -311,7 +311,9 @@ Three projects sit beside the stack, none of them a service:
 install, your first lab, a reference for every Build tab setting, operating a running lab, test
 suites, config import, access and SSH, and troubleshooting indexed by error code.
 
-Its [Install](docs/guide/01-install.md) page is the fuller version of
+**A running stack serves it at `/docs`**, linked from the header and the command palette, so the
+documentation always matches the version you are running. Its
+[Install](docs/guide/01-install.md) page is the fuller version of
 [First run](#first-run) above, and the only place that documents how to obtain a node image for
 each of the six supported platforms.
 

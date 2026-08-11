@@ -12,6 +12,7 @@ import { defaultLabTab } from '@/lib/lab-permissions'
 import { labQueryOptions, meQueryOptions } from '@/lib/queries'
 import { AccountPage } from '@/pages/account'
 import { DashboardPage } from '@/pages/dashboard'
+import { DocsPage } from '@/pages/docs-page'
 import { GroupsPage } from '@/pages/groups'
 import { JobsPage } from '@/pages/jobs'
 import { AccessTab } from '@/pages/lab/access-tab'
@@ -192,8 +193,30 @@ const accountRoute = createRoute({
   component: AccountPage,
 })
 
+// The operator guide, served by the app. Sits OUTSIDE the auth layout on
+// purpose: needing an account to read the troubleshooting page is exactly
+// backwards when the thing that failed is signing in.
+const docsIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/docs',
+  component: () => <DocsPage />,
+})
+
+const docsPageRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/docs/$slug',
+  component: DocsPageRoute,
+})
+
+function DocsPageRoute() {
+  const { slug } = docsPageRoute.useParams()
+  return <DocsPage slug={slug} />
+}
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  docsIndexRoute,
+  docsPageRoute,
   authRoute.addChildren([
     indexRoute,
     labsRoute,

@@ -1523,7 +1523,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     from one thin parser — is a legitimate alternative tier and a *product*
     decision: it trades the fidelity promise for breadth. Not planned.
 
-### Operator documentation · **done 2026-08-11** (nine pages)
+### Operator documentation · **done 2026-08-11** (nine pages, served at `/docs`)
 
 25. **`docs/guide/` — the operator guide.** The audience survey that opened this
     found one row empty: the person who runs Twinlab through the web UI has no
@@ -1567,7 +1567,15 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     **Decided 2026-08-11:** no screenshots (no page needs one, and images are
     the highest-maintenance part of a guide) and no prose checker (the writing
     rules are the standard; a score invites chasing the number instead of
-    reading the page).
+    reading the page). A **docs site served with the deployment** shipped
+    the same day: the app renders the guide at `/docs` straight from
+    `docs/guide/` (symlink into the frontend source + a `./docs:/docs:ro`
+    mount), so the markdown keeps one home and the served documentation cannot
+    drift from the running version. Two MIT dependencies, approved:
+    `react-markdown` and `remark-gfm`. The route is deliberately OUTSIDE the
+    auth gate — needing an account to read the troubleshooting page is
+    backwards when signing in is what failed. **Not covered by the e2e suite
+    yet.**
 
     **The binding writing rules:** concise and direct, no buzzwords, and
     **every setting names the definition key it writes** — that is what makes

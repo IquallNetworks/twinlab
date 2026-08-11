@@ -190,6 +190,25 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ roles }),
     }),
+  // Administrative reset: no current password, and ALL of the target's
+  // sessions are revoked (unlike `changePassword`, which keeps the caller's).
+  // So this is never the way to change your OWN password — see users.tsx.
+  setUserPassword: (userId: string, password: string) =>
+    requestVoid(`/users/${userId}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
+    }),
+  // Deactivation is the reversible half of delete: the record, its role
+  // bindings and its owned labs are untouched, but sessions are revoked and
+  // API/SSH keys stop authorizing. 409 last_admin on the only active admin.
+  setUserActive: (userId: string, isActive: boolean) =>
+    request(`/users/${userId}/active`, userSummarySchema, {
+      method: 'PUT',
+      body: JSON.stringify({ is_active: isActive }),
+    }),
+  // Irreversible: sessions, API keys, SSH keys and role bindings go with the
+  // account. Labs it owns SURVIVE, ownerless. 409 last_admin, as above.
+  deleteUser: (userId: string) => requestVoid(`/users/${userId}`, { method: 'DELETE' }),
 
   // The role catalog (names + scopes + permissions), served from the backend so
   // role pickers don't hardcode the list. Any authenticated user may read it.

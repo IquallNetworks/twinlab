@@ -11,9 +11,22 @@ authenticates as. The first one is the bootstrap admin from
 Managing users needs `user:manage`. You can create them, reset passwords,
 deactivate them and delete them.
 
+**Resetting someone's password** is a button on their row in the Users page. It
+asks for no current password — an administrator does not know it — and signs
+out every session that user has open, so tell them the new one. Their API keys
+and SSH keys are separate credentials and keep working. Your own row does not
+offer it: the reset would revoke the session you are working in.
+
+**Deactivating** is the reversible half of deletion. It signs out the account's
+sessions and stops its API keys and SSH keys authorizing, while the record, its
+roles and the labs it owns stay exactly as they were — activating again
+restores access. **Deleting** removes the account with its credentials and every
+role it holds; labs it owned are kept, with no owner.
+
 Twinlab refuses to deactivate or delete the **only active administrator**, with
 a `last_admin` error. That guard exists so nobody locks the deployment out of
-itself.
+itself. The Users page refuses both on your own row for the same reason — each
+would end the session you are working in.
 
 Changing your own password on the Account page keeps you signed in. It does not
 touch your other sessions.

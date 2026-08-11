@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { VIEWER } from '../../fixtures/fixtures'
 import { expectToast } from '../../lib/toast'
 
-test('create the limited user through the Users page', async ({ page }) => {
+test('create the limited user through the Users page', async ({ page, browser }) => {
   await page.goto('/users')
   await expect(page).toHaveTitle('Twinlab — Users')
   await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible()
@@ -36,6 +36,72 @@ test('create the limited user through the Users page', async ({ page }) => {
   await viewerRow.getByRole('button', { name: 'Edit roles' }).click()
   await expect(page.getByText(`Roles for ${VIEWER.username}`)).toBeVisible()
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+
+  // Administrative reset: no current password asked for. Set a throwaway,
+  // prove the viewer can sign in with it, then put the fixture password back —
+  // 09 signs in with that one.
+  const throwaway = 'e2e-viewer-throwaway'
+  await viewerRow.getByRole('button', { name: 'Reset password' }).click()
+  await expect(dialog.getByText(`Reset password for ${VIEWER.username}`)).toBeVisible()
+  await dialog.getByLabel('New password', { exact: true }).fill(throwaway)
+  await dialog.getByLabel('Confirm new password').fill('something else')
+  await dialog.getByRole('button', { name: 'Reset password' }).click()
+  await expect(dialog.getByText('Passwords do not match')).toBeVisible()
+  await dialog.getByLabel('Confirm new password').fill(throwaway)
+  await dialog.getByRole('button', { name: 'Reset password' }).click()
+  await expectToast(page, `Password reset for ${VIEWER.username}`)
+
+  const viewerContext = await browser.newContext()
+  const viewerPage = await viewerContext.newPage()
+  await viewerPage.goto('/login')
+  await viewerPage.getByLabel('Username').fill(VIEWER.username)
+  await viewerPage.getByLabel('Password', { exact: true }).fill(throwaway)
+  await viewerPage.getByRole('button', { name: 'Sign in' }).click()
+  await expect(viewerPage.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await viewerContext.close()
+
+  await viewerRow.getByRole('button', { name: 'Reset password' }).click()
+  await dialog.getByLabel('New password', { exact: true }).fill(VIEWER.password)
+  await dialog.getByLabel('Confirm new password').fill(VIEWER.password)
+  await dialog.getByRole('button', { name: 'Reset password' }).click()
+  await expectToast(page, `Password reset for ${VIEWER.username}`)
+
+  // Deactivation is the reversible half of delete, and the status badge follows.
+  await viewerRow.getByRole('button', { name: 'Deactivate' }).click()
+  const confirm = page.getByRole('alertdialog')
+  await expect(confirm.getByText(`Deactivate ${VIEWER.username}?`)).toBeVisible()
+  await confirm.getByRole('button', { name: 'Deactivate' }).click()
+  await expectToast(page, `Deactivated ${VIEWER.username}`)
+  await expect(viewerRow.getByText('inactive', { exact: true })).toBeVisible()
+
+  // Reactivating needs no confirmation — it restores what deactivating suspended.
+  await viewerRow.getByRole('button', { name: 'Activate' }).click()
+  await expectToast(page, `Activated ${VIEWER.username}`)
+  await expect(viewerRow.getByText('active', { exact: true })).toBeVisible()
+
+  // Delete, on a throwaway account nothing later in the suite needs.
+  await page.getByRole('button', { name: 'New user' }).click()
+  await dialog.getByLabel('Username').fill('e2e-temp')
+  await dialog.getByLabel('Password', { exact: true }).fill('e2e-temp-password')
+  await dialog.getByRole('button', { name: 'Create' }).click()
+  await expectToast(page, 'Created user e2e-temp')
+  await expect(page.getByText('3 accounts', { exact: true })).toBeVisible()
+
+  const tempRow = page.getByRole('row').filter({ hasText: 'e2e-temp' })
+  await tempRow.getByRole('button', { name: 'Delete' }).click()
+  await expect(confirm.getByText('Delete e2e-temp?')).toBeVisible()
+  await confirm.getByRole('button', { name: 'Delete' }).click()
+  await expectToast(page, 'Deleted user e2e-temp')
+  await expect(page.getByText('2 accounts', { exact: true })).toBeVisible()
+
+  // Never on your own row: all three would act on the session making the request.
+  await expect(adminRow.getByRole('button', { name: 'Reset password' })).toBeDisabled()
+  await expect(adminRow.getByRole('button', { name: 'Deactivate' })).toBeDisabled()
+  await expect(adminRow.getByRole('button', { name: 'Delete' })).toBeDisabled()
+  await expect(adminRow.getByRole('button', { name: 'Delete' })).toHaveAttribute(
+    'title',
+    'You cannot delete the account you are signed in as',
+  )
 
   // The dashboard admin card follows.
   await page.goto('/')

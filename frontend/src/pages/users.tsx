@@ -6,6 +6,17 @@ import { z } from 'zod'
 
 import { FieldError } from '@/components/field-error'
 import { PasswordInput } from '@/components/password-input'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -32,7 +43,7 @@ import {
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
-import { rolesQueryOptions, usersQueryOptions } from '@/lib/queries'
+import { meQueryOptions, rolesQueryOptions, usersQueryOptions } from '@/lib/queries'
 import { globalRoles } from '@/lib/roles'
 import type { UserSummary } from '@/lib/schemas'
 import { useDocumentTitle } from '@/lib/use-document-title'
@@ -258,9 +269,279 @@ function EditRolesDialog({ user }: { user: UserSummary }) {
   )
 }
 
+// The 8-character floor mirrors the server's own constraint; confirm-match is
+// ours (the wire takes a single password).
+const resetPasswordSchema = z
+  .object({
+    next: z.string().min(8, 'Password must be at least 8 characters'),
+    confirm: z.string(),
+  })
+  .refine((value) => value.next === value.confirm, {
+    message: 'Passwords do not match',
+    path: ['confirm'],
+  })
+
+/** Administrative reset of someone else's password. The current password is
+ * not asked for — an admin does not know it — and every one of the target's
+ * sessions is signed out, so they are locked out until told the new one.
+ *
+ * Not offered on the caller's own row: the same route revokes the session
+ * making the request, so a self-reset would sign the admin out mid-click. The
+ * Account page's self-service change is the one that keeps this session, and
+ * is the only place a password change asks for the current one. */
+function ResetPasswordDialog({ user, isSelf }: { user: UserSummary; isSelf: boolean }) {
+  const [open, setOpen] = useState(false)
+
+  const reset = useMutation({
+    mutationFn: (value: z.infer<typeof resetPasswordSchema>) =>
+      api.setUserPassword(user.id, value.next),
+    onSuccess: () => {
+      toast.success(`Password reset for ${user.username}`)
+      setOpen(false)
+    },
+    onError: (err) => toastError(err, 'Could not reset password'),
+  })
+
+  const form = useForm({
+    defaultValues: { next: '', confirm: '' },
+    validators: { onSubmit: resetPasswordSchema },
+    onSubmit: ({ value }) => reset.mutate(value),
+  })
+
+  if (isSelf) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        disabled
+        title="Change your own password from Account — a reset here would sign you out"
+      >
+        Reset password
+      </Button>
+    )
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) form.reset()
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          Reset password
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            void form.handleSubmit()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Reset password for {user.username}</DialogTitle>
+            <DialogDescription>
+              Set a new password without knowing the current one. Every session {user.username} has
+              open is signed out, so tell them the new password. API keys and SSH keys are separate
+              credentials and keep working.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4 py-4">
+            <form.Field name="next">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={field.name}>New password</Label>
+                  <PasswordInput
+                    id={field.name}
+                    autoComplete="new-password"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+
+            <form.Field name="confirm">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={field.name}>Confirm new password</Label>
+                  <PasswordInput
+                    id={field.name}
+                    autoComplete="new-password"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+          </div>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={reset.isPending}>
+              {reset.isPending ? 'Resetting…' : 'Reset password'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// The server's own `last_admin` rule (409 on deactivate and on delete): an
+// ACTIVE user holding a direct global admin binding, with no OTHER active user
+// holding one. A UserSummary's `roles` is exactly that set of direct global
+// bindings, so this mirrors the rule rather than approximating it.
+function isLastActiveAdmin(user: UserSummary, users: UserSummary[]): boolean {
+  if (!user.is_active || !user.roles.includes('admin')) return false
+  return !users.some((u) => u.id !== user.id && u.is_active && u.roles.includes('admin'))
+}
+
+/** Why a row refuses a lifecycle verb, or null when it allows it.
+ *
+ * Both rules are the server's — it answers 409 `last_admin`, and either verb
+ * aimed at your own account would end the session making the request — but a
+ * disabled button carrying the reason beats a toast after the click. */
+function blockedReason(
+  verb: 'deactivate' | 'delete',
+  user: UserSummary,
+  isSelf: boolean,
+  users: UserSummary[],
+): string | null {
+  if (isSelf) return `You cannot ${verb} the account you are signed in as`
+  if (isLastActiveAdmin(user, users)) {
+    return `Twinlab keeps one active administrator — you cannot ${verb} the last one`
+  }
+  return null
+}
+
+/** The reversible half of delete. Deactivating suspends every credential the
+ * account has — sessions, API keys, SSH keys — while leaving the record, its
+ * roles and its labs alone, so only that direction asks for confirmation;
+ * activating again restores exactly what it suspended. */
+function SetActiveButton({ user, blocked }: { user: UserSummary; blocked: string | null }) {
+  const queryClient = useQueryClient()
+  const setActive = useMutation({
+    mutationFn: (isActive: boolean) => api.setUserActive(user.id, isActive),
+    onSuccess: async (updated) => {
+      await queryClient.invalidateQueries({ queryKey: usersQueryOptions.queryKey })
+      toast.success(
+        updated.is_active ? `Activated ${user.username}` : `Deactivated ${user.username}`,
+      )
+    },
+    onError: (err) => toastError(err, 'Could not change status'),
+  })
+
+  if (!user.is_active) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={setActive.isPending}
+        onClick={() => setActive.mutate(true)}
+      >
+        Activate
+      </Button>
+    )
+  }
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={blocked !== null || setActive.isPending}
+          title={blocked ?? undefined}
+        >
+          Deactivate
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Deactivate {user.username}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Signs out their sessions and stops their API keys and SSH keys authorizing. The
+            account, its roles and the labs it owns are untouched — activating again restores
+            access.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => setActive.mutate(false)}>Deactivate</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+/** Deletion, which unlike deactivation cannot be undone — and unlike a group's
+ * deletion is not only about grants: the account's credentials and role
+ * bindings go with it, while the labs it owns SURVIVE with no owner (the
+ * server nulls the reference rather than cascading). The dialog says so,
+ * because an ownerless lab is a surprise worth not discovering later. */
+function DeleteUserButton({ user, blocked }: { user: UserSummary; blocked: string | null }) {
+  const queryClient = useQueryClient()
+  const del = useMutation({
+    mutationFn: () => api.deleteUser(user.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: usersQueryOptions.queryKey })
+      toast.success(`Deleted user ${user.username}`)
+    },
+    onError: (err) => toastError(err, 'Could not delete user'),
+  })
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={blocked !== null || del.isPending}
+          title={blocked ?? undefined}
+        >
+          Delete
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {user.username}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the account with its sessions, API keys, SSH keys and every role it
+            holds. Labs it owns are kept, with no owner. Deactivating instead suspends access and
+            can be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => del.mutate()}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
 export function UsersPage() {
   useDocumentTitle('Users')
   const { data: users, isPending, isError, error } = useQuery(usersQueryOptions)
+  // `me` carries no id, but usernames are unique — enough to spot the caller's
+  // own row, which must not offer a reset, a deactivation or a delete: all
+  // three would act on the session making the request.
+  const { data: me } = useQuery(meQueryOptions)
+  const isSelf = (user: UserSummary) => user.username === me?.username
 
   return (
     <div className="flex flex-col gap-6">
@@ -333,7 +614,18 @@ export function UsersPage() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    <EditRolesDialog user={user} />
+                    <div className="flex items-center justify-end gap-2">
+                      <EditRolesDialog user={user} />
+                      <ResetPasswordDialog user={user} isSelf={isSelf(user)} />
+                      <SetActiveButton
+                        user={user}
+                        blocked={blockedReason('deactivate', user, isSelf(user), users)}
+                      />
+                      <DeleteUserButton
+                        user={user}
+                        blocked={blockedReason('delete', user, isSelf(user), users)}
+                      />
+                    </div>
                   </TableCell>
                 </TableRow>
               ))

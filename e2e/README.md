@@ -38,8 +38,12 @@ always opens on one admin user and zero labs.
 # The host-shared lab-files dir (same-path invariant, like the dev stack's):
 sudo mkdir -p /var/lib/twinlab-e2e/lab-files
 
-# Node images the journey deploys (all pullable):
-docker pull ghcr.io/sysoleg/vyos-container
+# Node images the journey deploys. VyOS is pinned by digest + local tag (the
+# registry only publishes a rolling :latest) — the tag must match the catalog's
+# pin (see the root README's "Up" section):
+docker pull ghcr.io/sysoleg/vyos-container@sha256:dc8d4233b2b7e9e94d96fd8d10a40a6b256c5d1aec1c960e02cdf835ca68fe50
+docker tag ghcr.io/sysoleg/vyos-container@sha256:dc8d4233b2b7e9e94d96fd8d10a40a6b256c5d1aec1c960e02cdf835ca68fe50 \
+  twinlab/vyos:2026.05.30-0046-rolling
 docker pull quay.io/frrouting/frr:10.6.1
 docker pull python:3.13-alpine
 

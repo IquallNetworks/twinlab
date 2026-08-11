@@ -60,6 +60,7 @@ def _variants_by_node(specs: list[ConfigTemplateSpec], name: str) -> dict[str | 
 def _carry_nodes(specs: list[ConfigTemplateSpec]) -> set[str | None]:
     return set(_variants_by_node(specs, "imported"))
 
+
 # Plus the unnumbered wire: an L2 link no addressing could infer.
 _WIRING_WITH_L2 = [*_WIRING, ["r1:eth2", "r2:eth2"]]
 

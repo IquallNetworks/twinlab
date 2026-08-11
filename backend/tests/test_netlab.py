@@ -5,6 +5,7 @@ from typing import cast
 import yaml
 
 from twinlab_backend.result import Err, Ok
+from twinlab_backend.services.device_catalog import IMAGE_PINS
 from twinlab_backend.services.netlab import (
     DEVICE_KMODS,
     PROVIDER_KMODS,
@@ -27,6 +28,27 @@ defaults.device: vyos
 nodes: [r1, r2]
 links: [r1-r2]
 """
+
+
+def test_create_emits_pinned_images() -> None:
+    # The vyos image pin (device_catalog.IMAGE_PINS): the workdir
+    # topology-defaults.yml overrides netlab's rolling :latest default, so
+    # every created topology deploys the pinned local tag — while an explicit
+    # node `image:` still wins (node data beats defaults; both proven live).
+    definition = """\
+provider: clab
+defaults.device: vyos
+nodes:
+  r1:
+  r2: { image: custom/vyos:x }
+links: [r1-r2]
+"""
+    result = create_clab_topology(definition)
+    assert isinstance(result, Ok), result
+    topology = cast("dict[str, object]", result.value.topology["topology"])
+    nodes = cast("dict[str, dict[str, object]]", topology["nodes"])
+    assert nodes["r1"]["image"] == IMAGE_PINS["vyos"]
+    assert nodes["r2"]["image"] == "custom/vyos:x"
 
 
 def test_create_generates_clab_topology_and_links() -> None:

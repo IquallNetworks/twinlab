@@ -16,6 +16,7 @@ import yaml
 from twinlab_backend.api.catalog import build_catalog
 from twinlab_backend.result import Err, Ok
 from twinlab_backend.services.device_catalog import (
+    IMAGE_PINS,
     SUPPORTED_DEVICES,
     image_reference,
 )
@@ -71,7 +72,25 @@ def test_image_mirror_matches_installed_netlab() -> None:
         assert path is not None, f"no netlab definition for {spec.device}"
         device_data = cast("dict[str, object]", yaml.safe_load(path.read_text()))
         clab = cast("dict[str, object]", device_data["clab"])
-        assert clab["image"] == spec.image, spec.device
+        if spec.device in IMAGE_PINS:
+            # A pinned device deliberately diverges from netlab's default: the
+            # catalog serves the pin (one constant, so they cannot drift), and
+            # local-only is definitional — the pin is a local tag no registry
+            # serves. netlab's own default is still watched below, so an
+            # upstream image move remains an occasion to re-check the pin.
+            assert spec.image == IMAGE_PINS[spec.device], spec.device
+            assert spec.local_only, spec.device
+        else:
+            assert clab["image"] == spec.image, spec.device
+
+    # vyos's pin exists because netlab's default publishes only :latest (a
+    # rolling nightly). If netlab moves off this repo, the pin's premise —
+    # and its digest — must be revisited, so fail HERE.
+    vyos_data = cast(
+        "dict[str, object]", yaml.safe_load((root / "devices" / "vyos.yml").read_text())
+    )
+    vyos_clab = cast("dict[str, object]", vyos_data["clab"])
+    assert vyos_clab["image"] == "ghcr.io/sysoleg/vyos-container"
 
 
 def test_image_reference_normalizes_untagged() -> None:
@@ -87,7 +106,7 @@ def test_image_reference_normalizes_untagged() -> None:
 
 def test_build_catalog_matches_presence() -> None:
     catalog = build_catalog(
-        frozenset({"ghcr.io/sysoleg/vyos-container:latest", "python:3.13-alpine"})
+        frozenset({"twinlab/vyos:2026.05.30-0046-rolling", "python:3.13-alpine"})
     )
     assert catalog.live
     by_device = {d.device: d for d in catalog.devices}

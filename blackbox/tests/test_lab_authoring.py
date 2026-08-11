@@ -4,6 +4,8 @@ All cheap (no deploys) — suites/templates only take effect on the next
 configure, which never happens here.
 """
 
+from typing import cast
+
 import pytest
 from twinlab_client import (
     ConfigTemplateSpec,
@@ -188,16 +190,19 @@ async def test_facts_namespace_from_authored_record(
     mgmt = n1["mgmt"]
     assert isinstance(mgmt, dict)
     assert isinstance(mgmt["ifname"], str)
-    interfaces = n1["interfaces"]
-    assert isinstance(interfaces, list) and interfaces
-    interface = interfaces[0]
+    raw_interfaces = n1["interfaces"]
+    assert isinstance(raw_interfaces, list) and raw_interfaces
+    interface = cast("list[object]", raw_interfaces)[0]
     assert isinstance(interface, dict)
-    assert isinstance(interface["ifname"], str)
-    assert isinstance(interface["ifindex"], int)
-    assert isinstance(interface["type"], str)
-    neighbors = interface["neighbors"]
-    assert isinstance(neighbors, list) and neighbors
-    assert neighbors[0]["node"] == "n2"
+    entry = cast("dict[str, object]", interface)
+    assert isinstance(entry["ifname"], str)
+    assert isinstance(entry["ifindex"], int)
+    assert isinstance(entry["type"], str)
+    raw_neighbors = entry["neighbors"]
+    assert isinstance(raw_neighbors, list) and raw_neighbors
+    neighbor = cast("list[object]", raw_neighbors)[0]
+    assert isinstance(neighbor, dict)
+    assert cast("dict[str, object]", neighbor)["node"] == "n2"
 
 
 async def test_facts_partition_marks_unpromised_keys(
@@ -221,14 +226,15 @@ async def test_facts_partition_marks_unpromised_keys(
 
     # The partition is per-object, not top-level-only: a linux node's interface
     # carries netlab's `mtu` under the ENTRY's own `_extras`.
-    interfaces = n1["interfaces"]
-    assert isinstance(interfaces, list)
-    interface = interfaces[0]
+    raw_interfaces = n1["interfaces"]
+    assert isinstance(raw_interfaces, list)
+    interface = cast("list[object]", raw_interfaces)[0]
     assert isinstance(interface, dict)
-    interface_extras = interface.get("_extras")
+    entry = cast("dict[str, object]", interface)
+    interface_extras = entry.get("_extras")
     assert isinstance(interface_extras, dict)
     assert "mtu" in interface_extras
-    assert "mtu" not in interface
+    assert "mtu" not in entry
 
 
 async def test_run_unknown_suite_is_404(admin: TwinlabClient, make_lab: LabFactory) -> None:

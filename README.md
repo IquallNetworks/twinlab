@@ -99,7 +99,15 @@ don't move it while labs are deployed.
 ### 3. Up
 
 ```bash
-docker pull ghcr.io/sysoleg/vyos-container:latest   # or whichever platform you'll use
+# VyOS is PINNED to an exact upstream build (the registry publishes only a
+# rolling :latest, so reproducibility needs a digest): pull it by digest and
+# tag it with the VyOS version it contains. The catalog expects this tag —
+# bumping the pin means updating the digest+tag here AND in
+# backend/src/twinlab_backend/services/device_catalog.py.
+docker pull ghcr.io/sysoleg/vyos-container@sha256:dc8d4233b2b7e9e94d96fd8d10a40a6b256c5d1aec1c960e02cdf835ca68fe50
+docker tag ghcr.io/sysoleg/vyos-container@sha256:dc8d4233b2b7e9e94d96fd8d10a40a6b256c5d1aec1c960e02cdf835ca68fe50 \
+  twinlab/vyos:2026.05.30-0046-rolling
+
 docker compose up -d --build
 ```
 

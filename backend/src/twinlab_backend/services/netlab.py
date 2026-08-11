@@ -27,6 +27,7 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 
 from twinlab_backend.result import Err, Ok, Result
+from twinlab_backend.services.device_catalog import IMAGE_PINS
 
 # A custom-config template relpath (mirrors the models/runner contract): relative,
 # traversal-free, `.j2`. `netlab create` validates that every template a
@@ -487,6 +488,16 @@ def create_clab_topology(
         written = _write_templates(Path(workdir), templates or {})
         if written is not None:
             return Err(written)
+        # Image pins (device_catalog.IMAGE_PINS): netlab reads a
+        # `topology-defaults.yml` beside the topology and merges it over its
+        # device data, so the pinned image lands in the emitted clab topology
+        # for EVERY create — dry validation, deploy, links/facts backfill —
+        # with nothing for a definition to know. An explicit node `image:`
+        # still wins (node data beats defaults).
+        pins = {
+            "devices": {device: {"clab": {"image": image}} for device, image in IMAGE_PINS.items()}
+        }
+        _ = (Path(workdir) / "topology-defaults.yml").write_text(yaml.safe_dump(pins))
 
         try:
             proc = subprocess.run(

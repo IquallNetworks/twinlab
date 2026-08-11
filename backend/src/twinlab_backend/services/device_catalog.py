@@ -38,6 +38,26 @@ class CatalogDeviceSpec:
     local_only: bool
 
 
+# The vyos image PIN (maintainer decision 2026-08-07). netlab's default —
+# ghcr.io/sysoleg/vyos-container — publishes exactly ONE tag (:latest, a VyOS
+# rolling nightly rebuilt upstream at will), so "the same definition always
+# produces the same environment" held only until the next upstream rebuild.
+# The pin is a LOCAL tag: host setup pulls the exact build by DIGEST and tags
+# it (see README "Node images"), the tag names the VyOS version inside, and
+# `create_clab_topology` writes the override into every netlab workdir
+# (topology-defaults.yml) so netlab emits it into the clab topology. Bumping
+# the pin is a deliberate act: pick a new upstream digest, read its
+# /etc/os-release version, update BOTH constants and the README commands.
+#   Upstream build: ghcr.io/sysoleg/vyos-container
+#     @sha256:dc8d4233b2b7e9e94d96fd8d10a40a6b256c5d1aec1c960e02cdf835ca68fe50
+_VYOS_PINNED_IMAGE = "twinlab/vyos:2026.05.30-0046-rolling"
+
+# Devices whose deploy image deliberately DIVERGES from netlab's default —
+# written into every `netlab create` workdir as topology-defaults.yml. Keys
+# are catalog slugs; the drift guard checks these against the catalog specs
+# and still watches netlab's own default for upstream moves.
+IMAGE_PINS: dict[str, str] = {"vyos": _VYOS_PINNED_IMAGE}
+
 SUPPORTED_DEVICES: tuple[CatalogDeviceSpec, ...] = (
     CatalogDeviceSpec(
         device="vyos",
@@ -58,8 +78,11 @@ SUPPORTED_DEVICES: tuple[CatalogDeviceSpec, ...] = (
             "vrf",
             "vxlan",
         ),
-        image="ghcr.io/sysoleg/vyos-container",
-        local_only=False,
+        image=_VYOS_PINNED_IMAGE,
+        # Local tag by definition — the registry has no such tag to pull, so
+        # a missing image must fail the pre-flight fast, not "warn and let
+        # docker pull" its way into a late clab-api error.
+        local_only=True,
     ),
     CatalogDeviceSpec(
         device="frr",

@@ -18,7 +18,9 @@ test('the node table reports every container running with its identity', async (
     await expect(row.getByText(/^10\.79\.\d+\.\d+$/)).toBeVisible()
   }
   const r1 = page.getByRole('row').filter({ hasText: `clab-${E2E_NET_NAME}-r1` })
-  await expect(r1.getByText('ghcr.io/sysoleg/vyos-container')).toBeVisible()
+  // The pinned local tag (see the catalog's IMAGE_PINS) — proof the pin
+  // reaches the actually-deployed container, not just the catalog.
+  await expect(r1.getByText('twinlab/vyos:2026.05.30-0046-rolling')).toBeVisible()
   const r3 = page.getByRole('row').filter({ hasText: `clab-${E2E_NET_NAME}-r3` })
   await expect(r3.getByText(/frrouting\/frr/)).toBeVisible()
 

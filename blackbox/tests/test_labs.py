@@ -5,6 +5,7 @@ test_labs_deploy.py behind the `deploy` marker.
 """
 
 from collections.abc import Callable
+from typing import cast
 
 import pytest
 from twinlab_client import (
@@ -162,8 +163,9 @@ async def test_update_definition_rejects_unsupported_directives(
         _ = await admin.update_definition(lab.name, definition)
     assert excinfo.value.status_code == 422
     assert excinfo.value.code == "unsupported_directive"
-    directives = excinfo.value.extras["directives"]
-    assert isinstance(directives, list)
+    raw_directives = excinfo.value.extras["directives"]
+    assert isinstance(raw_directives, list)
+    directives = [cast("dict[str, object]", d) for d in cast("list[object]", raw_directives)]
     assert {d["key"] for d in directives} == {
         "tools",
         "defaults.netlab.up",
@@ -190,8 +192,9 @@ async def test_update_definition_rejects_tc_impairment(
         _ = await admin.update_definition(lab.name, definition)
     assert excinfo.value.status_code == 422
     assert excinfo.value.code == "unsupported_directive"
-    directives = excinfo.value.extras["directives"]
-    assert isinstance(directives, list)
+    raw_directives = excinfo.value.extras["directives"]
+    assert isinstance(raw_directives, list)
+    directives = [cast("dict[str, object]", d) for d in cast("list[object]", raw_directives)]
     assert {d["key"] for d in directives} == {"links[0].n1.tc", "links[0].tc"}
 
 

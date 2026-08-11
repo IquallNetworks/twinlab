@@ -250,10 +250,10 @@ migrations are part of starting up and need no separate step.
 are sibling containers on the host daemon, so stopping or rebuilding the stack
 leaves them running.
 
-Twinlab reconciles the gap on startup instead of pretending nothing happened. A
-Twinlab marks a job that was still running when the backend stopped as failed,
-with the code `backend_restart`, instead of leaving it pending forever. A lab
-stuck mid-deploy returns to a usable state.
+Twinlab reconciles the gap on startup instead of pretending nothing happened. It
+marks a job that was still running when the backend stopped as failed, with the
+code `backend_restart`, instead of leaving it pending forever. A lab stuck
+mid-deploy returns to a usable state.
 
 Two things to know about restarting during a long operation:
 

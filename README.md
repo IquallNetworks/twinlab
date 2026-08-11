@@ -302,8 +302,8 @@ Three projects sit beside the stack, none of them a service:
 | Project | What it is |
 | --- | --- |
 | [`client/`](client/) | `twinlab-client` — the distributable async Python client. |
-| [`blackbox/`](blackbox/) | The contract's enforcement: 148 tests driving a live stack through the client only, including real containerlab deploys behind a `deploy` marker. |
-| [`e2e/`](e2e/) | The browser layer's: 51 Playwright specs driving the real frontend against a dedicated stack that every run resets to an empty backend. |
+| [`blackbox/`](blackbox/) | The contract's enforcement: 154 tests driving a live stack through the client only, including real containerlab deploys behind a `deploy` marker. |
+| [`e2e/`](e2e/) | The browser layer's: 56 Playwright specs driving the real frontend against a dedicated stack that every run resets to an empty backend. |
 
 ## Documentation
 

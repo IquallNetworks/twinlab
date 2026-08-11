@@ -27,9 +27,9 @@ A session-scoped gate calls `GET /health/ready` first and aborts the whole run i
 unreachable or degraded — no test runs against a broken stack.
 
 One probe is opt-in: `TWINLAB_TEST_LAST_ADMIN_GUARD=1` enables the last-admin-guard test, which
-must aim a deactivation at the bootstrap admin itself — if the backend serves the endpoint but the
-guard is missing (a plausible mid-rework state), the "failing" test would lock the stack out. Leave
-it unset until the guard is implemented.
+must aim a deactivation at the bootstrap admin itself — against a backend missing the guard, the
+"failing" test would lock the stack out. The guard is implemented, so setting it against a current
+stack is safe; unset, the test reports as skipped.
 
 ## Conventions
 
@@ -76,7 +76,7 @@ it unset until the guard is implemented.
 | `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, batch actions, power, terminal, events |
 | `test_ssh_jump.py`     | (`deploy`) real `ssh` probes through the jump host: permitopen scoping, revocation, fail-safe |
 
-The backend implements the full v1.0 contract (twenty-four deltas — delta 12 made the four long
+The backend implements the full v1.0 contract (twenty-nine deltas — delta 12 made the four long
 operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the
 SSH jump host the ssh slices exercise; delta 14 the link table; deltas 15/16 the cross-lab job
 listing and the stream's job events, both covered in the cheap slice; delta 17 reworked test
@@ -101,8 +101,12 @@ unaddressed endpoint, and the wiring_invalid/wiring_conflict 422s; delta 24 batc
 actions — the cheap slice covers the up-front 422s (nothing executes) and the
 permission/existence split, the deploy slice one batch shaping BOTH endpoints of a link
 alongside a deliberately unknown node, proving the batch still RUNS with only that item
-ok=false),
+ok=false; delta 26 partitioned the fact namespace into the promised core plus `_extras`,
+asserted where the authoring slice reads facts; delta 27 made custom-config templates scoped
+records, covered in the authoring and imports slices; delta 28 added the test-command
+`mode: shell|cli` split, covered in the authoring slice; delta 29 the job step log, asserted
+in the jobs and deploy slices — delta 25 was withdrawn),
 and the suite is
-**entirely green** (141/141 with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
+**entirely green** (154 tests with the `deploy` marker and `TWINLAB_TEST_LAST_ADMIN_GUARD=1`). It is
 the contract's enforcement: run it after backend changes; a new red means either a regression or a
 contract change that must go through review.

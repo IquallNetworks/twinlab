@@ -7,7 +7,6 @@ gets a dummy session factory and clab client.
 
 import os
 from collections.abc import Callable, Coroutine
-from types import TracebackType
 from typing import cast
 
 import httpx
@@ -23,15 +22,9 @@ from twinlab_backend.services.clab_api import ClabApiClient, ClabApiError
 
 
 class _NullSession:
-    async def __aenter__(self) -> AsyncSession:
-        return cast("AsyncSession", self)
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
+    # The surface get_db uses: constructed by the factory, closed (shielded)
+    # at request teardown. These routes never touch the session itself.
+    async def close(self) -> None:
         return None
 
 

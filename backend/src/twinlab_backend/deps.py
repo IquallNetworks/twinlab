@@ -5,11 +5,13 @@ on `app.state`; these accessors hand them to route handlers as typed
 dependencies.
 """
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, Request
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from twinlab_backend.config import Settings
 from twinlab_backend.services.clab_api import ClabApiClient
@@ -45,9 +47,41 @@ def get_runner_client(request: Request) -> RunnerClient:
     return request.app.state.runner_client
 
 
+@asynccontextmanager
+async def shielded_session(
+    factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncSession]:
+    """A pooled session whose close SURVIVES task cancellation.
+
+    A client disconnect cancels the serving task, and with a plain
+    `async with`, the CancelledError interrupts `session.close()` itself — the
+    pooled connection is never checked back in. Enough of those (browsers and
+    tests abandon in-flight requests constantly) exhausts the pool, and every
+    later request blocks on checkout: observed live 2026-08-07 as SQLAlchemy's
+    "non-checked-in connection" GC warning followed by the frontend blanking
+    behind the auth gate — first on plain routes, then (after get_db was
+    fixed) once more in the SSE handshake. shield() lets the close run to
+    completion in its own task while the cancelled caller unwinds. Use this
+    for EVERY session opened in a client-cancellable path.
+
+    A rare residual warning (~once per full e2e run) can still surface from
+    SQLAlchemy's OWN terminate path — connectors/asyncio.py already shields
+    `_terminate_graceful_close()` and the greenlet bridge re-raises the
+    pending cancellation through it anyway. That is upstream behavior, not a
+    seam here; the GC terminate is the designed backstop (pool slot
+    reclaimed, no exhaustion). Don't chase it unless the per-run count
+    grows."""
+    session = factory()
+    try:
+        yield session
+    finally:
+        await asyncio.shield(session.close())
+
+
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
-    """Yield a request-scoped session; it is closed when the request ends."""
-    async with request.app.state.session_factory() as session:
+    """Yield a request-scoped session; it is closed (shielded — see
+    `shielded_session`) when the request ends."""
+    async with shielded_session(request.app.state.session_factory) as session:
         yield session
 
 

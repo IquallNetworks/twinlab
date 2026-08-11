@@ -31,7 +31,7 @@ from twinlab_backend.auth.dependencies import resolve_credentials
 from twinlab_backend.auth.service import permitted_lab_names
 from twinlab_backend.config import Settings
 from twinlab_backend.db.models import User
-from twinlab_backend.deps import ClabClientDep, SettingsDep
+from twinlab_backend.deps import ClabClientDep, SettingsDep, shielded_session
 from twinlab_backend.models import JobEvent, LabEvent
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.clab_api import LabEvent as ClabLabEvent
@@ -51,7 +51,9 @@ async def _authenticate(request: Request, settings: Settings) -> User:
     """Resolve the caller (Bearer key or session cookie) in a short-lived DB
     session. Any authenticated user may open the stream; events are filtered
     per lab."""
-    async with request.app.state.session_factory() as session:
+    # shielded_session: an SSE client that gives up mid-handshake cancels this
+    # task, and an unshielded close leaks the pooled connection (seen live).
+    async with shielded_session(request.app.state.session_factory) as session:
         user = await resolve_credentials(
             session,
             settings,
@@ -64,7 +66,7 @@ async def _authenticate(request: Request, settings: Settings) -> User:
 
 
 async def _resolve_readable(request: Request, user: User) -> set[str] | None:
-    async with request.app.state.session_factory() as session:
+    async with shielded_session(request.app.state.session_factory) as session:
         return await permitted_lab_names(session, user, perms.LAB_READ)
 
 

@@ -31,6 +31,7 @@ from twinlab_backend.auth import permissions as perms
 from twinlab_backend.auth.dependencies import resolve_credentials
 from twinlab_backend.auth.service import effective_permissions_for
 from twinlab_backend.config import Settings
+from twinlab_backend.deps import shielded_session
 from twinlab_backend.result import Err
 from twinlab_backend.services import lab_store
 from twinlab_backend.services.clab_api import ClabApiClient
@@ -56,8 +57,9 @@ async def _authorize(websocket: WebSocket, settings: Settings, lab_name: str) ->
     """Resolve the handshake credentials (Bearer key or session cookie) in a
     short-lived DB session and check the caller holds `lab:terminal` on *this*
     lab. The session is closed before the relay so a long-lived terminal
-    doesn't hold a DB connection."""
-    async with websocket.app.state.session_factory() as session:
+    doesn't hold a DB connection (shielded — a handshake abandoned mid-auth
+    must not leak the pooled connection)."""
+    async with shielded_session(websocket.app.state.session_factory) as session:
         user = await resolve_credentials(
             session,
             settings,

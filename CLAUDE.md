@@ -131,7 +131,12 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `src/content/guide` is a symlink out of the build context and the glob would otherwise match
   NOTHING silently (a `test -f` in the build stage guards it). The Vite dev server + HMR is the
   `dev` target, selected by `compose.dev.yaml` (both modes share one image tag — keep `--build`
-  when switching). **Rebuilt in place on the v1.0 wire**
+  when switching). `FRONTEND_BASE_PATH` (2026-08-11) serves the app under a subpath for a
+  fronting proxy: build-time (Vite `base` → asset URLs; `lib/base-path.ts` feeds the router
+  `basepath` and every non-router URL — fetch/SSE/WS; nginx.conf is a template the build stage
+  renders, locations moved under the base, `set $backend` BEFORE the `rewrite … break` since
+  break ends the rewrite phase), so the fronting proxy strips nothing; dev server stays at
+  root. **Rebuilt in place on the v1.0 wire**
   (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–5 ALL done —
   frontend step 2 complete**. The parked backend batch is in progress — **link table + link oper
   state DONE 2026-07-30** (contract delta 14; the frontend gained a Links card on the Nodes tab,

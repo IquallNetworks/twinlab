@@ -101,6 +101,11 @@ disruptive:
   `SESSION_COOKIE_SECURE=true` so the session cookie is Secure-only.
   (`DEPLOYMENT_URL` only matters under the development override
   `compose.dev.yaml`, whose dev server rejects unknown `Host` headers.)
+  A fronting proxy that routes a subpath — `https://host/twinlab` — to this
+  stack needs **`FRONTEND_BASE_PATH=/twinlab`**: the base is baked into the
+  frontend image, so changing it is an `up -d --build`. The proxy passes URIs
+  through unchanged and must forward WebSocket upgrades (`Upgrade` +
+  `Connection` headers).
 
 ## Node images
 

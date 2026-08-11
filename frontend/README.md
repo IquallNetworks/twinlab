@@ -14,6 +14,12 @@ bind-mounted source and the proxy from `vite.config.ts` (`VITE_PROXY_TARGET`, de
 `http://localhost:8000`). Either way the session cookie is httpOnly and rides that same-origin
 proxy, so there is no token to store.
 
+The production build can serve under a subpath for a fronting proxy (`FRONTEND_BASE_PATH=/twinlab`
+in `.env`): Vite bakes the base into asset URLs, `src/lib/base-path.ts` derives the router
+`basepath` and the API/SSE/WebSocket prefixes from it, and the image's nginx config is rendered
+with every location moved under the base — so the container serves `/twinlab/…` natively and the
+proxy strips nothing. The dev server always runs at the root.
+
 The operator guide is compiled into the bundle from `docs/guide/` through the `src/content/guide`
 symlink. That target sits outside the docker build context, so the production build stage pulls it
 in via the `docs` additional build context (compose supplies it; a bare `docker build` needs

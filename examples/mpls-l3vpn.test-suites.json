@@ -72,7 +72,7 @@
   },
   "reachability": {
     "stage": "runtime",
-    "description": "On-demand cross-VPN traffic proof: ping pe4's customer loopback from inside pe1's VRF (and back). Live traffic, so a runtime suite, not a config-time gate.",
+    "description": "On-demand cross-VPN traffic proof: ping pe4's customer loopback from inside pe1's VRF (and back). Live traffic, so a runtime suite, not a config-time gate. Both cases are `mode: cli` (contract delta 28): a VRF-scoped ping exists only in VyOS op-mode, while the exec transport lands in the container's shell, where `ping` is Linux's and has no `vrf` flag — so the backend rewrites the command through VyOS's op-mode wrapper.",
     "tests": {
       "vpn_ping_pe1_to_pe4": {
         "nodes": ["pe1"],
@@ -80,6 +80,7 @@
         "run": {
           "vyos": {
             "command": "ping {{ nodes.pe4.vrfs.vpn_a.loopback_address.ipv4 | address }} vrf vpn_a count 5",
+            "mode": "cli",
             "expect": { "contains": " 0% packet loss" }
           }
         }
@@ -90,6 +91,7 @@
         "run": {
           "vyos": {
             "command": "ping {{ nodes.pe1.vrfs.vpn_a.loopback_address.ipv4 | address }} vrf vpn_a count 5",
+            "mode": "cli",
             "expect": { "contains": " 0% packet loss" }
           }
         }

@@ -428,6 +428,32 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     Deliberately NOT absorbed: the delta-21 template library (authoring
     seeds the client composes — different concept, no shared defect).
 
+28. Test commands gain a LANGUAGE, and `interactive` stops lying (APPROVED
+    2026-08-10; design record docs/validation-transport.md). `TestCase`
+    gains ``mode: shell | cli``. "shell" is the default and means today's
+    behavior — the words go verbatim to whatever the transport lands in,
+    which for a docker-connection device is the CONTAINER'S SHELL, not the
+    NOS CLI. "cli" declares the device's own CLI and the backend rewrites
+    the command to reach it (per-device policy in
+    ``services/cli_adapters.py``: VyOS's op-mode wrapper, ``vtysh -c``,
+    ``birdc``, identity where the transport already lands in the CLI), with
+    a 422 when the device has no CLI of its own. This closes a whole class
+    of silent failure: ``ping X vrf Y count 5`` on VyOS reached Linux's
+    ping — no ``vrf`` flag — and the suite saw an empty stdout instead of
+    an explanation. ``TestResult.command`` now reports the ADAPTED command,
+    since that is what actually ran. Same delta: ``interactive: true`` on a
+    docker-transport node was a SILENT NO-OP and now opens a PTY-backed
+    ``docker exec -it`` session — which is also why `mode` and `interactive`
+    interact (VyOS op-mode comes from interactive shell init, so an
+    interactive `cli` command needs no wrapper). Deliberately NOT included:
+    a per-test TRANSPORT selector (exec vs ssh). It was considered and
+    deferred — "prove SSH works" is already expressible from a peer node
+    with `mode: shell`, the operator-terminal experience is the web
+    terminal's job, and the one thing it uniquely buys (asserting the
+    OUT-OF-LAB management path: source-based ACLs, AAA as seen from
+    outside) has no test asking for it yet. netlab keeps choosing the
+    transport per device, as it does today.
+
 Conventions:
 
 - Base path ``/api/v1``; OpenAPI at ``openapi.json`` (schema-check the real
@@ -1363,6 +1389,12 @@ class LabEvent:
 # Test-suite shapes (v2 — delta 17, APPROVED 2026-08-03)
 # --------------------------------------------------------------------------- #
 
+# PROPOSED (delta 28, APPROVED 2026-08-10): which interpreter a command's
+# words are for. The transport lands somewhere — a container shell for
+# docker-connection devices, the NOS CLI for SSH ones — and until now the
+# contract never said which, so a CLI-shaped command silently hit the shell.
+CommandMode = Literal["shell", "cli"]
+
 ParseMode = Literal["json", "textfsm"]
 # How a case turns stdout into data `compare` can assert on:
 # - "json": stdout must parse as JSON. On VyOS this costs nothing — FRR's
@@ -1427,16 +1459,32 @@ class TestCase:
     failure at run time (suite authored before the definition, later
     drifted) is that check's "error" result, never a crashed job.
 
-    `interactive` routes the exec through a persistent CLI channel when the
-    node's transport is SSH (a no-op over docker exec): IOS closes a
-    one-shot exec channel on timed commands (``ping ... repeat``,
-    ``traceroute``), truncating output after the first packet — the
-    persistent channel captures it all. Off by default: gates should assert
-    programmed state, not live traffic."""
+    `mode` (delta 28) names the LANGUAGE the command's words are in.
+    "shell" (default, and what every pre-delta-28 suite means) sends them
+    verbatim to whatever the transport lands in — for a docker-transport
+    device that is the CONTAINER'S SHELL, Debian userland, NOT the NOS CLI.
+    "cli" declares the device's own CLI and the server rewrites the command
+    to reach it (VyOS op-mode wrapper, ``vtysh -c`` on FRR, ``birdc``,
+    identity where the transport already lands in the CLI). 422
+    ``template_invalid`` when the device has no CLI of its own (linux,
+    dnsmasq: the shell IS the interface). Without this a CLI-shaped command
+    reached the wrong interpreter silently — ``ping X vrf Y count 5`` on
+    VyOS hit Linux's ping, which has no ``vrf`` flag.
+
+    `interactive` runs the command through a REAL interactive session
+    instead of a one-shot. On SSH transports that is a persistent netmiko
+    channel: IOS closes a one-shot exec channel on timed commands
+    (``ping ... repeat``, ``traceroute``), truncating output after the first
+    packet. On docker transports it is a PTY-backed ``docker exec -it``
+    (delta 28 — previously a silent no-op there), which also matters for
+    semantics: VyOS installs op-mode from interactive shell init, so a
+    ``mode: cli`` command needs NO wrapper on that path. Off by default:
+    gates should assert programmed state, not live traffic."""
 
     command: str
     expect: TestExpectation
     parse: ParseMode | None = None
+    mode: CommandMode = "shell"
     interactive: bool = False
 
 

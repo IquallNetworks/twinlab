@@ -11,6 +11,7 @@ from uuid import UUID
 
 from twinlab_client.errors import TwinlabProtocolError
 from twinlab_client.models import (
+    COMMAND_MODES,
     CONFIG_TEMPLATE_TIERS,
     CONFIG_TIME_STATUSES,
     CONFIGURE_STATUSES,
@@ -915,10 +916,15 @@ def parse_test_case(value: object) -> TestCase:
     interactive = obj.get("interactive", False)
     if not isinstance(interactive, bool):
         raise TwinlabProtocolError(where, "'interactive': expected a bool")
+    # Delta 28; absent on suites stored before it, which means "shell".
+    mode = obj.get("mode", "shell")
+    if not isinstance(mode, str):
+        raise TwinlabProtocolError(where, "'mode': expected a string")
     return TestCase(
         command=_get_str(obj, "command", where),
         expect=parse_test_expectation(_req(obj, "expect", where)),
         parse=parse_mode,
+        mode=_literal_value(mode, "mode", where, COMMAND_MODES),
         interactive=interactive,
     )
 
@@ -1144,6 +1150,7 @@ def test_case_to_wire(case: TestCase) -> dict[str, object]:
     wire: dict[str, object] = {
         "command": case.command,
         "expect": expectation_to_wire(case.expect),
+        "mode": case.mode,
         "interactive": case.interactive,
     }
     if case.parse is not None:

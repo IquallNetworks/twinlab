@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
+from twinlab_backend.services.cli_adapters import CommandMode
+
 # Status vocabularies, pinned as Literals so OpenAPI carries them (contract
 # delta 3). "created" is the lifecycle split's record-only state.
 type LabStatus = Literal["created", "deploying", "deployed", "destroyed"]
@@ -106,14 +108,24 @@ class TestCase(BaseModel):
     namespace (`node` / `nodes.<name>`, see GET /labs/{name}/facts) — whose
     promised core is stable contract while a path through `_extras` is
     netlab-shaped and may drift across netlab releases (delta 26).
-    `interactive` routes the exec through a persistent CLI channel when the
-    node's transport is SSH (IOS truncates timed commands like `ping ...
-    repeat` on a one-shot exec channel); it is a deliberate no-op over docker
-    exec, which already captures everything."""
+
+    `mode` (delta 28) names the LANGUAGE the command is written in: "shell"
+    (default) sends it verbatim to whatever the transport lands in — for a
+    docker-transport device that is the container's shell, NOT the NOS CLI —
+    while "cli" declares it is the device's own CLI and lets the backend
+    rewrite it into whatever reaches that CLI (see services/cli_adapters.py).
+    422 when a device has no CLI of its own (linux, dnsmasq).
+
+    `interactive` runs the command through a real interactive session rather
+    than a one-shot: a persistent netmiko CLI channel on SSH transports (IOS
+    truncates timed commands like `ping ... repeat` on a one-shot exec
+    channel) and a PTY-backed `docker exec -it` on docker transports (delta
+    28 — it was a silent no-op there before)."""
 
     command: str = Field(min_length=1)
     expect: TestExpectation
     parse: ParseMode | None = None
+    mode: CommandMode = "shell"
     interactive: bool = False
 
     @model_validator(mode="after")

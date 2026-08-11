@@ -23,13 +23,15 @@ from twinlab_backend.services.configimport.rewrite import rewrite_ios, rewrite_v
 from twinlab_backend.services.configimport.vyos import parse_vyos
 from twinlab_backend.services.configimport.wiring import is_mgmt_vrf
 
-# The dump command per import-capable device — what the exec transport runs
-# to collect the running config. VyOS's netlab transport is docker exec (a
-# plain shell, not the vyatta CLI), so op-mode commands need the wrapper —
-# proven live: the bare spelling returns an empty stdout.
+# The dump command per import-capable device, written in the DEVICE'S OWN CLI.
+# Reaching that CLI from the exec transport is `cli_adapters`' job (delta 28) —
+# the caller adapts these with mode "cli", which is what puts VyOS's op-mode
+# wrapper back in front of the bare spelling that would otherwise return an
+# empty stdout. Config-diff is pinned to the exec transport deliberately: it
+# must work on a lab whose config is broken, which is when it is worth running.
 DUMP_COMMANDS: dict[str, str] = {
     "iol": "show running-config",
-    "vyos": "/opt/vyatta/bin/vyatta-op-cmd-wrapper show configuration commands",
+    "vyos": "show configuration commands",
 }
 
 

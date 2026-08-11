@@ -48,6 +48,9 @@ _SUITES = {
                         command="show version",
                         expect=TestExpectation(compare={"list": [{"version": ".+"}]}),
                         parse="textfsm",
+                        # RouterOS reaches its own CLI over SSH, so `cli` is
+                        # legal there (and the identity) — delta 28.
+                        mode="cli",
                         interactive=True,
                     ),
                 },
@@ -57,6 +60,37 @@ _SUITES = {
         description="black-box smoke suite",
     )
 }
+
+
+async def test_cli_mode_is_rejected_on_a_device_with_no_cli(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Delta 28: `mode: cli` names the device's own CLI, and linux has none —
+    its shell IS the interface. A device-keyed case names its device, so this
+    is caught at PUT even before the lab has a definition, rather than
+    becoming a mis-sent command at run time."""
+    lab = await make_lab(None)
+    suites = {
+        "smoke": TestSuite(
+            tests={
+                "shell_only": ValidationTest(
+                    nodes=["n1"],
+                    run={
+                        "linux": TestCase(
+                            command="show interfaces",
+                            expect=TestExpectation(contains="lo"),
+                            mode="cli",
+                        )
+                    },
+                )
+            },
+            stage="runtime",
+        )
+    }
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.put_test_suites(lab.name, suites)
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "template_invalid"
 
 
 async def test_test_suites_roundtrip(admin: TwinlabClient, make_lab: LabFactory) -> None:

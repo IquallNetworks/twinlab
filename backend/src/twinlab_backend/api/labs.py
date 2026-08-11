@@ -103,6 +103,7 @@ from twinlab_backend.services.clab_api import (
 from twinlab_backend.services.clab_api import NetemImpairment as ClabNetemImpairment
 from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfaces
 from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
+from twinlab_backend.services.cli_adapters import adapt_command
 from twinlab_backend.services.configimport import diff as configimport_diff
 from twinlab_backend.services.custom_config import (
     BuiltinLibrary,
@@ -1640,9 +1641,14 @@ async def config_diff(
     results: list[NodeConfigDiffOut] = []
     for source in request.sources:
         device = devices[source.node]
-        collected = await runner.exec_command(
-            definition, source.node, configimport_diff.DUMP_COMMANDS[device], templates
+        # The dump command is written in the device's CLI; adapting it is what
+        # reaches that CLI from the exec transport's shell (delta 28).
+        dump = adapt_command(
+            device, configimport_diff.DUMP_COMMANDS[device], mode="cli", interactive=False
         )
+        if isinstance(dump, Err):
+            raise ApiError(422, "unsupported_device", f"node '{source.node}': {dump.error}")
+        collected = await runner.exec_command(definition, source.node, dump.value, templates)
         if isinstance(collected, Err):
             raise ApiError(
                 502,

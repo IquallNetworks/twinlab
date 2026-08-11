@@ -157,6 +157,11 @@ export const testCaseSchema = z.object({
   command: z.string(),
   expect: testExpectationSchema,
   parse: z.enum(['json', 'textfsm']).nullable().optional(),
+  // Delta 28: which interpreter the command's words are for. 'shell' (the
+  // default) is whatever the transport lands in — for a docker-transport
+  // device the container's shell, NOT the NOS CLI; 'cli' declares the
+  // device's own CLI and the server rewrites the command to reach it.
+  mode: z.enum(['shell', 'cli']).optional(),
   interactive: z.boolean().optional(),
 })
 export type TestCase = z.infer<typeof testCaseSchema>

@@ -844,6 +844,11 @@ class LabEvent:
 PARSE_MODES = ("json", "textfsm")
 ParseMode = Literal["json", "textfsm"]
 
+# What interpreter a test command's words are for (delta 28): the transport's
+# shell, or the device's own CLI (which the server reaches for you).
+COMMAND_MODES = ("shell", "cli")
+CommandMode = Literal["shell", "cli"]
+
 
 @dataclass(frozen=True, slots=True)
 class TestExpectation:
@@ -866,13 +871,23 @@ class TestCase:
     rendered per node against the lab's fact namespace (see `facts()`), whose
     promised core is stable contract while a path through `_extras` is
     netlab-shaped and may drift across netlab releases.
-    `interactive` routes the exec through a persistent CLI channel where the
-    node's transport is SSH (IOS truncates timed commands on a one-shot exec
-    channel); a deliberate no-op over docker exec."""
+
+    `mode` (delta 28) names the LANGUAGE the command is written in: "shell"
+    (default) sends it verbatim to whatever the transport lands in — for a
+    docker-transport device that is the container's shell, NOT the NOS CLI —
+    and "cli" declares the device's own CLI, which the server rewrites the
+    command to reach. 422 on a device that has no CLI of its own (linux,
+    dnsmasq).
+
+    `interactive` runs the command through a real interactive session: a
+    persistent netmiko channel on SSH transports (IOS truncates timed
+    commands on a one-shot exec channel) and a PTY-backed `docker exec -it`
+    on docker transports (delta 28 — a silent no-op there before)."""
 
     command: str
     expect: TestExpectation
     parse: ParseMode | None = None
+    mode: CommandMode = "shell"
     interactive: bool = False
 
 

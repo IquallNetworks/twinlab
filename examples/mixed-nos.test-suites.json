@@ -18,6 +18,7 @@
           },
           "routeros7": {
             "command": "/routing ospf neighbor print terse",
+            "mode": "cli",
             "expect": { "matches": "(?s)Full.*Full.*Full" }
           },
           "bird": {
@@ -64,6 +65,7 @@
         "run": {
           "routeros7": {
             "command": "/routing ospf neighbor print terse",
+            "mode": "cli",
             "parse": "textfsm",
             "expect": {
               "compare": {
@@ -101,6 +103,7 @@
         "run": {
           "routeros7": {
             "command": "/ping address={{ nodes.vyos1.loopback.ipv4 | address }} count=3",
+            "mode": "cli",
             "interactive": true,
             "expect": { "contains": "sent=3 received=3 packet-loss=0%" }
           }

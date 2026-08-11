@@ -75,7 +75,24 @@ rows exactly and fails loudly on an unmappable path; deliberately NO
 arbitrary-relpath side door, NO OS-version axis — netlab splits devices per
 major version (routeros/routeros7), minor versions ride the image override —
 and NOT absorbed into the delta-21 library, which is a different concept
-(client-composed authoring seeds vs netlab-rendered per-node config)).
+(client-composed authoring seeds vs netlab-rendered per-node config)) — and delta 28 test-command
+LANGUAGE + honest `interactive`, approved 2026-08-10, design record
+`docs/validation-transport.md`: `TestCase.mode` (`shell` default | `cli`) names which
+interpreter a command's words are for, because the exec transport lands in the CONTAINER'S
+SHELL for a docker-connection device, not the NOS CLI — so `ping X vrf Y count 5` on VyOS was
+reaching Linux's ping (no `vrf` flag) and the suite saw an empty stdout; `cli` is rewritten
+per device in `services/cli_adapters.py` (VyOS op-mode wrapper, `vtysh -c`, `birdc`, identity
+where the transport is already the CLI, 422 where the device has no CLI of its own), which
+also absorbs config-diff's hard-coded wrapper, and `TestResult.command` now reports the
+ADAPTED command since that is what ran; `interactive: true` on a docker node was a SILENT
+NO-OP and is now a PTY-backed `docker exec -it` session (framing is the session's own prompt —
+readline DISCARDS type-ahead, so a queued `exit` is swallowed and the exec hangs), which is why
+mode and interactive interact: VyOS op-mode comes from interactive shell init, so an
+interactive `cli` command needs no wrapper. Deliberately NOT included: a per-test TRANSPORT
+selector (exec vs ssh) — considered and DEFERRED, since "prove SSH works" is already
+expressible from a peer node, the operator terminal is the web terminal's job, and the one
+thing it uniquely buys (asserting the OUT-OF-LAB mgmt path — source-based ACLs, AAA from
+outside) has no test asking for it; netlab keeps choosing the transport per device.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, published at v1.0), **`blackbox/`** (the black-box test suite: 140+ tests
@@ -687,7 +704,7 @@ proven on the parallel `nokia/` tree, but none of that tree's runner plumbing
 (`nokia.grpc`/`nokia.srlinux`, `grpcio`/`protobuf`, the pure-Python protobuf env var) has ever
 reached `dev`.
 
-**Admitting a platform is up to FIVE coordinated changes, not a catalog edit** (the full
+**Admitting a platform is up to SIX coordinated changes, not a catalog edit** (the full
 procedure, with every trap's failure signature, is `docs/nos-sweep/admitting-a-platform.md`): (1)
 `services/device_catalog.py` `SUPPORTED_DEVICES` + the frontend's `use-device-catalog.ts`
 static fallback; (2) backend `DEVICE_KMODS` **and** hostprep's fixed module allowlist together
@@ -706,13 +723,18 @@ should assert on parsed data — `services/validation.py` `TEXTFSM_PLATFORMS`, *
 Twinlab-packaged template in `services/textfsm_templates/` when ntc-templates' own does not fit
 the release**: both its `mikrotik_routeros` OSPF templates are RouterOS 6-shaped and cannot parse
 7 at all, so CHR needs ours (indexed for the `terse` spelling, since plain `print` wraps one
-record over several lines). **CHR tripped THREE of these five** — the Ansible collection during
+record over several lines); and (6) — delta 28 — `services/cli_adapters.py` `CLI_ENTRIES`, how
+a command written in the device's OWN CLI reaches it from the transport's shell (a wrapper or
+client binary, `template=None` where the transport already lands in the CLI, or a deliberate
+absence for a shell-only device like linux/dnsmasq). Without it the platform deploys fine but
+`mode: cli` is a 422, so its suites must spell everything in shell form. **CHR tripped THREE of
+these** — the Ansible collection during
 its own probe (2026-08-04, so it was fixed before admission), then the netmiko `device_type` and
 the TextFSM path only later (both 2026-08-05, while building the mixed-NOS lab). Hence the rule:
 after admitting a platform, exercise an `interactive: true` case and a `parse:` case against it —
 the probe protocol walks neither path and both failures are clean typed errors that hide.
-(The procedure doc's checklist is file-by-file, so its five are numbered differently from these
-five; follow the names, not the numbers.) **Withdrawing** a platform is the same edits in
+(The procedure doc's checklist is file-by-file, so its numbering differs from this list;
+follow the names, not the numbers.) **Withdrawing** a platform is the same edits in
 reverse, plus its
 example, its builtin network template and its suite cases (the IOL withdrawal of 2026-08-05 is
 the worked example). Widening the set is a maintainer decision that starts with testing —

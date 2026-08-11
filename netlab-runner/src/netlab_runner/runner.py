@@ -10,13 +10,18 @@ The subprocess calls are the boundary — the one place `try`/`except` lives; ev
 outcome is returned as a typed value.
 """
 
+import contextlib
 import hashlib
 import json
+import os
+import pty
 import re
+import select
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -54,6 +59,11 @@ _READY_TIMEOUT_SECONDS = 900
 # Cached netlab inventories for validation execs, one workdir per lab name so a
 # suite's many checks don't re-run `netlab create` each time.
 _EXEC_CACHE_ROOT = Path("/tmp/netlab-exec-cache")
+# How long to let an interactive login shell settle before we type at it: long
+# enough for a VyOS op-mode prompt, short enough not to pad every such exec.
+_PTY_SETTLE_SECONDS = 1.5
+# Grace for the login shell to act on our `exit` before the process is killed.
+_PTY_EXIT_SECONDS = 3.0
 # netlab/ssh connection chatter to drop from captured command output so the pure
 # matcher sees only the device's stdout.
 _EXEC_NOISE = re.compile(
@@ -403,6 +413,131 @@ def _host_vars(workdir: Path, node: str) -> dict[str, object] | RunnerError:
     return cast("dict[str, object]", parsed)
 
 
+# Terminal escapes a PTY-backed session carries: CSI sequences, OSC title
+# strings (the shell setting the window title), and lone control chars. The
+# interactive docker channel is a real terminal, so its output needs this
+# before anything asserts on it.
+_TERM_ESCAPES = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[=>]")
+# Lines a login shell contributes that are not the command's output.
+_SHELL_ARTIFACTS = frozenset({"exit", "logout"})
+
+
+def clean_pty_output(raw: str, command: str, prompt: str) -> str:
+    """Reduce a PTY session's transcript to the command's own output.
+
+    A container TTY echoes what we type and the login shell prints a prompt
+    around it, so drop: terminal escapes, the echoed command and `exit`, the
+    shell's farewell, and any line that is (or starts with) the prompt we saw
+    before sending anything."""
+    text = _TERM_ESCAPES.sub("", raw).replace("\r\n", "\n").replace("\r", "")
+    kept: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped in _SHELL_ARTIFACTS or stripped == command.strip():
+            continue
+        if prompt and stripped.startswith(prompt):
+            # The prompt line may carry the echoed command after it.
+            remainder = stripped[len(prompt) :].strip()
+            if remainder in _SHELL_ARTIFACTS or remainder == command.strip() or not remainder:
+                continue
+        kept.append(line)
+    return "\n".join(kept).strip("\n")
+
+
+def _docker_interactive_exec(
+    host: dict[str, object], node: str, command: str
+) -> ExecOutcome | RunnerError:
+    """Run the command through a PTY-backed `docker exec -it` login shell.
+
+    Delta 28: `interactive: true` used to be a silent no-op on docker-transport
+    nodes. It now opens a real interactive session, which is what some CLIs
+    require — VyOS installs its op-mode commands from INTERACTIVE SHELL
+    INITIALIZATION, so `ping … vrf …` works here and not in the one-shot
+    `<shell> -c` form netlab exec uses (verified live 2026-08-10).
+
+    The command and an `exit` are written together and the transcript is read
+    to EOF: deterministic framing with no prompt-regex per platform, and the
+    shell's own exit closes the channel."""
+    container = str(host.get("ansible_host") or node)
+    # netlab spells `docker_shell` as a string ("su - vyos") or a list; both
+    # mean the argv of the login shell to open.
+    shell_spec = host.get("docker_shell") or "bash"
+    shell: list[str] = (
+        [str(part) for part in cast("list[object]", shell_spec)]
+        if isinstance(shell_spec, list)
+        else str(shell_spec).split(" ")
+    )
+    argv = ["docker", "exec", "-i", "-t", container, *shell]
+
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+    except OSError as exc:
+        os.close(master)
+        os.close(slave)
+        return RunnerError("interactive", f"could not open a session on {node}: {exc}")
+    os.close(slave)
+
+    deadline = time.monotonic() + _EXEC_TIMEOUT_SECONDS
+    banner = ""
+    try:
+        # Let the login shell finish printing its prompt, which is the only
+        # per-session string we need in order to strip it back out.
+        settle = time.monotonic() + _PTY_SETTLE_SECONDS
+        while time.monotonic() < settle:
+            if select.select([master], [], [], 0.2)[0]:
+                banner += os.read(master, 65536).decode(errors="replace")
+        prompt_lines = _TERM_ESCAPES.sub("", banner).replace("\r\n", "\n").strip().splitlines()
+        prompt = prompt_lines[-1].strip() if prompt_lines else ""
+
+        # ONE line at a time: readline DISCARDS type-ahead, so a command and a
+        # trailing `exit` written together lose the `exit` — the command runs,
+        # the session never closes, and the exec burns its whole timeout
+        # (observed live 2026-08-10). The shell reprints its prompt when the
+        # command returns, and that prompt — captured above, per session, so
+        # no per-platform regex — is the end marker. With no prompt to match,
+        # fall back to closing the session and reading to EOF.
+        framed = bool(prompt)
+        os.write(master, (command + "\n" if framed else command + "\nexit\n").encode())
+        raw = ""
+        finished = False
+        while time.monotonic() < deadline:
+            if not select.select([master], [], [], 0.3)[0]:
+                if proc.poll() is not None:
+                    finished = True
+                    break
+                continue
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:  # the pty closes when the shell exits
+                finished = True
+                break
+            if not chunk:
+                finished = True
+                break
+            raw += chunk.decode(errors="replace")
+            # Match the prompt only at the END of the transcript: it is the
+            # last thing on the wire when a command returns, so output that
+            # merely mentions it cannot cut the read short.
+            if framed and _TERM_ESCAPES.sub("", raw).rstrip().endswith(prompt):
+                finished = True
+                break
+    finally:
+        if proc.poll() is None:
+            with contextlib.suppress(OSError):
+                os.write(master, b"exit\n")
+            try:
+                _ = proc.wait(timeout=_PTY_EXIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        _ = proc.wait()
+        os.close(master)
+
+    if not finished:
+        return RunnerError("interactive", f"interactive exec timed out on {node}")
+    return ExecOutcome(node=node, stdout=clean_pty_output(raw, command, prompt))
+
+
 def _interactive_exec(
     host: dict[str, object], node: str, command: str
 ) -> ExecOutcome | RunnerError:
@@ -460,7 +595,10 @@ def exec_command(
             return host
         if str(host.get("ansible_connection")) in _SSH_CONNECTIONS:
             return _interactive_exec(host, node, command)
-        # Docker-transport node: fall through to the plain exec path.
+        # Docker-transport node: a PTY-backed `docker exec -it` session
+        # (delta 28 — this used to fall through to the one-shot path, making
+        # `interactive: true` a silent no-op here).
+        return _docker_interactive_exec(host, node, command)
     argv = ["netlab", "exec", node, *shlex.split(command)]
     result = _run(argv, workdir, _EXEC_TIMEOUT_SECONDS)
     if isinstance(result, str):

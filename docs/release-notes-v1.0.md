@@ -23,7 +23,7 @@ truth for a lab, and the same definition always produces the same environment.
 ## What is in v1.0
 
 **A settled HTTP/WebSocket API.** `docs/twinlab_client_shape.py` is the reviewed contract; the
-backend implements it in full (twenty-six reviewed deltas). Every non-2xx response wears one
+backend implements it in full (twenty-eight reviewed deltas). Every non-2xx response wears one
 error envelope — `{code, message, extras}` — with stable code slugs.
 
 **A split lab lifecycle: create → author → deploy.** `POST /labs` creates a bare record and
@@ -47,7 +47,10 @@ filtered to the caller's readable labs; a WebSocket serves an interactive node t
 render → execute → parse → assert pipeline — all data, no user code. Commands and expectations
 are Jinja2 templates rendered per node against a pinned fact namespace derived from netlab's
 expanded topology. Parsing is JSON or TextFSM; assertions are substring, regex, or a structured
-`compare` over parsed data. Suites gate a config push (`config-time`) or run on demand.
+`compare` over parsed data. Each command declares the language it is written in — the
+container's shell, or the device's own CLI, which the backend rewrites into whatever reaches it
+on that platform — and an `interactive` case runs over a real session rather than a one-shot
+exec. Suites gate a config push (`config-time`) or run on demand.
 
 **Two input methods beyond hand-authoring.** A template library serves built-in network
 templates alongside labs published from the fleet, plus reusable node fragments. Config import
@@ -56,6 +59,12 @@ pinned addressing, a source-interface → lab-interface map, verbatim carry of e
 modeled, and quarantine for what must not be applied — with every source line landing in exactly
 one of modeled, carried or quarantined. A stateless config-diff proves fidelity against a
 running lab.
+
+**Custom configuration templates** carry the config netlab has no module for. A template is a
+record on the lab, not a file path: each holds per-node, per-device or universal variants that
+mirror netlab's own lookup precedence, so a template is offered exactly where it applies rather
+than everywhere and failing later in netlab's voice. The netlab-facing fileset is materialized
+at the config-push boundary and never stored.
 
 **A web frontend** over the same contract: a role-aware dashboard, routed lab tabs, a guided
 visual topology builder with a full-syntax text escape hatch, a live topology canvas, a jobs
@@ -95,12 +104,12 @@ The stack itself is not distributed — Twinlab is deployed from this repository
 ## What backs the release
 
 - Backend, client, netlab-runner and hostprep: `ruff format` + `ruff check` + basedpyright
-  (strict) + pytest — 371 tests.
+  (strict) + pytest — 384 tests.
 - Frontend: `pnpm typecheck` + `pnpm build` + `pnpm check:build-doc` (90 parser/emitter
   round-trip and gate checks).
-- **`blackbox/`** — the contract's enforcement: 148 tests exercising a live stack through the
+- **`blackbox/`** — the contract's enforcement: 149 tests exercising a live stack through the
   client only, including real containerlab deploys.
-- **`e2e/`** — the browser layer's: 51 Playwright specs driving the real frontend against a
+- **`e2e/`** — the browser layer's: 56 Playwright specs driving the real frontend against a
   dedicated stack that every run resets to an empty backend, deploying, operating and destroying
   a real multi-vendor lab.
 
@@ -116,4 +125,7 @@ branch but its runner plumbing has never landed here.
 
 A Linux host — Twinlab's lab layer drives Linux kernel networking directly and is not designed
 for anything else. Docker with `docker compose`, a host user in the `clab_api` group, and the
-node images for the platforms you intend to use (images are used, never distributed).
+node images for the platforms you intend to use (images are used, never distributed). The VyOS
+image is **pinned by digest and retagged locally** — its upstream publishes a rolling `:latest`,
+which reproducibility cannot rest on — so a host that runs VyOS labs needs that one pull-and-tag
+step; the root `README.md` carries the exact commands.

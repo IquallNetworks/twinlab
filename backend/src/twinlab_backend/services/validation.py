@@ -38,6 +38,7 @@ from twinlab_backend.models import (
     ValidationTest,
 )
 from twinlab_backend.result import Err, Ok, Result
+from twinlab_backend.services.cli_adapters import adapt_command, cli_capable
 
 # A command transport: given (node, command, interactive), return the command's
 # stdout, or a typed error string when it couldn't run. Injected so validation
@@ -212,6 +213,19 @@ def _test_cases(test: ValidationTest) -> dict[str, TestCase]:
     return dict(test.run)
 
 
+def _mode_target_devices(
+    case_device: str, test: ValidationTest, facts: NodeFacts | None
+) -> list[str]:
+    """The devices a case's `mode` must be legal for: the case's own device
+    when it is device-keyed, else every target node's device (which needs
+    facts — a suite authored before the definition defers to run time)."""
+    if case_device:
+        return [case_device]
+    if facts is None:
+        return []
+    return [device for node in test.nodes if (device := _node_device(node, facts)) is not None]
+
+
 def check_suite_templates(
     suites: dict[str, TestSuite], facts: NodeFacts | None
 ) -> list[dict[str, str]]:
@@ -224,6 +238,23 @@ def check_suite_templates(
         for test_name, test in suite.tests.items():
             for device, case in _test_cases(test).items():
                 where = f"run[{device}]" if device else "run"
+                # Delta 28: `mode: cli` on a device with no CLI of its own is
+                # an authoring error, and a device-keyed case names its device
+                # outright — so this is caught even on a lab with no facts yet.
+                for target in _mode_target_devices(device, test, facts):
+                    if case.mode == "cli" and not cli_capable(target):
+                        problems.append(
+                            {
+                                "suite": suite_name,
+                                "test": test_name,
+                                "field": f"{where}.mode",
+                                "error": (
+                                    f"device {target!r} has no CLI of its own — "
+                                    f"its shell IS the interface, so use mode 'shell'"
+                                ),
+                            }
+                        )
+                        break
                 for field, template in _template_strings(case):
                     label = f"{where}.{field}"
                     syntax_error = check_template_syntax(template)
@@ -417,14 +448,21 @@ async def _run_check(
         return result("error", command.value, "", expect.error)
     device = _node_device(node, facts) or ""
 
+    # Delta 28: `mode` says which interpreter the words are for, so the
+    # rendered command becomes the ADAPTED one — and that is what the result
+    # reports, since it is what actually ran and what a reader would paste.
+    adapted = adapt_command(device, command.value, mode=case.mode, interactive=case.interactive)
+    if isinstance(adapted, Err):
+        return result("error", command.value, "", adapted.error)
+
     deadline = started + test.wait
     while True:
-        run = await executor(node, command.value, case.interactive)
+        run = await executor(node, adapted.value, case.interactive)
         if isinstance(run, Err):
             if time.monotonic() < deadline:
                 await asyncio.sleep(_POLL_INTERVAL_SECONDS)
                 continue
-            return result("error", command.value, "", f"exec failed: {run.error}")
+            return result("error", adapted.value, "", f"exec failed: {run.error}")
         parsed = parse_output(case, device, run.value)
         if isinstance(parsed, Err):
             # A parse failure can be transient mid-convergence (e.g. empty
@@ -433,10 +471,10 @@ async def _run_check(
             if time.monotonic() < deadline:
                 await asyncio.sleep(_POLL_INTERVAL_SECONDS)
                 continue
-            return result("error", command.value, run.value, parsed.error)
+            return result("error", adapted.value, run.value, parsed.error)
         passed, detail, diff = evaluate_expectation(parsed.value, expect.value)
         if passed or time.monotonic() >= deadline:
-            return result("pass" if passed else "fail", command.value, run.value, detail, diff)
+            return result("pass" if passed else "fail", adapted.value, run.value, detail, diff)
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 

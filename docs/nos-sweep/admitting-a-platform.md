@@ -128,6 +128,25 @@ CHR needed all of §"The Ansible collection", §"The netmiko driver" and this on
 real lesson: admitting a platform touches more places than the catalog, and the probe protocol
 in §2 exercises none of them.**
 
+### How its CLI is reached from the transport's shell
+
+A docker-connection device lands in the container's **shell**, not the NOS CLI, so a command
+written in the device's own CLI hits the wrong interpreter — silently, because a shell usually
+answers something. This is what `mode: cli` (contract delta 28) exists for, and a platform needs
+an entry in `backend/.../services/cli_adapters.py` saying how to cross that gap: a wrapper or
+client binary (`vyatta-op-cmd-wrapper`, `vtysh -c`, `birdc`), or `template=None` when the
+transport already lands in the CLI (any `network_cli`/SSH platform), or a deliberate ABSENCE
+when the device has no CLI of its own (linux, dnsmasq — the shell IS the interface).
+
+Note the interactive column too: if the platform's CLI comes from **interactive shell
+initialization** rather than a binary — VyOS's op-mode does — then an interactive session is
+already in the CLI and must NOT be wrapped again. `native_when_interactive` says so.
+
+> **Signature:** a `mode: cli` command comes back with shell-shaped output or an odd usage error
+> (`ping: vrf: System error`), or a 422 `device 'x' has no CLI of its own` if the entry is
+> missing entirely. A platform admitted without an entry simply cannot use `mode: cli` — loud,
+> not silent.
+
 ### The connection plugin
 
 ansible-core 2.21 removed `paramiko` outright. netlab still names it for `openbsd`, `srlinux`
@@ -192,8 +211,8 @@ That one is honest and self-correcting; no action beyond documenting it for user
 
 ## 4. The coordinated changes
 
-Once probed green, admission is up to **five** edits that must land together (1–4 always; 5 when
-the platform has no JSON output):
+Once probed green, admission is up to **six** edits that must land together (1–4 always; 5 when
+the platform has no JSON output; 6 when suites should speak its own CLI):
 
 1. **`backend/.../services/device_catalog.py`** — a `CatalogDeviceSpec` with `modules` and
    `image` mirrored from the installed netlab (`netlab show module-support --format yaml`, and
@@ -210,6 +229,10 @@ the platform has no JSON output):
 5. **`backend/.../services/validation.py` `TEXTFSM_PLATFORMS`** (+ a packaged template if
    ntc-templates' does not fit the release) — only when the platform has no JSON output and
    suites should assert on parsed data. See the trap section above.
+6. **`backend/.../services/cli_adapters.py` `CLI_ENTRIES`** (delta 28) — how to reach the
+   platform's own CLI from the transport's shell, or a deliberate absence for a shell-only
+   device. Without it the platform deploys and configures fine but `mode: cli` is a 422, so
+   suites must spell every command in shell form. See the trap section above.
 
 CHR tripped **three of these five**: step 4's collection surfaced during its own probe on
 2026-08-04 (so it was fixed before admission), while two were missed at admission and only found

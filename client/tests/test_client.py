@@ -527,11 +527,16 @@ async def test_put_test_suites_omits_none_expectation_fields(
                                 "command": "vtysh -c 'show ip ospf neighbor json'",
                                 "expect": {"compare": {"neighbors": {"_mode": "strict"}}},
                                 "parse": "json",
+                                # Delta 28: the default language is the
+                                # transport's shell, so nothing stored before
+                                # it changes meaning.
+                                "mode": "shell",
                                 "interactive": False,
                             },
                             "iol": {
                                 "command": "ping {{ nodes.r1.loopback.ipv4 | address }} repeat 5",
                                 "expect": {"matches": "Success rate is 100 percent"},
+                                "mode": "shell",
                                 "interactive": True,
                             },
                         },

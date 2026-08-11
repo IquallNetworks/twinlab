@@ -63,8 +63,44 @@ said what was left.
    the 16-character cap it never enforced, so an over-long hostname stopped
    producing a `netlab_invalid` import; truncation collisions surface as
    `duplicate_node` naming the cap and the per-source `name` override.
-6. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
+6. ~~**Custom-config templates as scoped records — contract delta 27**~~ — **DONE
+   2026-08-07**, design record `docs/custom-config-templates.md`. Not on this
+   list when it was written: it opened as a complaint that the builder's picker
+   "offers them on every lab", and the discussion found that to be one symptom
+   of the storage model rather than a UI bug. A raw `{relpath: content}`
+   fileset made the PATH do double duty as storage key and entire metadata
+   model — name, tier and device scope all spelled into one string and
+   re-derived, badly, by every consumer. A template is now a `{name,
+   description, tier, variants}` record whose node/device/universal scopes
+   mirror netlab's own `first_found` precedence; the netlab-facing fileset is
+   MATERIALIZED at the config-push boundary and never stored; and applicability
+   is ONE rule driving the picker's greyed-with-reason offers, so `mpls_te` on
+   a VyOS lab stopped being an attachable mistake that failed two steps later
+   in netlab's voice. Migration 0020 reshapes stored rows exactly and fails
+   loudly on an unmappable path. Remodelled now precisely because the contract
+   still has no external consumers — after the tag it would have been a
+   breaking change.
+7. ~~**Test-command language + honest `interactive` — contract delta 28**~~ —
+   **DONE 2026-08-10**, design record `docs/validation-transport.md`. Also not
+   on this list: found by running the SHIPPED mpls-l3vpn suite against a live
+   lab, where a VRF ping written in VyOS op-mode silently reached Linux's
+   `/bin/ping` (no `vrf` flag, empty stdout, no explanation). The exec
+   transport lands in the CONTAINER'S SHELL, not the NOS CLI, and nothing in
+   the contract had ever said which interpreter a `command` is for.
+   `TestCase.mode` (`shell` default | `cli`) names it, `services/cli_adapters.py`
+   rewrites per device and absorbs config-diff's hard-coded wrapper, and
+   `TestResult.command` reports what actually ran. `interactive: true` — a
+   SILENT no-op on docker nodes — is now a PTY-backed `docker exec -it`.
+   Admitting a platform gained a SIXTH coordinated change (its `CLI_ENTRIES`
+   entry). A per-test TRANSPORT selector (exec vs ssh) was considered and
+   DEFERRED: op-mode comes from interactive shell INITIALIZATION, so one-shot
+   SSH would have had the identical bug — switching transports was never the
+   fix.
+8. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
    **LAST**; item 14 and its findings are done, so this is the whole remainder.
+   Its pre-flight ran green 2026-08-06 but is **stale** — deltas 27 and 28, the
+   VyOS image pin and the shielded session close have landed since, so it must
+   be re-run.
 
 Explicitly NOT in v1.0: the CML licensing revisit (item 20), the acquisition-blocked
 platform tail (item 21), validation-gate parallelization (item 10), packet capture +
@@ -669,7 +705,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     used. `interactive: true` routes
     a case through netmiko's persistent channel where transport is SSH
     (in scope NOW — fixes IOS truncating `ping ... repeat` on one-shot
-    exec; no-op over docker exec). Comparator: IMPORT napalm and use
+    exec; no-op over docker exec — **superseded by delta 28**, see below). Comparator: IMPORT napalm and use
     `napalm.base.validate.compare` (own reimplementation only if the dep
     proves painful — user's call 2026-08-03). Parse failure/missing
     template = `error` result, never a silent raw fallback (netmiko's
@@ -694,7 +730,10 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     CASE-level device keying confirmed over field-level (one atomic recipe
     per device, no key-consistency rules; a `default`-case merge is a
     possible additive extension if duplication ever bites); (e)
-    `interactive` is a deliberate no-op over docker exec. Implementation
+    `interactive` is a deliberate no-op over docker exec — **REVERSED
+    2026-08-10 by contract delta 28**: a silent no-op is not something a
+    caller can see, so over docker it now opens a PTY-backed
+    `docker exec -it` session. Implementation
     train: backend → client → blackbox → the frozen frontend panel
     rebuild.
 
@@ -1215,7 +1254,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     anchor throughout this file since the contract work began but never written
     down as an item — recorded here 2026-08-05 so "the release train" names
     something concrete. It is deliberately last: item 14 (Playwright) must land
-    first, and the four items above it in the Road-to-v1.0 list close the surfaces
+    first, and the items above it in the Road-to-v1.0 list close the surfaces
     the tag freezes.
 
     **What is already true:** `client/` is the distributable artifact
@@ -1233,6 +1272,20 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     - build + publish `twinlab-client` (its own version, independent of the stack's
       tag);
     - tag the repo and write release notes.
+
+    **Pre-flight run 2026-08-06 — green, and now STALE.** Every gate, the full
+    blackbox suite with the `deploy` marker against a stack reset to empty and
+    rebuilt, and a clean `uv build` of the client; draft notes landed at
+    `docs/release-notes-v1.0.md`. Four commit groups have shipped since —
+    contract deltas 27 and 28, the digest-pinned VyOS image, and the shielded
+    DB session close — so the run does not carry forward and the freshly-built
+    stack requirement above applies to the re-run. One finding from that
+    pre-flight is still open: **every project in the tree reads `version =
+    "0.1.0"`**, the client included, against a README and CLAUDE.md that both
+    say v1.0 — the client's bump is mandatory before publishing, along with its
+    `Development Status :: 3 - Alpha` classifier and the "(not yet published)"
+    line in its README. (The pre-flight's other finding, a badly stale root
+    `README.md`, was closed by the rewrite of 2026-08-06.)
 
     **Undecided, and all of it is the maintainer's call:** the PyPI account and
     whether to use trusted publishing; whether the stack carries its own version

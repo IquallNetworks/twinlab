@@ -1523,6 +1523,70 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     from one thin parser — is a legitimate alternative tier and a *product*
     decision: it trades the fidelity promise for breadth. Not planned.
 
+### Operator documentation · **done 2026-08-11** (nine pages)
+
+25. **`docs/guide/` — the operator guide.** The audience survey that opened this
+    found one row empty: the person who runs Twinlab through the web UI has no
+    document at all. Everything they need is written down *somewhere*, but as
+    design records — `why`-documents for people changing the code. The Build
+    tab is the sharpest case: its settings are explained only by the inline
+    hints, which are reactive (they say why a control is greyed, not what it
+    does).
+
+    Nine pages: install · first lab · **the Build tab, setting by setting** ·
+    operating · test suites · config import + templates · access and SSH ·
+    troubleshooting **indexed by error slug** · definition reference. **ALL
+    NINE WRITTEN 2026-08-11.**
+
+    **Page 1 closed the largest gap the survey found.** Node-image acquisition
+    was documented nowhere operator-facing: the root README covered only the
+    VyOS digest pin, `e2e/README.md` added FRR and `python:alpine`, and CHR,
+    bird and dnsmasq appeared in neither. The guide now carries the only
+    complete per-platform table — pull, digest-pull-and-tag, `netlab clab
+    build` inside the runner, or a vrnetlab build from a vendor download —
+    with the trap that a vrnetlab build's tag is almost never the tag the
+    catalog expects (live: the host has `mikrotik_routeros:7.16.2`, the
+    catalog names `:7.21.4`), so such a node needs an explicit `image:`.
+    Admitting or withdrawing a platform now edits that table too.
+
+    It also closed the sizing question the outline had parked as
+    unmeasurable, by measuring the running `mpls-l3vpn` lab: ~750 MB for the
+    stack, ~350 MB per idle VyOS node, ~2.4 GB for the 7-node example.
+
+    **Plan and conventions live in `docs/operator-guide-plan.md`, deliberately
+    NOT in the guide** — writing rules, status and per-section source notes are
+    authoring material, and a guide directory should hold only what a reader
+    reads. That also means no skeleton page files: a page is created when it is
+    written, so nobody clicks "Install" and gets notes-to-self.
+
+    **Folded in deliberately:** the definition reference is the operator-facing
+    half of `docs/definition-ownership.md`'s recommendation 3 — write the
+    dialect down as a spec rather than leaving it spread across
+    `find_unsupported_directives`, the PUT and prose. One page, both jobs.
+
+    **Decided 2026-08-11:** no screenshots (no page needs one, and images are
+    the highest-maintenance part of a guide) and no prose checker (the writing
+    rules are the standard; a score invites chasing the number instead of
+    reading the page).
+
+    **The binding writing rules:** concise and direct, no buzzwords, and
+    **every setting names the definition key it writes** — that is what makes
+    the page useful to someone who later edits the YAML by hand. Protocol
+    semantics link to netlab rather than being re-taught; Twinlab does not
+    fork the documentation of 654 templates. And every claim is verified
+    against the code, not remembered from a design record — writing page 3
+    turned up two UI facts no record carried (node names obey a STRICTER rule
+    when typed than when loaded, since netlab splits the terse `a-b` link form
+    on hyphens; config templates sit on a node's Advanced tab while "Save as
+    template" is on General) and one outright error in the page's own first
+    draft (`validate:` is not refused at PUT — only `tools:` and `tc:` are;
+    `validate:` is merely unused because Twinlab runs its own suites).
+
+    Deferred inside this item: a docs *site* (MkDocs Material, MIT) — packaging,
+    pointless before the content exists; and in-app contextual help driven by a
+    shared field-help map, which would keep UI and guide from drifting but is
+    machinery to build only if the reference page proves hard to keep in sync.
+
 ### i18n · **deferred**
 
 Internationalization is deferred project-wide, not just for the frontend rework

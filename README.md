@@ -305,9 +305,20 @@ Three projects sit beside the stack, none of them a service:
 | [`blackbox/`](blackbox/) | The contract's enforcement: 148 tests driving a live stack through the client only, including real containerlab deploys behind a `deploy` marker. |
 | [`e2e/`](e2e/) | The browser layer's: 51 Playwright specs driving the real frontend against a dedicated stack that every run resets to an empty backend. |
 
-Design records live in [`docs/`](docs/) — `twinlab_client_shape.py` is the reviewed API contract;
-`rbac-v2.md`, `config-import.md`, `fact-namespace.md`, `frontend-rework.md` and `nos-sweep/` cover
-the rest. [`ROADMAP.md`](ROADMAP.md) records what is shipped, deferred and why.
+## Documentation
+
+[`docs/guide/`](docs/guide/) is the **operator guide**, for running Twinlab rather than changing it:
+install, your first lab, a reference for every Build tab setting, operating a running lab, test
+suites, config import, access and SSH, and troubleshooting indexed by error code.
+
+Its [Install](docs/guide/01-install.md) page is the fuller version of
+[First run](#first-run) above, and the only place that documents how to obtain a node image for
+each of the six supported platforms.
+
+The rest of [`docs/`](docs/) is design records, written for people changing the code:
+`twinlab_client_shape.py` is the reviewed API contract, and `rbac-v2.md`, `config-import.md`,
+`fact-namespace.md`, `frontend-rework.md`, `operator-guide-plan.md` and `nos-sweep/` cover the
+rest. [`ROADMAP.md`](ROADMAP.md) records what is shipped, deferred and why.
 
 ## Development
 

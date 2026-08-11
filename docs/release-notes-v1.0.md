@@ -23,7 +23,7 @@ truth for a lab, and the same definition always produces the same environment.
 ## What is in v1.0
 
 **A settled HTTP/WebSocket API.** `docs/twinlab_client_shape.py` is the reviewed contract; the
-backend implements it in full (twenty-eight reviewed deltas). Every non-2xx response wears one
+backend implements it in full (twenty-nine reviewed deltas). Every non-2xx response wears one
 error envelope — `{code, message, extras}` — with stable code slugs.
 
 **A split lab lifecycle: create → author → deploy.** `POST /labs` creates a bare record and
@@ -36,6 +36,9 @@ definition, and the caller never resupplies the definition, suites or templates.
 running job; callers poll or watch the SSE stream. One running job per lab is the operation
 mutex — a concurrent submit of any kind is a `409 job_in_flight`. Jobs persist, list per-lab and
 across the fleet, and survive a backend restart as an honest failure rather than a wedged lab.
+Each job carries a **step log** — what the operation did, phase by phase, appended as it ran and
+kept afterwards — so a deploy's image pre-flight, host preparation, config push and config-time
+gate are readable while it works and again a week later.
 
 **Runtime control and observability** over live lab state: per-node and whole-lab power, config
 save, container logs, an interface inventory, a logical link table with live operational state,
@@ -104,10 +107,10 @@ The stack itself is not distributed — Twinlab is deployed from this repository
 ## What backs the release
 
 - Backend, client, netlab-runner and hostprep: `ruff format` + `ruff check` + basedpyright
-  (strict) + pytest — 384 tests.
+  (strict) + pytest — 392 tests.
 - Frontend: `pnpm typecheck` + `pnpm build` + `pnpm check:build-doc` (90 parser/emitter
   round-trip and gate checks).
-- **`blackbox/`** — the contract's enforcement: 149 tests exercising a live stack through the
+- **`blackbox/`** — the contract's enforcement: 154 tests exercising a live stack through the
   client only, including real containerlab deploys.
 - **`e2e/`** — the browser layer's: 56 Playwright specs driving the real frontend against a
   dedicated stack that every run resets to an empty backend, deploying, operating and destroying

@@ -37,6 +37,7 @@ from twinlab_client.models import (
     GroupSummary,
     ImportSource,
     Job,
+    JobDetail,
     JobEvent,
     LabActionResponse,
     LabDetail,
@@ -678,12 +679,18 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # Labs — jobs (async operations)
     # ------------------------------------------------------------------ #
 
-    async def get_job(self, lab_name: str, job_id: UUID) -> Job:
+    async def get_job(self, lab_name: str, job_id: UUID) -> JobDetail:
         """GET /labs/{lab_name}/jobs/{job_id} — lab:read. 404 hides both an
         unreadable lab and an unknown job id. Works on a soft-deleted lab
         (a destroy-with-remove job must stay pollable to its terminal
-        state)."""
-        return _wire.parse_job(await self._send_json("GET", f"/labs/{lab_name}/jobs/{job_id}"))
+        state).
+
+        The single-job read is the one that carries `steps` (contract delta
+        29): what the operation did, growing while it runs, kept after it
+        finishes. The listings return plain `Job`."""
+        return _wire.parse_job_detail(
+            await self._send_json("GET", f"/labs/{lab_name}/jobs/{job_id}")
+        )
 
     async def list_jobs(self, lab_name: str, *, limit: int = 20) -> list[Job]:
         """GET /labs/{lab_name}/jobs?limit= — lab:read, newest first. Recent
@@ -711,8 +718,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         *,
         timeout: float | None = None,
         poll_interval: float = 2.0,
-    ) -> Job:
-        """Poll `get_job` until the job is terminal; return the terminal Job.
+    ) -> JobDetail:
+        """Poll `get_job` until the job is terminal; return the terminal Job —
+        a `JobDetail`, so the step log of what just happened comes with it.
         Pure client-side convenience — no wire surface beyond the polling.
 
         Does NOT raise on a failed job — the caller inspects

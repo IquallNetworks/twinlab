@@ -22,6 +22,7 @@ from twinlab_client.models import (
     DURATION_UNITS,
     JOB_KINDS,
     JOB_STATUSES,
+    JOB_STEP_LEVELS,
     LAB_STATUSES,
     LINK_OPER_STATES,
     NODE_CONFIG_STATUSES,
@@ -50,9 +51,11 @@ from twinlab_client.models import (
     GroupSummary,
     ImportWarning,
     Job,
+    JobDetail,
     JobError,
     JobEvent,
     JobKind,
+    JobStep,
     LabActionResponse,
     LabDetail,
     LabEvent,
@@ -1067,6 +1070,41 @@ def parse_job(value: object) -> Job:
         error=None if error_value is None else parse_job_error(error_value),
         created_at=_get_datetime(obj, "created_at", where),
         finished_at=_get_opt_datetime(obj, "finished_at", where),
+    )
+
+
+def parse_job_step(value: object) -> JobStep:
+    where = "JobStep"
+    obj = as_object(value, where)
+    return JobStep(
+        at=_get_datetime(obj, "at", where),
+        code=_get_str(obj, "code", where),
+        # An unknown code is displayable, never an error — the vocabulary is
+        # allowed to grow. Only `level` is a closed set, because a client
+        # renders on it.
+        level=_get_literal(obj, "level", where, JOB_STEP_LEVELS),
+        message=_get_str(obj, "message", where),
+    )
+
+
+def parse_job_detail(value: object) -> JobDetail:
+    """The single-job read: a `Job` plus its step log. The fields are restated
+    rather than spread from `parse_job` — unpacking a dict into a dataclass is
+    untypeable, and this file's whole job is to be typed at the boundary."""
+    where = "JobDetail"
+    obj = as_object(value, where)
+    job = parse_job(obj)
+    return JobDetail(
+        id=job.id,
+        lab_name=job.lab_name,
+        kind=job.kind,
+        status=job.status,
+        request=job.request,
+        result=job.result,
+        error=job.error,
+        created_at=job.created_at,
+        finished_at=job.finished_at,
+        steps=[parse_job_step(v) for v in as_list(_req(obj, "steps", where), "JobStep[]")],
     )
 
 

@@ -140,6 +140,18 @@ export const labJobsQueryOptions = (name: string) =>
     queryFn: () => api.listJobs(name),
   })
 
+// One job with its step log (contract delta 29) — the only read that carries
+// steps, which is why the drawer fetches instead of rendering the row it was
+// handed. A running job is re-read on an interval: steps are durable data on
+// the record, so they arrive by polling rather than over the (lossy, poke-only)
+// SSE stream.
+export const jobQueryOptions = (lab: string, jobId: string, isRunning: boolean) =>
+  queryOptions({
+    queryKey: ['jobs', lab, jobId],
+    queryFn: () => api.getJob(lab, jobId),
+    refetchInterval: isRunning ? 2000 : false,
+  })
+
 // Cross-lab job history. Under the same ['jobs'] root as the per-lab lists, so
 // one invalidation (SSE, a submit) refreshes whichever is on screen.
 export const allJobsQueryOptions = (limit: number) =>

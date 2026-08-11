@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, StringConstraints, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from twinlab_backend.api.jobs import SessionFactory, job_out, spawn_job
+from twinlab_backend.api.jobs import JobStepRecorder, SessionFactory, job_out, spawn_job
 from twinlab_backend.api.templates import published_lab_summary
 from twinlab_backend.api_errors import ApiError
 from twinlab_backend.auth import permissions as perms
@@ -966,6 +966,46 @@ async def _image_preflight(runner: RunnerClient, artifacts: ClabArtifacts) -> Ap
     return warnings
 
 
+async def _record_push(steps: JobStepRecorder, report: ConfigureReport) -> None:
+    """The config push's outcome as a step. A push that RAN with per-node
+    failures is a succeeded job (contract delta 9), so this is where the
+    failure becomes visible as it happens rather than only in the result."""
+    total = len(report.nodes)
+    failed = [node.node for node in report.nodes if node.failed]
+    if report.succeeded:
+        await steps.record("config_pushed", f"config pushed: {total}/{total} nodes ok")
+    else:
+        await steps.record(
+            "config_pushed",
+            f"config push failed on {len(failed)} of {total} nodes: {', '.join(failed)}"
+            if failed
+            # netlab configures plain-container nodes with host-side scripts,
+            # which never appear in Ansible's PLAY RECAP — so a failure can be
+            # real with no per-node row to name.
+            else "config push failed; no per-node result (script-configured node)",
+            level="error",
+        )
+
+
+async def _record_validation(
+    steps: JobStepRecorder, reports: list[SuiteReport] | None, skipped: bool
+) -> None:
+    if reports is None:
+        await steps.record(
+            "validation",
+            "config-time checks skipped" if skipped else "no config-time suites to run",
+        )
+        return
+    passed = sum(r.passed for r in reports)
+    total = sum(r.passed + r.failed + r.skipped + r.errored for r in reports)
+    ok = all(r.ok for r in reports)
+    await steps.record(
+        "validation",
+        f"config-time suites: {passed}/{total} passed",
+        level="info" if ok else "error",
+    )
+
+
 async def _finish_deploy(
     deployed: DeployedLab,
     definition: str,
@@ -973,6 +1013,7 @@ async def _finish_deploy(
     db: AsyncSession,
     lab: Lab,
     library: BuiltinLibrary,
+    steps: JobStepRecorder,
     *,
     configure: bool,
     skip_config_time: bool,
@@ -991,15 +1032,20 @@ async def _finish_deploy(
     templates = _config_fileset(library, lab)
     ready = await runner.ready(definition, templates)
     if isinstance(ready, Err):
+        await steps.record("nodes_ready", ready.error.message, level="error")
         raise _ready_failed(ready.error)
+    await steps.record("nodes_ready", f"{len(nodes)} devices booted and reachable")
     if not configure:
         return DeployResponse(
             status="deployed", lab_name=deployed.name, nodes=nodes, warnings=warnings
         )
+    await steps.record("config_push_started", f"pushing config to {len(nodes)} nodes via netlab")
     pushed = await _push_config(runner, definition, templates)
     if isinstance(pushed, Err):
+        await steps.record("config_pushed", pushed.error.message, level="error")
         raise pushed.error
     report = pushed.value
+    await _record_push(steps, report)
     configuration = _to_models(report)
     if not report.succeeded:
         # The push RAN; a per-node failure is data, not an HTTP error (contract
@@ -1015,6 +1061,7 @@ async def _finish_deploy(
     status, validation = await _run_config_time(
         runner, db, lab, definition, library, skip=skip_config_time
     )
+    await _record_validation(steps, validation, skipped=skip_config_time)
     return DeployResponse(
         status=status,
         lab_name=deployed.name,
@@ -1154,6 +1201,7 @@ async def _deploy_job(
     hostprep: HostPrepClient | None,
     library: BuiltinLibrary,
     lab_name: str,
+    steps: JobStepRecorder,
     *,
     lab_files_dir: str,
     previous_status: str,
@@ -1183,15 +1231,34 @@ async def _deploy_job(
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise generated.error
         artifacts = generated.value
+        await steps.record(
+            "topology_generated",
+            f"netlab create: {len(artifacts.node_facts)} nodes, {len(artifacts.links)} links",
+        )
         preflight = await _image_preflight(runner, artifacts)
         if isinstance(preflight, ApiError):
+            await steps.record("image_preflight", preflight.message, level="error")
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise preflight
         image_warnings = preflight
+        await steps.record(
+            "image_preflight",
+            "; ".join(image_warnings) if image_warnings else "all node images present on the host",
+            level="warning" if image_warnings else "info",
+        )
         prep_failed = await _prepare_host(db, hostprep, lab_name, artifacts)
         if prep_failed is not None:
+            await steps.record("host_prep", prep_failed.message, level="error")
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise prep_failed
+        # Only worth a line when the lab actually needed host preparation —
+        # most don't, and a "nothing to do" step is noise.
+        if artifacts.host_bridges or artifacts.kernel_modules:
+            await steps.record(
+                "host_prep",
+                f"{len(artifacts.host_bridges)} host bridge(s), "
+                f"{len(artifacts.kernel_modules)} kernel module(s)",
+            )
         # We deploy inline (topologyContent). With a lab-files directory the
         # node_files/ tree was just materialized there, so point the generated
         # binds at it — absolute, the same path dockerd mounts from and clab-api
@@ -1202,13 +1269,21 @@ async def _deploy_job(
             if lab_dir is not None
             else strip_generated_binds(artifacts.topology)
         )
+        await steps.record(
+            "clab_deploy_started", f"deploying {len(artifacts.node_facts)} containers via clab-api"
+        )
         deployed = await clab.deploy(shippable, reconfigure=True)
         if isinstance(deployed, Err):
+            await steps.record("clab_deploy_started", deployed.error.message, level="error")
             # Bridges created above are left in place (harmless when idle, and
             # possibly still wired mid-overwrite): the claim keeps them
             # tracked, and the next deploy or destroy reconciles.
             _ = await lab_store.set_status(db, lab_name, previous_status)
             raise _deploy_failed(deployed.error.message)
+        await steps.record(
+            "nodes_deployed",
+            f"{len(deployed.value.nodes)} nodes up; waiting for the devices to finish booting",
+        )
         await _prune_stale_bridges(db, hostprep, lab_name, previous_bridges, artifacts.host_bridges)
         # The deploy's own `netlab create` just produced the link table and the
         # fact namespace — refresh both stored caches (free backfill for rows
@@ -1223,6 +1298,7 @@ async def _deploy_job(
             db,
             lab,
             library,
+            steps,
             configure=configure,
             skip_config_time=skip_config_time,
             warnings=image_warnings,
@@ -1273,7 +1349,7 @@ async def deploy_lab(
 
     session_factory: SessionFactory = http_request.app.state.session_factory
 
-    async def work() -> DeployResponse:
+    async def work(steps: JobStepRecorder) -> DeployResponse:
         return await _deploy_job(
             session_factory,
             clab,
@@ -1281,6 +1357,7 @@ async def deploy_lab(
             hostprep,
             library,
             lab_name,
+            steps,
             lab_files_dir=settings.lab_files_dir,
             previous_status=previous_status,
             configure=body.configure,
@@ -1324,6 +1401,7 @@ async def _configure_job(
     runner: RunnerClient,
     library: BuiltinLibrary,
     lab_name: str,
+    steps: JobStepRecorder,
     *,
     skip_config_time: bool,
 ) -> ConfigureResponse:
@@ -1335,10 +1413,13 @@ async def _configure_job(
         if lab is None or lab.definition is None:
             raise ApiError(409, "no_definition", f"lab '{lab_name}' lost its definition")
         definition = lab.definition
+        await steps.record("config_push_started", "pushing config via netlab")
         pushed = await _push_config(runner, definition, _config_fileset(library, lab))
         if isinstance(pushed, Err):
+            await steps.record("config_pushed", pushed.error.message, level="error")
             raise pushed.error
         report = pushed.value
+        await _record_push(steps, report)
         configuration = _to_models(report)
         if not report.succeeded:
             return ConfigureResponse(
@@ -1350,6 +1431,7 @@ async def _configure_job(
         status, validation = await _run_config_time(
             runner, db, lab, definition, library, skip=skip_config_time
         )
+        await _record_validation(steps, validation, skipped=skip_config_time)
         return ConfigureResponse(
             status=status, lab_name=lab_name, configuration=configuration, validation=validation
         )
@@ -1390,9 +1472,9 @@ async def configure_nodes(
 
     session_factory: SessionFactory = http_request.app.state.session_factory
 
-    async def work() -> ConfigureResponse:
+    async def work(steps: JobStepRecorder) -> ConfigureResponse:
         return await _configure_job(
-            session_factory, runner, library, lab_name, skip_config_time=skip
+            session_factory, runner, library, lab_name, steps, skip_config_time=skip
         )
 
     spawn_job(http_request, job, lab_name, work)
@@ -1454,6 +1536,7 @@ async def _suite_run_job(
     library: BuiltinLibrary,
     lab_name: str,
     suite: str,
+    steps: JobStepRecorder,
 ) -> SuiteReport:
     """The on-demand suite run, inside a job task. The result is persisted
     (updating just this suite's last run) but the config-time gate is left
@@ -1470,7 +1553,18 @@ async def _suite_run_job(
             raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
         executor = _runner_executor(runner, definition, _config_fileset(library, lab))
         facts = await _node_facts_for(db, lab, library)
+        await steps.record(
+            "suite_started", f"suite '{suite}' ({target.stage}): {len(target.tests)} tests"
+        )
         report = await run_suite(executor, facts, suite, target)
+        total = report.passed + report.failed + report.skipped + report.errored
+        await steps.record(
+            "suite_finished",
+            f"{report.passed}/{total} passed"
+            + (f", {report.skipped} skipped" if report.skipped else "")
+            + (f", {report.errored} errored" if report.errored else ""),
+            level="info" if report.ok else "error",
+        )
         _ = await lab_store.record_validation(
             db,
             lab_name,
@@ -1513,8 +1607,8 @@ async def run_test_suite(
 
     session_factory: SessionFactory = http_request.app.state.session_factory
 
-    async def work() -> SuiteReport:
-        return await _suite_run_job(session_factory, runner, library, lab_name, suite)
+    async def work(steps: JobStepRecorder) -> SuiteReport:
+        return await _suite_run_job(session_factory, runner, library, lab_name, suite, steps)
 
     spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)
@@ -1762,6 +1856,7 @@ async def _destroy_job(
     clab: ClabApiClient,
     hostprep: HostPrepClient | None,
     lab_name: str,
+    steps: JobStepRecorder,
     *,
     lab_files_dir: str,
     remove: bool,
@@ -1779,12 +1874,14 @@ async def _destroy_job(
             # A not-running lab is fatal for a plain destroy, but expected when
             # deleting one that's already down. Other upstream failures are 502.
             if not remove or not not_found:
+                await steps.record("clab_destroy", result.error.message, level="error")
                 if not_found:
                     raise ApiError(409, "lab_not_running", f"lab '{lab_name}' is not running")
                 raise ApiError(502, "upstream_error", result.error.message)
             teardown_detail = "lab was not running"
         else:
             teardown_detail = result.value
+        await steps.record("clab_destroy", teardown_detail)
 
         if lab_files_dir:
             # The materialized node_files tree is a regenerable cache the next
@@ -1793,6 +1890,7 @@ async def _destroy_job(
             await run_in_threadpool(
                 shutil.rmtree, FsPath(lab_files_dir) / lab_name, ignore_errors=True
             )
+            await steps.record("files_removed", "generated node_files tree removed")
 
         if remove:
             deleted = await lab_store.soft_delete(db, lab_name)
@@ -1800,11 +1898,15 @@ async def _destroy_job(
                 # Absent or already deleted — nothing to remove from the catalog.
                 raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
             await _release_host_bridges(db, hostprep, lab_name)
+            await steps.record("bridges_released", "claimed host bridges released")
+            await steps.record("record_removed", "lab record removed; mgmt subnet released")
             return DestroyResponse(status="deleted", detail=teardown_detail)
 
         # Retain the definition, flip status. not_found (deployed out-of-band) is fine.
         _ = await lab_store.mark_destroyed(db, lab_name)
         await _release_host_bridges(db, hostprep, lab_name)
+        await steps.record("bridges_released", "claimed host bridges released")
+        await steps.record("record_kept", "lab record kept as destroyed; redeployable")
         return DestroyResponse(status="destroyed", detail=teardown_detail)
 
 
@@ -1857,12 +1959,13 @@ async def destroy_lab(
 
     session_factory: SessionFactory = http_request.app.state.session_factory
 
-    async def work() -> DestroyResponse:
+    async def work(steps: JobStepRecorder) -> DestroyResponse:
         return await _destroy_job(
             session_factory,
             clab,
             hostprep,
             lab_name,
+            steps,
             lab_files_dir=settings.lab_files_dir,
             remove=remove,
         )

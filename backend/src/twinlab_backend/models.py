@@ -20,6 +20,10 @@ type DestroyStatus = Literal["destroyed", "deleted"]
 # a job starts at submit or the submit is rejected (409 job_in_flight).
 type JobKind = Literal["deploy", "configure", "destroy", "suite_run"]
 type JobStatus = Literal["running", "succeeded", "failed"]
+# How a step reads, not how the job ended: a warning step (an image that has to
+# be pulled) or an error step (the config push failed on 2 of 7 nodes) can both
+# sit inside a SUCCEEDED job — "failed" there still means could-not-run.
+type JobStepLevel = Literal["info", "warning", "error"]
 # Docker engine's container-state vocabulary; clab-api's passthrough is
 # validated against it at the read boundary (an unknown state is a loud 502).
 type ContainerState = Literal[
@@ -408,6 +412,31 @@ class JobOut(BaseModel):
     error: JobErrorOut | None = None
     created_at: datetime
     finished_at: datetime | None = None
+
+
+class JobStepOut(BaseModel):
+    """One thing the operation did, recorded as it happened (contract delta 29).
+
+    `code` names the phase from a vocabulary pinned per job kind in
+    `docs/job-steps.md`; `message` carries the detail no vocabulary can
+    anticipate ("7/7 nodes ok"). Steps are a NARRATIVE, not a record: the
+    operation's typed payload stays on result/error, and a client that ignores
+    steps entirely loses only readability. That is what keeps the vocabulary
+    free to gain entries without breaking anyone."""
+
+    at: datetime
+    code: str
+    level: JobStepLevel
+    message: str
+
+
+class JobDetailOut(JobOut):
+    """One job read on its own — `GET /labs/{name}/jobs/{id}` — which is where
+    the step log is served. The list endpoints keep serving `JobOut`: they
+    render kind/status/timing, and carrying every job's narrative through a
+    `limit=50` fleet poll would be pure waste."""
+
+    steps: list[JobStepOut]
 
 
 class Principal(BaseModel):

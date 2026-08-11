@@ -598,3 +598,85 @@ async def test_mixed_nos_lab_configures_and_converges(
     # would report "skip" rather than fail, so assert the passes explicitly.
     assert report.failed == 0, report
     assert report.passed == 2, report
+
+
+async def test_deploy_job_records_its_phases(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    """The step log's whole reason to exist (contract delta 29): a deploy's
+    phases run inside the job and used to be invisible — the only progress a
+    caller could see was container churn on the SSE stream."""
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    job = await admin.deploy_lab(lab.name)
+
+    # Steps must be readable WHILE the job runs — a log that only materializes
+    # at the end would not be progress. `netlab create` is the first phase and
+    # takes seconds, so poll for the first step rather than racing it.
+    running_steps: list[str] = []
+    for _ in range(60):
+        seen = await admin.get_job(lab.name, job.id)
+        if seen.steps:
+            running_steps = [step.code for step in seen.steps]
+            if seen.status == "running":
+                break
+        await asyncio.sleep(1.0)
+    assert running_steps, "no step became visible while the deploy ran"
+    assert running_steps[0] == "topology_generated"
+
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+
+    codes = [step.code for step in done.steps]
+    # A bare deploy's phases, in order. host_prep is absent on purpose: a
+    # two-node p2p link needs no host bridge, and a "nothing to do" step
+    # would be noise.
+    assert codes == [
+        "topology_generated",
+        "image_preflight",
+        "clab_deploy_started",
+        "nodes_deployed",
+        "nodes_ready",
+    ]
+    assert "2 nodes" in done.steps[0].message
+    assert all(step.level == "info" for step in done.steps), [
+        (s.code, s.level, s.message) for s in done.steps
+    ]
+    # The log only ever grows forward in time.
+    assert codes == [step.code for step in sorted(done.steps, key=lambda step: step.at)]
+
+
+async def test_configure_steps_report_the_push_and_the_gate(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    deploy = await admin.deploy_lab(lab.name)
+    _ = await admin.wait_job(lab.name, deploy.id, timeout=JOB_WAIT)
+
+    gate = {
+        "gate": TestSuite(
+            tests={
+                "ok": ValidationTest(
+                    nodes=["n1"],
+                    run=TestCase(
+                        command="echo bb-step", expect=TestExpectation(contains="bb-step")
+                    ),
+                )
+            },
+            stage="config-time",
+        )
+    }
+    _ = await admin.put_test_suites(lab.name, gate)
+
+    job = await admin.configure_lab(lab.name)
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+
+    assert [step.code for step in done.steps] == [
+        "config_push_started",
+        "config_pushed",
+        "validation",
+    ]
+    # The two phases that never streamed anywhere: what the push did, and how
+    # the gate ended.
+    assert "nodes ok" in done.steps[1].message
+    assert "1/1 passed" in done.steps[2].message

@@ -1,5 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -14,67 +14,12 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { JobProgress } from '@/components/jobs/job-progress'
 import { api, waitJob } from '@/lib/api'
 import { toastError } from '@/lib/error-toast'
-import { useLabActivity } from '@/lib/lab-event-store'
-import { labInterfacesQueryOptions, labQueryOptions, labsQueryOptions } from '@/lib/queries'
+import { jobQueryOptions, labInterfacesQueryOptions, labQueryOptions, labsQueryOptions } from '@/lib/queries'
 import { deployResponseSchema } from '@/lib/schemas'
-
-/** What the SSE stream can tell us while a deploy runs. It is a live feed of
- * CONTAINER lifecycle plus the job's own submit/finish — not the job's
- * internals: netlab's output, the image pre-flight and Ansible's per-node
- * config push never leave the backend, so a long quiet stretch after the
- * containers are up is the config push working, not a stall. Said plainly
- * below rather than left to be guessed. */
-function DeployProgress({ name }: { name: string }) {
-  const events = useLabActivity(name)
-  const logRef = useRef<HTMLDivElement>(null)
-  // Follow the tail: the interesting line is always the newest one. Scrolling
-  // the container directly rather than scrollIntoView, which would also move
-  // the dialog itself.
-  useEffect(() => {
-    const log = logRef.current
-    if (log !== null) log.scrollTop = log.scrollHeight
-  }, [events.length])
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div
-        ref={logRef}
-        role="log"
-        aria-label="Deploy progress"
-        aria-live="polite"
-        className="h-48 overflow-y-auto rounded-[2px] border bg-muted/30 p-2 font-mono text-xs"
-      >
-        {events.length === 0 ? (
-          <p className="text-muted-foreground">Waiting for the first event…</p>
-        ) : (
-          events.map((event) => (
-            <div key={event.seq} className="flex gap-2">
-              <span className="shrink-0 text-muted-foreground">
-                {new Date(event.receivedAt).toLocaleTimeString()}
-              </span>
-              {event.source === 'job' ? (
-                <span className="text-primary">
-                  {event.kind} {event.status === 'running' ? 'submitted' : event.status}
-                </span>
-              ) : (
-                <>
-                  <span className="shrink-0">{event.node ?? '—'}</span>
-                  <span className="text-muted-foreground">{event.action}</span>
-                </>
-              )}
-            </div>
-          ))
-        )}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Container events, live from this session. The config push and netlab&apos;s own output do
-        not stream — a quiet stretch after the nodes appear is normal.
-      </p>
-    </div>
-  )
-}
+import type { Job } from '@/lib/schemas'
 
 /** Deploy a lab from its stored definition — the lifecycle split's final step,
  * and the ONLY deploy verb: fresh after create/destroy, overwrite-in-place when
@@ -95,8 +40,17 @@ export function DeployDialog({
   const [skipChecks, setSkipChecks] = useState(false)
   const verb = isRedeploy ? 'Redeploy' : 'Deploy'
 
+  // The submitted job, kept so the dialog can render ITS steps — the same
+  // server-side log the jobs drawer shows, rather than a second progress model
+  // that only exists while this dialog is open.
+  const [job, setJob] = useState<Job | null>(null)
+
   const deploy = useMutation({
-    mutationFn: async () => waitJob(name, await api.deployLab(name, configure, skipChecks)),
+    mutationFn: async () => {
+      const submitted = await api.deployLab(name, configure, skipChecks)
+      setJob(submitted)
+      return waitJob(name, submitted)
+    },
     onSuccess: async (job) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: labQueryOptions(name).queryKey }),
@@ -119,6 +73,16 @@ export function DeployDialog({
     },
     onError: (err) => toastError(err, 'Deploy failed'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs', name] }),
+  })
+
+  // Polling is tied to the MUTATION's pending state, not to `job` being set:
+  // `job` survives the operation (a failed deploy leaves the dialog open on
+  // it), and this component stays mounted with the lab page, so a fixed
+  // "running" would poll a finished job every 2s for as long as the page is
+  // open. waitJob settles exactly when the job goes terminal.
+  const jobQuery = useQuery({
+    ...jobQueryOptions(name, job?.id ?? '', deploy.isPending),
+    enabled: job !== null,
   })
 
   return (
@@ -146,7 +110,18 @@ export function DeployDialog({
           </DialogDescription>
         </DialogHeader>
         {deploy.isPending ? (
-          <DeployProgress name={name} />
+          job === null ? (
+            // The gap between clicking and the 202 landing: short, but the
+            // dialog must not go blank in it.
+            <p className="text-xs text-muted-foreground">Submitting…</p>
+          ) : (
+            <JobProgress
+              lab={name}
+              job={jobQuery.data ?? job}
+              steps={jobQuery.data?.steps ?? []}
+              isPending={jobQuery.isPending}
+            />
+          )
         ) : (
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2">

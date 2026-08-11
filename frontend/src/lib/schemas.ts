@@ -563,6 +563,21 @@ export const jobSchema = z.object({
 export type Job = z.infer<typeof jobSchema>
 export const jobListSchema = z.array(jobSchema)
 
+// What the operation DID, appended as it ran (contract delta 29). `code` is a
+// vocabulary the server may GROW, so it stays a plain string — an unrecognized
+// one is displayable, never an error. `level` is closed: the UI renders on it.
+export const jobStepSchema = z.object({
+  at: z.string(),
+  code: z.string(),
+  level: z.enum(['info', 'warning', 'error']),
+  message: z.string(),
+})
+export type JobStep = z.infer<typeof jobStepSchema>
+
+// Only the SINGLE-job read carries steps; the two listings serve plain Jobs.
+export const jobDetailSchema = jobSchema.extend({ steps: z.array(jobStepSchema) })
+export type JobDetail = z.infer<typeof jobDetailSchema>
+
 // --- Self-service credentials (API keys, SSH keys) and the jump coordinates. ---
 
 export const apiKeySchema = z.object({

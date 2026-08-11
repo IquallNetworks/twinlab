@@ -41,7 +41,7 @@ caveats, or abstractions on its behalf unless and until it is explicitly picked 
 ## Current State
 
 The **API v1.0 contract** lives at `docs/twinlab_client_shape.py` — a reviewed contract sketch the
-backend now implements in full (twenty-four deltas; delta 12 is the async job model, delta 13 the
+backend now implements in full (twenty-nine deltas; delta 12 is the async job model, delta 13 the
 SSH jump, delta 14 the link table, delta 15 the cross-lab job listing, delta 16 job events on the
 SSE stream — 14/15/16 approved 2026-07-30 — delta 17 test-suites v2, approved item-by-item
 2026-08-03, delta 18 the device/image catalog, delta 19 the deployed-definition snapshot +
@@ -93,14 +93,21 @@ selector (exec vs ssh) — considered and DEFERRED, since "prove SSH works" is a
 expressible from a peer node, the operator terminal is the web terminal's job, and the one
 thing it uniquely buys (asserting the OUT-OF-LAB mgmt path — source-based ACLs, AAA from
 outside) has no test asking for it; netlab keeps choosing the transport per device.
+— and delta 29 the JOB STEP LOG, approved 2026-08-10, design record `docs/job-steps.md`:
+a running job was visible but OPAQUE, because every phase that decides whether a deploy is
+healthy (the image pre-flight, host prep, netlab's output, Ansible's per-node push, the
+config-time gate) runs inside the job task and never left the backend — so the only
+progress a UI could show was clab-api's container churn, live-only and gone on reload, and
+the deploy dialog had to apologise in prose for its own quiet stretches. See the backend
+and frontend bullets for the shape.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, published at v1.0), **`blackbox/`** (the black-box test suite: 140+ tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker) and **`e2e/`** (the Playwright UX suite, SHIPPED 2026-08-06 — ROADMAP item 14:
-pnpm + @playwright/test, chromium, 54 exact-string specs driving the real frontend against a
+pnpm + @playwright/test, chromium, 56 exact-string specs driving the real frontend against a
 dedicated **`twinlab-e2e`** parallel stack that every run resets to a REAL EMPTY backend via
-`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (34 specs, no containers) → `journey`
+`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (35 specs, no containers) → `journey`
 (20 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`);
 `fast/11-builder-l3vpn` is the builder's own walkthrough-as-a-test — it builds a VyOS L3VPN
 core (defaults, a VRF, PE/P nodes, links) entirely in the visual builder and is the regression
@@ -206,17 +213,23 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   the authorized_keys line is refused "administratively prohibited" however well the jump host
   resolves it — jump-side DNS is therefore a two-part change and is parked as ROADMAP item 23);
   a **jobs center at `/jobs`**
-  plus per-lab job history through one shared `JobsTable` (row → detail sheet with request/
-  result/error JSON; aggregation is one `GET /jobs` query keyed `['jobs', 'all', limit]`, under
+  plus per-lab job history through one shared `JobsTable` (row → detail sheet; aggregation is
+  one `GET /jobs` query keyed `['jobs', 'all', limit]`, under
   the same `['jobs']` root as the per-lab lists so one invalidation refreshes either). Long ops submit **202 async jobs** awaited via `waitJob`
   (`src/lib/api.ts`), and the **deploy dialog streams progress while one runs** (2026-08-07):
-  the SSE store (`lib/lab-event-store.ts`) now records BOTH named events — discriminated on
+  the SSE store (`lib/lab-event-store.ts`) records BOTH named events — discriminated on
   `source`, not `kind`, since a JobEvent has a `kind` of its own — and the dialog replaces
-  its dead "Redeploying…" button with the lab's live container events plus the job's
-  submit/finish, footed by "Close (keeps running)" because the job is server-side. Its limit
-  is stated in the UI rather than left to be guessed: netlab's output, the image pre-flight
-  and Ansible's per-node push never leave the backend, so a quiet stretch after the
-  containers appear is the config push working. A real job log would be a contract addition;
+  its dead "Redeploying…" button with live progress, footed by "Close (keeps running)"
+  because the job is server-side. **Since delta 29 (2026-08-10) that progress is the JOB's
+  own step log, not container churn**: `components/jobs/job-progress.tsx` is ONE component
+  rendering the server's durable steps (polled via `jobQueryOptions`, 2s while running) over
+  this session's live container events, and BOTH the deploy dialog and the jobs drawer use
+  it — so leaving the dialog no longer loses the progress, and the drawer answers what the
+  operation DID rather than only echoing its request. The drawer FETCHES the job by id
+  (only the single-job read carries steps), which also makes an open sheet live. Container
+  events are attributed to a job with no correlation id: the per-lab job mutex means the
+  lab's events between `created_at` and `finished_at` are exactly that job's. The old
+  in-UI apology for the quiet stretch is gone — `config_push_started` says it;
   the **test-suites** panel (rebuilt on the v2 wire 2026-08-03) and
   custom-config live on the
   Operations tab. **Whole-lab power + save-config are header-menu entries**, not a Controls card
@@ -396,7 +409,21 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   query filtered by the events stream's readable-lab set (any authenticated user; no lab is named,
   so nothing to hide behind). Jobs of REMOVED labs are excluded there, so the fleet list follows
   `GET /labs` and a revived name keeps its empty history. Jobs
-  persist in a `jobs` table; the partial unique index (one `running` row per lab) IS the operation
+  persist in a `jobs` table, each carrying a **step log** (delta 29, design record
+  `docs/job-steps.md`): `{at, code, level, message}` appended by the operation as it runs —
+  a NARRATIVE, never the record (the typed payload stays on result/error, nothing is
+  derivable only from a step, so the vocabulary may GROW and an unknown `code` is
+  displayable). Codes are pinned per kind (deploy: `topology_generated`, `image_preflight`,
+  `host_prep`, `clab_deploy_started`, `nodes_deployed`, `nodes_ready`, `config_push_started`,
+  `config_pushed`, `validation`; a `_started` code only where the phase is long enough that
+  its absence reads as a stall). Served ONLY on `GET /labs/{name}/jobs/{id}` as `JobDetail`
+  — the two listings keep serving `Job`, the LabSummary/LabDetail split again — appended
+  with an atomic `steps = steps || <step>` in the recorder's OWN session (the job holds a
+  long-lived one mid-operation and a step must commit immediately to be pollable), capped at
+  64 with the truncation itself recorded, and NOT streamed: delta 16 pinned `job` events as
+  a poke over a lossy broker, and steps are durable data a poller sees within one interval.
+  Deliberately parked: server-side capture of clab-api container events per job (an SSE
+  fan-out refactor). The partial unique index (one `running` row per lab) IS the operation
   mutex — a concurrent submit of ANY kind is 409 `job_in_flight`. Job failed = could-not-run (the
   error envelope on `job.error`); `config_failed`/`validation_failed` stay job successes. Startup/
   shutdown sweeps (`job_store.sweep_orphans`) fail orphaned jobs (`backend_restart`/

@@ -300,6 +300,13 @@ class Job(Base):
     request: Mapped[dict[str, object]] = mapped_column(JSONB())
     result: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
     error: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # What the operation DID, appended as it ran (contract delta 29): a
+    # narrative, never the record — the typed payload stays in result/error.
+    # Written by `job_store.append_step` with an atomic jsonb append, so the
+    # long-lived job session is never in the loop.
+    steps: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB(), server_default=text("'[]'::jsonb")
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), default=None
     )

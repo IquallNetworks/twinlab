@@ -15,6 +15,7 @@ from twinlab_client import (
     Duration,
     ImportSource,
     Job,
+    JobDetail,
     JobEvent,
     LabDetail,
     LabEvent,
@@ -57,6 +58,14 @@ def _job_wire(**overrides: object) -> dict[str, object]:
         "finished_at": None,
     }
     return base | overrides
+
+
+def _job_detail_wire(**overrides: object) -> dict[str, object]:
+    """The single-job read's shape: a Job PLUS its step log (contract delta
+    29). Kept separate from `_job_wire` so the fixtures mirror the wire — the
+    submits and the two listings genuinely do not carry `steps`."""
+    steps = overrides.pop("steps", [])
+    return _job_wire(**overrides) | {"steps": steps}
 
 
 _LAB_DETAIL = {
@@ -388,7 +397,7 @@ async def test_get_job_parses_result_by_kind(make_client: ClientFactory) -> None
         assert request.url.path == f"/api/v1/labs/lab1/jobs/{_JOB_ID}"
         return httpx.Response(
             200,
-            json=_job_wire(
+            json=_job_detail_wire(
                 status="succeeded",
                 result=deploy_result,
                 finished_at="2026-07-29T10:05:00+00:00",
@@ -407,7 +416,7 @@ async def test_failed_job_carries_error_envelope(make_client: ClientFactory) -> 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            json=_job_wire(
+            json=_job_detail_wire(
                 status="failed",
                 error={
                     "status_code": 502,
@@ -428,6 +437,85 @@ async def test_failed_job_carries_error_envelope(make_client: ClientFactory) -> 
     assert job.error.code == "upstream_error"
 
 
+async def test_get_job_parses_the_step_log(make_client: ClientFactory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_job_detail_wire(
+                steps=[
+                    {
+                        "at": "2026-07-29T10:00:01+00:00",
+                        "code": "topology_generated",
+                        "level": "info",
+                        "message": "netlab create: 7 nodes, 8 links",
+                    },
+                    {
+                        "at": "2026-07-29T10:00:02+00:00",
+                        "code": "image_preflight",
+                        "level": "warning",
+                        "message": "image frrouting/frr:latest not present locally",
+                    },
+                ]
+            ),
+        )
+
+    async with make_client(handler) as client:
+        job = await client.get_job("lab1", UUID(_JOB_ID))
+    assert isinstance(job, JobDetail)
+    assert [(s.code, s.level) for s in job.steps] == [
+        ("topology_generated", "info"),
+        ("image_preflight", "warning"),
+    ]
+    # Oldest first: the log reads downward, like the operation ran.
+    assert job.steps[0].at < job.steps[1].at
+
+
+async def test_job_step_accepts_an_unknown_code(make_client: ClientFactory) -> None:
+    # The vocabulary is allowed to GAIN entries; a client pinned to today's set
+    # would break on tomorrow's backend for a purely cosmetic field.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_job_detail_wire(
+                steps=[
+                    {
+                        "at": "2026-07-29T10:00:01+00:00",
+                        "code": "something_invented_later",
+                        "level": "info",
+                        "message": "hello",
+                    }
+                ]
+            ),
+        )
+
+    async with make_client(handler) as client:
+        job = await client.get_job("lab1", UUID(_JOB_ID))
+    assert job.steps[0].code == "something_invented_later"
+
+
+async def test_job_step_rejects_an_unknown_level(make_client: ClientFactory) -> None:
+    # `level` IS closed — a client renders on it, so an unknown value is a
+    # protocol error rather than something to guess a colour for.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_job_detail_wire(
+                steps=[
+                    {
+                        "at": "2026-07-29T10:00:01+00:00",
+                        "code": "validation",
+                        "level": "catastrophe",
+                        "message": "hello",
+                    }
+                ]
+            ),
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabProtocolError):
+            _ = await client.get_job("lab1", UUID(_JOB_ID))
+
+
 async def test_list_jobs_sends_limit(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/labs/lab1/jobs"
@@ -446,10 +534,10 @@ async def test_wait_job_polls_to_terminal(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         polls.append(1)
         if len(polls) < 3:
-            return httpx.Response(200, json=_job_wire())
+            return httpx.Response(200, json=_job_detail_wire())
         return httpx.Response(
             200,
-            json=_job_wire(
+            json=_job_detail_wire(
                 kind="destroy",
                 status="succeeded",
                 result={"status": "destroyed", "detail": "torn down"},
@@ -465,7 +553,7 @@ async def test_wait_job_polls_to_terminal(make_client: ClientFactory) -> None:
 
 async def test_wait_job_deadline_raises_timeout(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_job_wire())
+        return httpx.Response(200, json=_job_detail_wire())
 
     async with make_client(handler) as client:
         with pytest.raises(TimeoutError):

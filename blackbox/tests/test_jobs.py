@@ -22,6 +22,7 @@ import pytest
 from twinlab_client import (
     DestroyResponse,
     Job,
+    JobDetail,
     JobEvent,
     LabEvent,
     SuiteReport,
@@ -237,3 +238,55 @@ async def test_no_job_history_across_revival(admin: TwinlabClient, make_lab: Lab
     revived = await admin.create_lab(lab.name)  # same name; make_lab cleans it up
     assert revived.status == "created"
     assert await admin.list_jobs(lab.name) == []
+
+
+# --- The step log (contract delta 29) ---
+
+
+async def test_suite_run_job_records_its_steps(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    lab = await make_lab(None)
+    job = await _suite_run_job(admin, lab.name)
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+
+    assert [step.code for step in done.steps] == ["suite_started", "suite_finished"]
+    # A suite that ran and failed its checks is a SUCCEEDED job (results are
+    # data) — but the step says so, which is the point of the level.
+    assert done.steps[-1].level == "error"
+    assert "bb-jobs" in done.steps[0].message
+    # Oldest first, so the log reads downward the way the operation ran.
+    assert done.steps[0].at <= done.steps[1].at
+
+
+async def test_destroy_job_records_its_steps(
+    admin: TwinlabClient, unique: Callable[[str], str]
+) -> None:
+    # A bare record was never deployed, so the teardown is a no-op that the
+    # step reports honestly rather than hiding.
+    lab = await admin.create_lab(unique("lab"))
+    job = await admin.destroy_lab(lab.name, remove=True)
+    done = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+    assert done.status == "succeeded", done.error
+
+    codes = [step.code for step in done.steps]
+    assert codes[0] == "clab_destroy"
+    assert codes[-1] == "record_removed"
+    assert "not running" in done.steps[0].message
+
+
+async def test_only_the_single_job_read_carries_steps(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    # The summary/detail split: the listings render kind/status/timing, so
+    # carrying every job's narrative through them would be pure waste.
+    lab = await make_lab(None)
+    job = await _suite_run_job(admin, lab.name)
+    _ = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)
+
+    detail = await admin.get_job(lab.name, job.id)
+    assert isinstance(detail, JobDetail)
+    assert detail.steps
+
+    for listed in (*await admin.list_jobs(lab.name), *await admin.list_all_jobs()):
+        assert isinstance(listed, Job)
+        assert not isinstance(listed, JobDetail)

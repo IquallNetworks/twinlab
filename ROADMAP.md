@@ -96,11 +96,31 @@ said what was left.
    DEFERRED: op-mode comes from interactive shell INITIALIZATION, so one-shot
    SSH would have had the identical bug — switching transports was never the
    fix.
-8. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
+8. ~~**The job step log — contract delta 29**~~ — **DONE 2026-08-10**, design
+   record `docs/job-steps.md`. Opened as a UX complaint with a backend cause: a
+   deploy showed its progress in a modal, and leaving the modal lost it while
+   the job carried on as an opaque "running" row whose drawer only echoed the
+   request back. The events behind that modal were never the interesting part —
+   every phase that decides whether a deploy is HEALTHY (the image pre-flight,
+   host prep, netlab's output, Ansible's per-node push, the config-time gate)
+   runs inside the job task and never left the backend, which is why the dialog
+   had to apologise in prose for its own quiet stretches. So the operation now
+   RECORDS what it did: `{at, code, level, message}` steps appended to the job
+   row as they happen, served on the single-job read as `JobDetail`, durable
+   after the job ends. A narrative, never the record — nothing is derivable
+   only from a step, so the vocabulary may grow without a contract change. One
+   frontend component renders steps over the session's container events, and
+   both the deploy dialog and the jobs drawer use it. Considered and PARKED:
+   capturing clab-api's container events server-side per job (an SSE fan-out
+   refactor — the backend opens one upstream stream per browser today, so with
+   nobody watching nothing is recorded); and streaming netlab's and Ansible's
+   raw output, which is a transcript, a different feature with its own
+   retention questions.
+9. **The release train** (item 22). Publish `twinlab-client` to PyPI, tag v1.0.
    **LAST**; item 14 and its findings are done, so this is the whole remainder.
-   Its pre-flight ran green 2026-08-06 but is **stale** — deltas 27 and 28, the
-   VyOS image pin and the shielded session close have landed since, so it must
-   be re-run.
+   Its pre-flight ran green 2026-08-06 but is **stale** — deltas 27, 28 and 29,
+   the VyOS image pin and the shielded session close have landed since, so it
+   must be re-run.
 
 Explicitly NOT in v1.0: the CML licensing revisit (item 20), the acquisition-blocked
 platform tail (item 21), validation-gate parallelization (item 10), packet capture +
@@ -1277,8 +1297,8 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     blackbox suite with the `deploy` marker against a stack reset to empty and
     rebuilt, and a clean `uv build` of the client; draft notes landed at
     `docs/release-notes-v1.0.md`. Four commit groups have shipped since —
-    contract deltas 27 and 28, the digest-pinned VyOS image, and the shielded
-    DB session close — so the run does not carry forward and the freshly-built
+    contract deltas 27, 28 and 29, the digest-pinned VyOS image, and the
+    shielded DB session close — so the run does not carry forward and the freshly-built
     stack requirement above applies to the re-run. One finding from that
     pre-flight is still open: **every project in the tree reads `version =
     "0.1.0"`**, the client included, against a README and CLAUDE.md that both

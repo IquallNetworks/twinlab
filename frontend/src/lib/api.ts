@@ -8,6 +8,7 @@ import {
   grantListSchema,
   groupListSchema,
   groupSummarySchema,
+  jobDetailSchema,
   jobListSchema,
   jobSchema,
   labActionResponseSchema,
@@ -43,6 +44,7 @@ import {
   userSummarySchema,
   type FreezeAction,
   type Job,
+  type JobDetail,
   type LifecycleAction,
   type NetemSetInput,
   type NodeAction,
@@ -320,8 +322,10 @@ export const api = {
   deleteLab: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}?remove=true`, jobSchema, { method: 'DELETE' }),
 
+  // The single-job read is the one carrying the step log (delta 29) — what
+  // the operation did, growing while it runs and kept after it finishes.
   getJob: (name: string, jobId: string) =>
-    request(`/labs/${encodeURIComponent(name)}/jobs/${jobId}`, jobSchema),
+    request(`/labs/${encodeURIComponent(name)}/jobs/${jobId}`, jobDetailSchema),
   listJobs: (name: string, limit = 20) =>
     request(`/labs/${encodeURIComponent(name)}/jobs?limit=${limit}`, jobListSchema),
   // Every readable lab's recent jobs in one query (each job names its lab).
@@ -467,8 +471,8 @@ const JOB_POLL_MS = 1500
  * rejects with an ApiError built from the job's error envelope when the
  * operation could not run. No deadline: deploys legitimately take minutes, and
  * mutation pending-states communicate progress meanwhile. */
-export async function waitJob(name: string, job: Job): Promise<Job> {
-  let current = job
+export async function waitJob(name: string, job: Job): Promise<JobDetail> {
+  let current = await api.getJob(name, job.id)
   while (current.status === 'running') {
     await new Promise((resolve) => setTimeout(resolve, JOB_POLL_MS))
     current = await api.getJob(name, current.id)

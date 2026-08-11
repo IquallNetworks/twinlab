@@ -11,7 +11,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import bindparam, delete, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +81,42 @@ async def finish_job(
     job.finished_at = datetime.now(UTC)
     await session.commit()
     return job
+
+
+async def append_step(
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    *,
+    code: str,
+    level: str,
+    message: str,
+) -> None:
+    """Append one step to a running job's log (contract delta 29).
+
+    An atomic `steps = steps || <step>` rather than read-modify-write: the job
+    task holds a long-lived session mid-operation, and a step has to commit —
+    and become pollable — the moment it happens without joining whatever
+    transaction that operation is in the middle of. Hence the caller passes a
+    session of its own (see `api.jobs.JobStepRecorder`).
+
+    Silently a no-op for an unknown job id: the row is pruned or deleted only
+    once the job is long finished, and there is nothing to salvage.
+    """
+    step: dict[str, object] = {
+        "at": datetime.now(UTC).isoformat(),
+        "code": code,
+        "level": level,
+        "message": message,
+    }
+    # `steps || '[step]'::jsonb` — the append happens in the database, so two
+    # writers could never lose one another's step (one job task writes today,
+    # but a read-modify-write would be a trap waiting for the second).
+    _ = await session.execute(
+        update(Job)
+        .where(Job.id == job_id)
+        .values(steps=Job.steps.concat(bindparam("step", [step], type_=JSONB)))
+    )
+    await session.commit()
 
 
 async def get_job(session: AsyncSession, lab_id: uuid.UUID, job_id: uuid.UUID) -> Job | None:

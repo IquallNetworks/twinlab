@@ -26,7 +26,16 @@ from twinlab_backend.auth.dependencies import CurrentUserDep, require_lab
 from twinlab_backend.auth.service import permitted_lab_ids
 from twinlab_backend.db.models import Job, Lab
 from twinlab_backend.deps import SessionDep
-from twinlab_backend.models import JobErrorOut, JobEvent, JobKind, JobOut, JobStatus
+from twinlab_backend.models import (
+    JobDetailOut,
+    JobErrorOut,
+    JobEvent,
+    JobKind,
+    JobOut,
+    JobStatus,
+    JobStepLevel,
+    JobStepOut,
+)
 from twinlab_backend.services import job_store, lab_store
 from twinlab_backend.services.job_events import JobEventBroker
 
@@ -41,7 +50,43 @@ _LabNamePath = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
 type SessionFactory = async_sessionmaker[AsyncSession]
 # A job's work: the operation coroutine, returning the response model that
 # becomes the job's `result`. Raising ApiError fails the job with that envelope.
-type JobWork = Callable[[], Awaitable[BaseModel]]
+# It receives a step recorder (delta 29) — the job id lives here and never
+# reached the operation bodies, so this hands them the one capability they need
+# without handing them the row.
+type JobWork = Callable[[JobStepRecorder], Awaitable[BaseModel]]
+
+# Steps a single job may record before it stops appending. Nothing emits more
+# than a dozen; the cap exists so a future loop cannot bloat the row.
+MAX_STEPS = 64
+
+
+class JobStepRecorder:
+    """Appends one job's step log (contract delta 29).
+
+    Opens its OWN short-lived session per step: the operation holds a
+    long-lived session mid-transaction, and a step has to commit — and become
+    pollable — the moment it happens, without joining whatever that operation
+    is in the middle of.
+
+    Failures are NOT caught. A step is an UPDATE on the row this task owns; if
+    it fails the database is gone, and the operation writes lab status
+    throughout and would fail at its next store call regardless. `run_job`'s
+    total except turns that into a failed job — the same treatment every other
+    store call inside a job already gets."""
+
+    def __init__(self, session_factory: SessionFactory, job_id: uuid.UUID) -> None:
+        self._session_factory = session_factory
+        self._job_id = job_id
+        self._count = 0
+
+    async def record(self, code: str, message: str, *, level: JobStepLevel = "info") -> None:
+        if self._count > MAX_STEPS:
+            return
+        self._count += 1
+        if self._count > MAX_STEPS:
+            code, message, level = "steps_truncated", f"stopped after {MAX_STEPS} steps", "warning"
+        async with self._session_factory() as db:
+            await job_store.append_step(db, self._job_id, code=code, level=level, message=message)
 
 
 def _job_kind(kind: str) -> JobKind:
@@ -76,6 +121,17 @@ def job_out(job: Job, lab_name: str) -> JobOut:
     )
 
 
+def job_detail_out(job: Job, lab_name: str) -> JobDetailOut:
+    """`job_out` plus the step log — served only when a job is read on its own.
+    Steps are validated on the way out rather than trusted: they are stored as
+    free JSONB, so a row written by an older or hand-edited backend fails
+    loudly here instead of reaching a client as a half-typed step."""
+    return JobDetailOut(
+        **job_out(job, lab_name).model_dump(),
+        steps=[JobStepOut.model_validate(step) for step in job.steps],
+    )
+
+
 async def run_job(
     session_factory: SessionFactory,
     job_id: uuid.UUID,
@@ -91,7 +147,7 @@ async def run_job(
     result: dict[str, object] | None = None
     error: dict[str, object] | None = None
     try:
-        outcome = await work()
+        outcome = await work(JobStepRecorder(session_factory, job_id))
     except asyncio.CancelledError:
         # Shutdown cancelled us: no DB write from a cancelled task — the
         # shutdown/startup sweep marks the row. No event either: the stream
@@ -182,7 +238,7 @@ async def list_all_jobs(
     "/{lab_name}/jobs/{job_id}",
     dependencies=[Depends(require_lab(perms.LAB_READ, include_deleted=True))],
 )
-async def get_job(lab_name: _LabNamePath, job_id: uuid.UUID, db: SessionDep) -> JobOut:
+async def get_job(lab_name: _LabNamePath, job_id: uuid.UUID, db: SessionDep) -> JobDetailOut:
     # include_deleted: a destroy-with-remove job outlives its lab record and
     # must stay pollable to its terminal state. Unknown job ids 404 like
     # unknown labs (nothing to enumerate).
@@ -192,7 +248,9 @@ async def get_job(lab_name: _LabNamePath, job_id: uuid.UUID, db: SessionDep) -> 
     job = await job_store.get_job(db, lab.id, job_id)
     if job is None:
         raise ApiError(404, "job_not_found", f"lab '{lab_name}' has no job {job_id}")
-    return job_out(job, lab_name)
+    # The one job route that carries the step log (delta 29) — the lists stay
+    # summaries.
+    return job_detail_out(job, lab_name)
 
 
 @router.get(

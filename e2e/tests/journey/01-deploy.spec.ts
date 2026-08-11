@@ -71,6 +71,12 @@ test('deploy with config push, watched from jobs, dashboard and the header', asy
   await expect(sheet.getByText(E2E_NET_NAME)).toBeVisible()
   await expect(sheet.getByText('request', { exact: true })).toBeVisible()
   await expect(sheet.getByText('"configure": true')).toBeVisible()
+  // The step log (contract delta 29): the drawer says what the operation is
+  // DOING, not just that it is running. Which phase is on screen depends on
+  // how far the deploy has got, so assert on the first one — it is recorded
+  // seconds in and never disappears.
+  await expect(sheet.getByText('steps', { exact: true })).toBeVisible()
+  await expect(sheet.getByText('topology_generated')).toBeVisible({ timeout: 120_000 })
   await page.keyboard.press('Escape')
 
   // The dashboard's session-scoped activity feed fills from the SSE stream as

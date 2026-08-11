@@ -453,6 +453,26 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     OUT-OF-LAB management path: source-based ACLs, AAA as seen from
     outside) has no test asking for it yet. netlab keeps choosing the
     transport per device, as it does today.
+29. Jobs carry a STEP LOG (APPROVED 2026-08-10; design record
+    docs/job-steps.md). A running job was visible but opaque: the phases
+    that decide whether a deploy is healthy — the image pre-flight, host
+    preparation, netlab's output, Ansible's per-node push, the config-time
+    suites — all run inside the job task and never left the backend, so the
+    only progress a UI could show was clab-api's container churn, live-only
+    and gone on reload. ``GET /labs/{name}/jobs/{id}`` now returns a
+    ``JobDetail`` = ``Job`` + ``steps: list[JobStep]``, each
+    ``{at, code, level, message}``, appended by the operation as it runs and
+    kept with the row afterwards. The two LISTINGS keep serving ``Job``
+    (kind/status/timing is what they render; the narrative would be waste in
+    a fleet-wide poll) — the same summary/detail split as
+    LabSummary/LabDetail. Steps are a narrative, NOT the record: nothing is
+    derivable only from a step, so an unknown ``code`` is displayable rather
+    than an error and the vocabulary may grow. Deliberately NOT included: a
+    step event on the SSE stream (delta 16 pinned ``job`` events as a poke
+    over a lossy broker, and steps are durable data — a poller sees them
+    within one interval), and server-side capture of clab-api container
+    events per job (considered, parked: it is an SSE fan-out refactor, and
+    the step log is what answers the complaint).
 
 Conventions:
 
@@ -1590,6 +1610,8 @@ class LabFacts:
 
 JobKind = Literal["deploy", "configure", "destroy", "suite_run"]
 JobStatus = Literal["running", "succeeded", "failed"]
+# How a STEP reads (delta 29), not how the job ended.
+JobStepLevel = Literal["info", "warning", "error"]
 # No "pending"/"queued" status: there is no queue — a job starts the moment
 # its submit returns 202 (the one-running-job-per-lab mutex REJECTS a
 # concurrent submit with 409 job_in_flight rather than queueing it).
@@ -1641,6 +1663,72 @@ class Job:
     error: JobError | None
     created_at: datetime
     finished_at: datetime | None  # None while running
+
+
+# PROPOSED (delta 29, APPROVED 2026-08-10): what an operation DID, recorded
+# as it happened. A running job was visible but opaque — the phases that
+# decide whether a deploy is healthy (the image pre-flight, host prep,
+# netlab's output, Ansible's per-node push, the config-time suites) all run
+# inside the job task and never left the backend, which is why the deploy
+# dialog had to apologise in prose for its own quiet stretches. Design record:
+# docs/job-steps.md.
+@dataclass(frozen=True, slots=True)
+class JobStep:
+    """One thing the operation did.
+
+    `code` names the phase from the vocabulary pinned below; `message` carries
+    the detail no vocabulary can anticipate ("7/7 nodes ok"). The split is the
+    error envelope's: a slug a client can branch on, plus prose for a human.
+
+    Steps are a NARRATIVE, not the record. The operation's typed payload stays
+    on `Job.result`/`Job.error` and nothing is derivable ONLY from a step, so a
+    client that ignores them loses readability and nothing else. That is
+    exactly what lets the vocabulary GAIN entries without a contract change —
+    so an unknown `code` is displayable, never an error. `level` IS closed
+    (a client renders on it).
+
+    THE VOCABULARY, per job kind:
+      deploy    topology_generated, image_preflight, host_prep,
+                clab_deploy_started, nodes_deployed, nodes_ready,
+                config_push_started, config_pushed, validation
+      configure config_push_started, config_pushed, validation
+      destroy   clab_destroy, files_removed, bridges_released,
+                record_removed | record_kept
+      suite_run suite_started, suite_finished
+      any       steps_truncated (the 64-step cap; recorded, never silent)
+
+    A `_started` code exists only where the phase is long enough that its
+    absence reads as a stall — the two long waits in a deploy are clab-api
+    standing the containers up and Ansible pushing config. Fast phases get one
+    step, at their outcome.
+
+    A warning or error LEVEL says nothing about how the job ended: an image
+    that has to be pulled, or a config push that failed on 2 of 7 nodes, both
+    sit inside a SUCCEEDED job (failed still means could-not-run)."""
+
+    at: datetime
+    code: str
+    level: JobStepLevel
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class JobDetail(Job):
+    """A job read on its own — `get_job` — which is the ONLY place the step log
+    is served. `list_jobs` and `list_all_jobs` keep returning `Job`: they
+    render kind/status/timing, and carrying every job's narrative through a
+    fleet-wide `limit=50` poll would be waste. Same summary/detail split as
+    LabSummary/LabDetail.
+
+    Steps arrive OLDEST first and GROW while the job runs, so polling a running
+    job is how a caller follows an operation's progress — there is deliberately
+    no step event on the SSE stream (delta 16 pinned `job` events as a poke,
+    never the record, and the broker under them is lossy by design).
+
+    Steps live and die with the job row: finished jobs are pruned beyond the
+    newest ~20 per lab, so this is recent history, never an audit log."""
+
+    steps: list[JobStep]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2333,11 +2421,16 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # Labs — jobs (async operations, delta 12)
     # ------------------------------------------------------------------ #
 
-    async def get_job(self, lab_name: str, job_id: UUID) -> Job:
+    async def get_job(self, lab_name: str, job_id: UUID) -> JobDetail:
         """GET /labs/{lab_name}/jobs/{job_id} — lab:read. 404 hides both an
         unreadable lab and an unknown job id. Works on a soft-deleted lab
         (a destroy-with-remove job must stay pollable to its terminal
-        state)."""
+        state).
+
+        The single-job read is the one carrying `steps` (delta 29) — what the
+        operation did, growing while it runs and kept after it finishes.
+        Polling this is how a caller follows progress; the listings below
+        return plain `Job`."""
         raise NotImplementedError
 
     async def list_jobs(self, lab_name: str, *, limit: int = 20) -> list[Job]:
@@ -2366,8 +2459,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         *,
         timeout: float | None = None,
         poll_interval: float = 2.0,
-    ) -> Job:
-        """Poll `get_job` until the job is terminal; return the terminal Job.
+    ) -> JobDetail:
+        """Poll `get_job` until the job is terminal; return the terminal Job —
+        a `JobDetail`, so the step log of what just happened comes with it.
         Pure client-side convenience — no wire surface beyond the polling.
 
         Does NOT raise on a failed job — the caller inspects

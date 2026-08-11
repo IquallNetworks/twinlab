@@ -79,6 +79,12 @@ JOB_KINDS: Final[tuple[JobKind, ...]] = ("deploy", "configure", "destroy", "suit
 JobStatus = Literal["running", "succeeded", "failed"]
 JOB_STATUSES: Final[tuple[JobStatus, ...]] = ("running", "succeeded", "failed")
 
+# How a STEP reads, not how the job ended: a warning step (an image that has to
+# be pulled) or an error step (the config push failed on 2 of 7 nodes) can both
+# sit inside a succeeded job.
+JobStepLevel = Literal["info", "warning", "error"]
+JOB_STEP_LEVELS: Final[tuple[JobStepLevel, ...]] = ("info", "warning", "error")
+
 ReadinessStatus = Literal["ready", "degraded"]
 READINESS_STATUSES: Final[tuple[ReadinessStatus, ...]] = ("ready", "degraded")
 
@@ -1036,6 +1042,41 @@ class Job:
     error: JobError | None
     created_at: datetime
     finished_at: datetime | None  # None while running
+
+
+@dataclass(frozen=True, slots=True)
+class JobStep:
+    """One thing an operation did, recorded as it happened (contract delta 29).
+
+    `code` names the phase from a vocabulary pinned per job kind in the
+    contract appendix — deploy runs `topology_generated`, `image_preflight`,
+    `host_prep`, `clab_deploy_started`, `nodes_deployed`, `nodes_ready`,
+    `config_push_started`, `config_pushed`, `validation` — and `message`
+    carries the detail no vocabulary can anticipate ("7/7 nodes ok").
+
+    Steps are a NARRATIVE, not the record: the operation's typed payload stays
+    on `Job.result`/`Job.error`, and nothing is derivable only from a step. A
+    caller that ignores them entirely loses only readability — which is what
+    lets the vocabulary GAIN entries without breaking anyone, so treat an
+    unknown `code` as displayable, never as an error."""
+
+    at: datetime
+    code: str
+    level: JobStepLevel
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class JobDetail(Job):
+    """A job read on its own (`get_job`), which is the only place the step log
+    is served. The listings (`list_jobs`, `list_all_jobs`) return plain `Job`:
+    they render kind/status/timing, and carrying every job's narrative through
+    a fleet-wide poll would be waste.
+
+    Steps arrive OLDEST first and grow while the job runs, so polling a running
+    job is how a caller follows an operation's progress."""
+
+    steps: list[JobStep]
 
 
 @dataclass(frozen=True, slots=True)

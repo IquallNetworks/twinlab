@@ -11,7 +11,7 @@ from types import TracebackType
 from typing import cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from twinlab_backend.api import jobs as jobs_api
@@ -88,7 +88,7 @@ async def test_run_job_success_stores_result(monkeypatch: pytest.MonkeyPatch) ->
     finish = _Finish()
     monkeypatch.setattr(jobs_api.job_store, "finish_job", finish)
 
-    async def work() -> _Payload:
+    async def work(_steps: jobs_api.JobStepRecorder) -> _Payload:
         return _Payload()
 
     await run_job(_factory(), uuid.uuid7(), work, events=JobEventBroker(), lab_name="tmp1")
@@ -101,7 +101,7 @@ async def test_run_job_maps_api_error_to_envelope(monkeypatch: pytest.MonkeyPatc
     finish = _Finish()
     monkeypatch.setattr(jobs_api.job_store, "finish_job", finish)
 
-    async def work() -> _Payload:
+    async def work(_steps: jobs_api.JobStepRecorder) -> _Payload:
         raise ApiError(422, "netlab_invalid", "bad definition", {"stderr": "boom"})
 
     await run_job(_factory(), uuid.uuid7(), work, events=JobEventBroker(), lab_name="tmp1")
@@ -122,7 +122,7 @@ async def test_run_job_unexpected_exception_is_internal_error(
     finish = _Finish()
     monkeypatch.setattr(jobs_api.job_store, "finish_job", finish)
 
-    async def work() -> _Payload:
+    async def work(_steps: jobs_api.JobStepRecorder) -> _Payload:
         raise RuntimeError("unexpected")
 
     await run_job(_factory(), uuid.uuid7(), work, events=JobEventBroker(), lab_name="tmp1")
@@ -168,7 +168,7 @@ async def test_run_job_publishes_the_terminal_event(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(jobs_api.job_store, "finish_job", finish)
     broker = JobEventBroker()
 
-    async def work() -> _Payload:
+    async def work(_steps: jobs_api.JobStepRecorder) -> _Payload:
         return _Payload()
 
     with broker.subscribe() as queue:
@@ -195,7 +195,7 @@ async def test_run_job_publishes_nothing_when_the_row_vanished(
     monkeypatch.setattr(jobs_api.job_store, "finish_job", gone)
     broker = JobEventBroker()
 
-    async def work() -> _Payload:
+    async def work(_steps: jobs_api.JobStepRecorder) -> _Payload:
         return _Payload()
 
     with broker.subscribe() as queue:
@@ -249,3 +249,87 @@ def test_fail_running_status_constants_cover_check_constraint() -> None:
         "succeeded",
         "failed",
     }
+
+
+# --- Step log (contract delta 29) ---
+
+
+def test_job_detail_out_carries_the_step_log() -> None:
+    job = _job()
+    job.steps = [
+        {"at": _TS.isoformat(), "code": "topology_generated", "level": "info", "message": "7 nodes"}
+    ]
+    detail = jobs_api.job_detail_out(job, "tmp1")
+    assert [(step.code, step.level, step.message) for step in detail.steps] == [
+        ("topology_generated", "info", "7 nodes")
+    ]
+    # A detail is a superset of the summary, so the list shape stays readable
+    # from it — the two must not drift into different vocabularies.
+    assert detail.kind == job_out(job, "tmp1").kind
+
+
+def test_job_detail_out_rejects_a_malformed_step() -> None:
+    # Steps are stored as free JSONB. A row written by an older backend or by
+    # hand must fail loudly here rather than reach a client half-typed.
+    job = _job()
+    job.steps = [{"code": "topology_generated"}]
+    with pytest.raises(ValidationError):
+        _ = jobs_api.job_detail_out(job, "tmp1")
+
+
+def test_job_detail_out_of_a_fresh_job_has_no_steps() -> None:
+    # The column defaults to '[]', and a job that predates it reads the same:
+    # no steps, and none can be invented for it.
+    job = _job()
+    job.steps = []
+    assert jobs_api.job_detail_out(job, "tmp1").steps == []
+
+
+class _Appends:
+    """Collects what the recorder would have written."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def __call__(
+        self,
+        session: AsyncSession,
+        job_id: uuid.UUID,
+        *,
+        code: str,
+        level: str,
+        message: str,
+    ) -> None:
+        self.calls.append((code, level, message))
+
+
+async def test_step_recorder_appends_what_it_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    appends = _Appends()
+    monkeypatch.setattr(jobs_api.job_store, "append_step", appends)
+
+    recorder = jobs_api.JobStepRecorder(_factory(), uuid.uuid7())
+    await recorder.record("nodes_deployed", "7 nodes up")
+    await recorder.record("config_pushed", "failed on 2 of 7", level="error")
+
+    assert appends.calls == [
+        ("nodes_deployed", "info", "7 nodes up"),
+        ("config_pushed", "error", "failed on 2 of 7"),
+    ]
+
+
+async def test_step_recorder_truncates_instead_of_growing_without_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Nothing emits more than a dozen steps; the cap is there so a future loop
+    # cannot bloat the row. The truncation itself is recorded — silently
+    # dropping steps would make the log lie about being complete.
+    appends = _Appends()
+    monkeypatch.setattr(jobs_api.job_store, "append_step", appends)
+
+    recorder = jobs_api.JobStepRecorder(_factory(), uuid.uuid7())
+    for i in range(jobs_api.MAX_STEPS + 10):
+        await recorder.record("suite_finished", f"step {i}")
+
+    assert len(appends.calls) == jobs_api.MAX_STEPS + 1
+    assert appends.calls[-1][0] == "steps_truncated"
+    assert appends.calls[-1][1] == "warning"

@@ -24,7 +24,13 @@ export interface DeviceNodeData {
 }
 
 export type DeviceFlowNode = Node<DeviceNodeData, 'device'>
-export type LanFlowNode = Node<{ label: string; [key: string]: unknown }, 'lan'>
+// `prefix` is the netlab-assigned subnet of the segment, shown under the hub
+// (the hub itself is 48px — there is no room inside it). Only the server link
+// table carries addressing, so the client-parse fallback leaves it undefined.
+export type LanFlowNode = Node<
+  { label: string; prefix?: string; [key: string]: unknown },
+  'lan'
+>
 // A one-endpoint (stub/loopback) link, drawn as a small terminator so it is
 // selectable and deletable — invisible data can't be edited. Builder-only.
 export type StubFlowNode = Node<{ label: string; [key: string]: unknown }, 'stub'>

@@ -29,11 +29,24 @@ export function CenterHandles({ isConnectable }: { isConnectable?: boolean }) {
   )
 }
 
-/** The builder's drag-to-connect grip: a visible source dot on the node's
- * right edge, present only when the canvas is connectable (the read-only
- * topology view passes nodesConnectable={false} and renders no grip). Drops
- * land on the invisible center target via the canvas's connectionRadius. */
-export function ConnectGrip({ isConnectable }: { isConnectable?: boolean }) {
+/** The builder's drag-to-connect grip: a source handle on the node's right
+ * edge, present only when the canvas is connectable (the read-only topology
+ * view passes nodesConnectable={false} and renders no grip). Drops land on
+ * the invisible center target via the canvas's connectionRadius.
+ *
+ * The HIT AREA and the dot are deliberately different sizes: a 10px target
+ * that only appears on hover is a game of darts, so the handle itself is a
+ * transparent 24px square and the visible dot is a non-interactive child
+ * inside it. It also stays lit while the node is selected — after a click you
+ * already know which node you are working on, and that is when you reach for
+ * the wire. */
+export function ConnectGrip({
+  isConnectable,
+  selected,
+}: {
+  isConnectable?: boolean
+  selected?: boolean
+}) {
   if (isConnectable !== true) return null
   return (
     <Handle
@@ -41,9 +54,14 @@ export function ConnectGrip({ isConnectable }: { isConnectable?: boolean }) {
       type="source"
       position={Position.Right}
       isConnectable
-      className="!size-2.5 !rounded-full !border !border-background !bg-primary opacity-0 transition-opacity group-hover:opacity-100"
+      className={cn(
+        '!flex !size-6 !items-center !justify-center !rounded-full !border-0 !bg-transparent transition-opacity group-hover:opacity-100',
+        selected === true ? 'opacity-100' : 'opacity-0',
+      )}
       title="drag to connect"
-    />
+    >
+      <span className="pointer-events-none size-2.5 rounded-full border border-background bg-primary" />
+    </Handle>
   )
 }
 
@@ -60,7 +78,7 @@ export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFl
       )}
     >
       <CenterHandles isConnectable={isConnectable} />
-      <ConnectGrip isConnectable={isConnectable} />
+      <ConnectGrip isConnectable={isConnectable} selected={selected} />
       <DeviceGlyph device={data.device} />
       <div className="flex min-w-0 flex-col">
         <span className="truncate font-mono text-sm font-medium">{data.label}</span>

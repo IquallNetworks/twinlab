@@ -32,9 +32,32 @@ export interface BuilderState {
   selection: Selection
 }
 
+/** A node lifted out of the document, ready to be planted under a new name —
+ * what Duplicate and the copy/paste clipboard both carry. Group memberships
+ * ride along because they are stored on the GROUPS, not the node, and a copy
+ * that silently left them behind would look like the original until save. */
+export interface NodeStamp {
+  node: Omit<BuildNode, 'name'>
+  groups: readonly string[]
+}
+
+/** Read a node out of the doc as a stamp. Returns null for an unknown name. */
+export function nodeStamp(doc: BuildDoc, name: string): NodeStamp | null {
+  const found = doc.nodes.find((node) => node.name === name)
+  if (found === undefined) return null
+  const { name: _name, ...rest } = found
+  return {
+    node: structuredClone(rest),
+    groups: doc.groups.filter((group) => group.members.includes(name)).map((group) => group.name),
+  }
+}
+
 export type BuilderAction =
   | { type: 'reset'; doc: BuildDoc } // load / discard / post-save re-parse
   | { type: 'add-node'; name: string; device: string }
+  // Plant a stamp under `name` — Duplicate and paste share one path. Links are
+  // deliberately NOT copied: a duplicate is a new node, not a new attachment.
+  | { type: 'insert-node'; name: string; stamp: NodeStamp }
   | { type: 'add-lan'; id: string }
   | { type: 'connect'; source: string; target: string } // canvas ids: node name or `lan:<n>`
   | { type: 'add-stub'; id: string; node: string }
@@ -283,6 +306,20 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       }
       return { doc, dirty: true, selection: { kind: 'node', name: action.name } }
     }
+    case 'insert-node': {
+      if (state.doc.nodes.some((node) => node.name === action.name)) return state
+      const wanted = new Set(action.stamp.groups)
+      const doc = {
+        ...state.doc,
+        nodes: [...state.doc.nodes, { ...action.stamp.node, name: action.name }],
+        // Only groups the document still has — a stamp copied before a group
+        // was deleted must not resurrect it.
+        groups: state.doc.groups.map((group) =>
+          wanted.has(group.name) ? { ...group, members: [...group.members, action.name] } : group,
+        ),
+      }
+      return { doc, dirty: true, selection: { kind: 'node', name: action.name } }
+    }
     case 'add-lan': {
       const link: BuildLink = { kind: 'lan', id: action.id, members: [], ...newLinkList(state.doc) }
       const doc = { ...state.doc, links: [...state.doc.links, link] }
@@ -495,4 +532,70 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       return { ...state, doc, dirty: true }
     }
   }
+}
+
+// --------------------------------------------------------------------------
+// Undo / redo
+//
+// A thin wrapper over the reducer above, so the reducer itself stays a pure
+// doc transform with no idea history exists. Only DOCUMENT changes are
+// undoable: selection moves the cursor, not the definition, and pushing it
+// would make Ctrl+Z undo a click. `dirty` is DERIVED from the past — one undo
+// per document change means an empty past is exactly "back at the loaded
+// definition", which is the honest answer for the Save button and the
+// unsaved-changes guards.
+//
+// The canvas LAYOUT is not part of the document (it is a separate per-lab
+// resource), so undo does not move nodes back. A stale position keyed by a
+// node that undo removed is harmless: positions are keyed by id and the
+// builder PUTs the whole map, so it is dropped the next time a real layout
+// change is saved.
+// --------------------------------------------------------------------------
+
+// Deep enough for a long editing session, bounded so a runaway loop cannot
+// grow it without limit.
+const HISTORY_LIMIT = 200
+
+export interface HistoryState {
+  past: readonly BuilderState[]
+  present: BuilderState
+  future: readonly BuilderState[]
+}
+
+export type HistoryAction = BuilderAction | { type: 'undo' } | { type: 'redo' }
+
+export function initialHistory(doc: BuildDoc): HistoryState {
+  return { past: [], present: initialBuilderState(doc), future: [] }
+}
+
+export const canUndo = (state: HistoryState): boolean => state.past.length > 0
+export const canRedo = (state: HistoryState): boolean => state.future.length > 0
+
+export function historyReducer(state: HistoryState, action: HistoryAction): HistoryState {
+  if (action.type === 'undo') {
+    const previous = state.past[state.past.length - 1]
+    if (previous === undefined) return state
+    const past = state.past.slice(0, -1)
+    return {
+      past,
+      present: { ...previous, dirty: past.length > 0 },
+      future: [state.present, ...state.future],
+    }
+  }
+  if (action.type === 'redo') {
+    const [next, ...rest] = state.future
+    if (next === undefined) return state
+    const past = [...state.past, state.present]
+    return { past, present: { ...next, dirty: true }, future: rest }
+  }
+  // Load / discard / post-save re-parse: a new baseline, so the old history
+  // no longer describes anything reachable.
+  if (action.type === 'reset') return initialHistory(action.doc)
+
+  const present = builderReducer(state.present, action)
+  // Selection-only moves (and actions the reducer refused) leave the document
+  // identical — nothing to undo.
+  if (present.doc === state.present.doc) return { ...state, present }
+  const past = [...state.past, state.present].slice(-HISTORY_LIMIT)
+  return { past, present, future: [] }
 }

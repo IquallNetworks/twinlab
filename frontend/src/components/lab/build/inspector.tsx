@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bookmark, ChevronDown, ChevronRight, CircleDot, Trash2, Unlink, X } from 'lucide-react'
+import {
+  Bookmark,
+  ChevronDown,
+  ChevronRight,
+  CircleDot,
+  Copy,
+  CopyPlus,
+  Trash2,
+  Unlink,
+  Waypoints,
+  X,
+} from 'lucide-react'
 import { useState, type Dispatch } from 'react'
 import { toast } from 'sonner'
 
@@ -72,7 +83,8 @@ import { customConfigQueryOptions, meQueryOptions, nodeTemplatesQueryOptions } f
 import { useDeviceCatalog } from '@/lib/use-device-catalog'
 import { cn } from '@/lib/utils'
 
-import type { BuilderAction, BuilderState, EndpointPatch } from './build-state'
+import { validateConnect, type BuilderAction, type BuilderState, type EndpointPatch } from './build-state'
+import { DevicePicker } from './device-picker'
 import { ExtrasEditor } from './extras-editor'
 
 // The builder's right-hand inspector: renders the form for whatever is
@@ -644,24 +656,13 @@ function LabInspector({
         <InspectorTabContent value="defaults">
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="build-default-device">Default device</Label>
-        <Select
-          value={doc.defaultDevice ?? 'none'}
-          onValueChange={(value) =>
-            dispatch({ type: 'patch-lab', patch: { defaultDevice: value === 'none' ? undefined : value } })
-          }
-        >
-          <SelectTrigger id="build-default-device" size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">(none — every node picks its own)</SelectItem>
-            {devices.map((device) => (
-              <SelectItem key={device.device} value={device.device}>
-                {device.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <DevicePicker
+          id="build-default-device"
+          devices={devices}
+          value={doc.defaultDevice}
+          emptyLabel="(none — every node picks its own)"
+          onChange={(defaultDevice) => dispatch({ type: 'patch-lab', patch: { defaultDevice } })}
+        />
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -958,11 +959,15 @@ function NodeInspector({
   labName,
   node,
   dispatch,
+  onDuplicate,
+  onCopy,
 }: {
   doc: BuildDoc
   labName: string
   node: BuildNode
   dispatch: Dispatch<BuilderAction>
+  onDuplicate: () => void
+  onCopy: () => void
 }) {
   const { devices } = useDeviceCatalog()
   const templates = useQuery(customConfigQueryOptions(labName))
@@ -970,6 +975,21 @@ function NodeInspector({
     ...(templates.data?.builtin.map((template) => template.name) ?? []),
     ...Object.keys(templates.data?.custom_config ?? {}).map((path) => path.replace(/\.j2$/, '')),
   ]
+  // Everything this node may legally attach to, judged by the SAME rule the
+  // canvas drag uses — including itself (netlab gives a self-link two
+  // interfaces on one link).
+  const [linkTarget, setLinkTarget] = useState('')
+  const connectTargets = [
+    ...doc.nodes.map((entry) => ({
+      id: entry.name,
+      label: entry.name === node.name ? `${entry.name} (self-link)` : entry.name,
+    })),
+    ...doc.links.flatMap((link) =>
+      link.kind === 'lan'
+        ? [{ id: link.id, label: link.name ?? `${link.members.length}-node LAN` }]
+        : [],
+    ),
+  ].filter((option) => validateConnect(doc, node.name, option.id).ok)
   // A cleared field drops the key; an empty loopback drops the mapping.
   const setLoopback = (key: 'ipv4' | 'ipv6', raw: string) => {
     const next: BuildNodeLoopback = { ...node.loopback }
@@ -1041,32 +1061,36 @@ function NodeInspector({
         {draftError !== null && <p className="text-xs text-destructive">{draftError}</p>}
       </div>
 
+      {/* A duplicate carries the node's settings and group memberships but no
+          links — the copy is a new node, not a second attachment. */}
+      <div className="flex items-center gap-1.5">
+        <Button variant="outline" size="sm" className="flex-1" onClick={onDuplicate}>
+          <CopyPlus className="size-3.5" />
+          Duplicate
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="flex-1"
+          title="Copy this node (Ctrl+C), then paste it from the canvas toolbar"
+          onClick={onCopy}
+        >
+          <Copy className="size-3.5" />
+          Copy
+        </Button>
+      </div>
+
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="build-node-device">Device</Label>
-        <Select
-          value={node.device ?? (doc.defaultDevice !== undefined ? 'inherit' : '')}
-          onValueChange={(value) =>
-            dispatch({
-              type: 'patch-node',
-              name: node.name,
-              patch: { device: value === 'inherit' ? undefined : value },
-            })
-          }
-        >
-          <SelectTrigger id="build-node-device" size="sm">
-            <SelectValue placeholder="pick a device" />
-          </SelectTrigger>
-          <SelectContent>
-            {doc.defaultDevice !== undefined && (
-              <SelectItem value="inherit">default ({doc.defaultDevice})</SelectItem>
-            )}
-            {devices.map((device) => (
-              <SelectItem key={device.device} value={device.device}>
-                {device.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <DevicePicker
+          id="build-node-device"
+          devices={devices}
+          value={node.device}
+          {...(doc.defaultDevice !== undefined && {
+            emptyLabel: `default (${doc.defaultDevice})`,
+          })}
+          onChange={(device) => dispatch({ type: 'patch-node', name: node.name, patch: { device } })}
+        />
         {effectiveDevice === undefined && (
           <p className="text-xs text-destructive">
             No device and no lab default — a device is required to save.
@@ -1181,6 +1205,41 @@ function NodeInspector({
       )}
 
       <Separator />
+      {/* Linking without dragging. The canvas grip stays the quick path, but
+          it needs aim and a visible target — this one is precise, reachable
+          from the keyboard, and names what it will attach to. Both paths go
+          through validateConnect, so they accept exactly the same links. */}
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="build-node-connect">Connect to</Label>
+        <div className="flex items-center gap-1.5">
+          <Select value={linkTarget} onValueChange={setLinkTarget}>
+            <SelectTrigger id="build-node-connect" size="sm" className="flex-1">
+              <SelectValue
+                placeholder={connectTargets.length === 0 ? 'nothing to connect to' : 'pick a target'}
+              />
+            </SelectTrigger>
+            <SelectContent>
+              {connectTargets.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={linkTarget === ''}
+            onClick={() => {
+              dispatch({ type: 'connect', source: node.name, target: linkTarget })
+              setLinkTarget('')
+            }}
+          >
+            <Waypoints className="size-3.5" />
+            Link
+          </Button>
+        </div>
+      </div>
       <Button
         variant="ghost"
         size="sm"
@@ -1694,12 +1753,19 @@ export function Inspector({
   groupStyles,
   onGroupColor,
   dispatch,
+  onDuplicateNode,
+  onCopyNode,
 }: {
   state: BuilderState
   labName: string
   groupStyles: GroupStyles
   onGroupColor: (group: string, color: string) => void
   dispatch: Dispatch<BuilderAction>
+  // Duplicate and copy live in the Build tab: both place the new node
+  // relative to its source, and placement is layout state the reducer does
+  // not own.
+  onDuplicateNode: (name: string) => void
+  onCopyNode: () => void
 }) {
   const { doc, selection } = state
   const lab = (
@@ -1720,7 +1786,15 @@ export function Inspector({
       if (node === undefined) return lab
       // Keyed remount resets the name draft when the selection moves.
       return (
-        <NodeInspector key={node.name} doc={doc} labName={labName} node={node} dispatch={dispatch} />
+        <NodeInspector
+          key={node.name}
+          doc={doc}
+          labName={labName}
+          node={node}
+          dispatch={dispatch}
+          onDuplicate={() => onDuplicateNode(node.name)}
+          onCopy={onCopyNode}
+        />
       )
     }
     case 'link': {

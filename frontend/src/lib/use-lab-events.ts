@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
-import { recordLabEvent } from '@/lib/lab-event-store'
+import { recordJobEvent, recordLabEvent } from '@/lib/lab-event-store'
 import { jobEventSchema, labEventSchema } from '@/lib/schemas'
 
 // Coalesce bursts (a deploy emits create/start/… in quick succession) into one
@@ -52,6 +52,10 @@ export function useLabEvents(): void {
     source.addEventListener('job', (event: MessageEvent<string>) => {
       const parsed = jobEventSchema.safeParse(parse(event))
       if (!parsed.success) return
+      // Recorded before the debounce, like the lab events: the deploy
+      // progress view brackets the container events with the job that caused
+      // them, so it needs the submit as it arrives, not after a refetch.
+      recordJobEvent(parsed.data)
       // A submit or a completion: the job lists change either way, and a
       // finished deploy/destroy also changed the lab it ran on.
       refreshSoon()

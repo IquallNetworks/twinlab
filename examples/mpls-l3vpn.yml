@@ -21,8 +21,8 @@
 #
 # Test suites live on the lab record, not in this definition (they are never sent
 # to `netlab create`). A config-time convergence gate for this lab ships alongside
-# in mpls-l3vpn.test-suites.json — seed it via the deploy request's `test_suites`,
-# or PUT it to an existing lab, to gate config-done on the L3VPN converging.
+# in mpls-l3vpn.test-suites.json — PUT it to the lab
+# (`PUT /labs/{name}/test-suites`) to gate config-done on the L3VPN converging.
 
 provider: clab
 defaults.device: vyos

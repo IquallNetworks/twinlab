@@ -106,6 +106,14 @@ function edgeStyle(operState: LinkOperState, impaired: boolean): Partial<Edge> {
   return { style, animated: impaired }
 }
 
+/** The link's assigned subnet, as the canvas labels it. Only the server link
+ * table knows addressing (the client-side parse reads the definition, where
+ * netlab has not allocated yet), and an unnumbered/L2 link legitimately has
+ * none — both come back undefined and simply go unlabelled. */
+function prefixLabel(link: LabLink): string | undefined {
+  return link.prefix_ipv4 ?? link.prefix_ipv6 ?? undefined
+}
+
 function buildGraph(
   lab: LabDetail,
   topology: ParsedTopology,
@@ -180,6 +188,7 @@ function buildGraph(
           })
         }
       }
+      const prefix = prefixLabel(link)
       if (link.endpoints.length === 2) {
         const [a, b] = link.endpoints
         if (a === undefined || b === undefined) continue
@@ -188,6 +197,7 @@ function buildGraph(
           source: a.node,
           target: b.node,
           type: 'straight',
+          ...(prefix !== undefined && { label: prefix }),
           data: {
             operState: link.oper_state,
             impaired: a.impairment !== null || b.impairment !== null,
@@ -201,7 +211,10 @@ function buildGraph(
           position: { x: 0, y: 0 },
           width: LAN_W,
           height: LAN_H,
-          data: { label: link.name ?? `${link.endpoints.length}-node LAN` },
+          data: {
+            label: link.name ?? `${link.endpoints.length}-node LAN`,
+            ...(prefix !== undefined && { prefix }),
+          },
         })
         for (const endpoint of link.endpoints) {
           // Each spoke carries ITS member's interface state, not the roll-up.
@@ -355,7 +368,11 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
             a['device'] === b['device'] &&
             a['state'] === b['state'] &&
             a['impairedIfaces'] === b['impairedIfaces'] &&
-            a['drifted'] === b['drifted']
+            a['drifted'] === b['drifted'] &&
+            // A LAN hub's subnet: it arrives with the link table, which can
+            // refetch without the graph SHAPE changing (a redeploy keeps the
+            // same link ids), so it has to be compared here too.
+            a['prefix'] === b['prefix']
           if (same) return node
           changed = true
           return { ...node, data: update.data }
@@ -373,9 +390,21 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
           if (!update) return edge
           const a = edge.data as LinkEdgeData | undefined
           const b = update.data as LinkEdgeData | undefined
-          if (a?.operState === b?.operState && a?.impaired === b?.impaired) return edge
+          if (
+            a?.operState === b?.operState &&
+            a?.impaired === b?.impaired &&
+            edge.label === update.label
+          ) {
+            return edge
+          }
           changed = true
-          return { ...edge, data: update.data, style: update.style, animated: update.animated }
+          return {
+            ...edge,
+            data: update.data,
+            style: update.style,
+            animated: update.animated,
+            label: update.label,
+          }
         })
         return changed ? next : current
       })

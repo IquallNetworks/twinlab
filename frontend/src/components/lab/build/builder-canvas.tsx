@@ -15,7 +15,15 @@ import {
   type OnSelectionChangeParams,
   type XYPosition,
 } from '@xyflow/react'
-import { LayoutGrid, Map as MapIcon, MoveHorizontal, MoveVertical } from 'lucide-react'
+import {
+  ClipboardPaste,
+  LayoutGrid,
+  Map as MapIcon,
+  MoveHorizontal,
+  MoveVertical,
+  Redo2,
+  Undo2,
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type Dispatch } from 'react'
 import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
@@ -81,6 +89,12 @@ interface BuilderCanvasProps {
   onPositions: (next: SavedPositions, persist: boolean) => void
   // Shared per-group styling (delta 20) — read-only here; the inspector edits.
   groupStyles: GroupStyles
+  // Document undo/redo, owned by the Build tab (the history wraps the whole
+  // reducer, not just the canvas's share of it).
+  history: { canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void }
+  // Undefined while the node clipboard is empty — the button hides rather
+  // than sitting there disabled with nothing to explain it.
+  onPasteNode?: () => void
   // Extra toolbar content for the top-right corner panel, after the view
   // tools (the Build tab's edit-as-text switch).
   topRight?: React.ReactNode
@@ -207,6 +221,8 @@ function CanvasInner({
   positions,
   onPositions,
   groupStyles,
+  history,
+  onPasteNode,
   topRight,
 }: BuilderCanvasProps) {
   const { resolvedTheme } = useTheme()
@@ -494,6 +510,7 @@ function CanvasInner({
         )}
 
         <BuilderPalette
+          defaultDevice={doc.defaultDevice}
           onAddDevice={addDevice}
           onAddTemplate={addTemplate}
           onAddLan={addLan}
@@ -524,6 +541,37 @@ function CanvasInner({
         )}
 
         <Panel position="top-right" className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            title="Undo (Ctrl+Z)"
+            aria-label="Undo"
+            disabled={!history.canUndo}
+            onClick={history.undo}
+          >
+            <Undo2 className="size-3.5" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            title="Redo (Ctrl+Shift+Z)"
+            aria-label="Redo"
+            disabled={!history.canRedo}
+            onClick={history.redo}
+          >
+            <Redo2 className="size-3.5" />
+          </Button>
+          {onPasteNode !== undefined && (
+            <Button
+              variant="outline"
+              size="icon-sm"
+              title="Paste the copied node (Ctrl+V)"
+              aria-label="Paste node"
+              onClick={onPasteNode}
+            >
+              <ClipboardPaste className="size-3.5" />
+            </Button>
+          )}
           <Button
             variant="outline"
             size="icon-sm"

@@ -24,13 +24,13 @@ test('blank canvas teaches, the Add menu lists the catalog', async ({ page }) =>
 
   await page.getByRole('button', { name: 'Add', exact: true }).click()
   for (const device of ['VyOS', 'FRRouting', 'MikroTik RouterOS 7 (CHR)', 'BIRD routing daemon', 'dnsmasq DHCP/DNS server', 'Linux host']) {
-    await expect(page.getByRole('menuitem', { name: device })).toBeVisible()
+    await expect(page.getByRole('option', { name: device })).toBeVisible()
   }
   await expect(
-    page.getByRole('menuitem', { name: "Node templates appear here — save one from a node's General tab" }),
+    page.getByRole('option', { name: "Node templates appear here — save one from a node's General tab" }),
   ).toBeDisabled()
-  await expect(page.getByRole('menuitem', { name: 'LAN segment' })).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: 'From config file…' })).toBeVisible()
+  await expect(page.getByRole('option', { name: 'LAN segment' })).toBeVisible()
+  await expect(page.getByRole('option', { name: 'From config file…' })).toBeVisible()
   await page.keyboard.press('Escape')
 })
 
@@ -51,10 +51,10 @@ test('palette adds, inspector renames and enables OSPF, drag connects, save pers
   // spread them only after the last add. While stacked, pointer events land
   // on the first-added node — dragging vyos1 off the pile is deterministic.
   await page.getByRole('button', { name: 'Add', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'VyOS' }).click()
+  await page.getByRole('option', { name: 'VyOS' }).click()
   await expect(flowNode(canvas(page), 'vyos1')).toBeVisible()
   await page.getByRole('button', { name: 'Add', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'FRRouting' }).click()
+  await page.getByRole('option', { name: 'FRRouting' }).click()
   await expect(flowNode(canvas(page), 'frr1')).toBeVisible()
   await dragNodeBy(page, flowNode(canvas(page), 'vyos1'), -240, -80)
 
@@ -88,7 +88,7 @@ test('palette adds, inspector renames and enables OSPF, drag connects, save pers
 test('a 2-member LAN blocks save loudly and Discard recovers', async ({ page }) => {
   await openBuild(page)
   await page.getByRole('button', { name: 'Add', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'LAN segment' }).click()
+  await page.getByRole('option', { name: 'LAN segment' }).click()
   const lan = canvas(page).locator('.react-flow__node[data-id^="lan"]').first()
   await dragNodeBy(page, lan, -60, 200)
   await connectNodes(page, flowNode(canvas(page), 'r1'), lan)
@@ -105,7 +105,7 @@ test('a 2-member LAN blocks save loudly and Discard recovers', async ({ page }) 
 test('mode switch and route leave both guard unsaved changes', async ({ page }) => {
   await openBuild(page)
   await page.getByRole('button', { name: 'Add', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Linux host' }).click()
+  await page.getByRole('option', { name: 'Linux host' }).click()
   await expect(page.getByText('unsaved changes')).toBeVisible()
 
   // Switching to text mode with a dirty draft asks first; Stay keeps it.

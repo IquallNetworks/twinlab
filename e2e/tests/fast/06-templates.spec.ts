@@ -20,10 +20,12 @@ test('a node saves into the template library and stamps from the Add menu', asyn
   await page.getByRole('button', { name: 'Save template' }).click()
   await expectToast(page, "Node template e2e-router saved — it's now in the Add menu")
 
-  // The palette lists it (name + device) and stamping adds a node.
+  // The palette lists it (name + device) and stamping adds a node. This lab's
+  // definition sets `defaults.device`, so the Add control is in its SPLIT
+  // form: the left half plants that default, templates live behind the menu.
   const nodesBefore = await flowNodes(canvas).count()
-  await page.getByRole('button', { name: 'Add', exact: true }).click()
-  const item = page.getByRole('menuitem', { name: /e2e-router/ })
+  await page.getByRole('button', { name: 'More things to add' }).click()
+  const item = page.getByRole('option', { name: /e2e-router/ })
   await expect(item).toContainText('vyos')
   await item.click()
   await expect(flowNodes(canvas)).toHaveCount(nodesBefore + 1)

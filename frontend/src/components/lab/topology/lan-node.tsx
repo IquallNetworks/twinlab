@@ -17,6 +17,11 @@ export function LanNode({ data, isConnectable }: NodeProps<LanFlowNode>) {
       <ConnectGrip isConnectable={isConnectable} />
       <Waypoints className="size-4" />
       <span className="font-mono text-[0.55rem] tracking-wide uppercase">lan</span>
+      {data.prefix !== undefined && (
+        <span className="pointer-events-none absolute top-full left-1/2 mt-1 -translate-x-1/2 font-mono text-[0.6rem] whitespace-nowrap text-muted-foreground">
+          {data.prefix}
+        </span>
+      )}
     </div>
   )
 }

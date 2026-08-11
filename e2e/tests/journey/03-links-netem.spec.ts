@@ -45,6 +45,11 @@ test('the canvas edge panel exposes the impairment editor', async ({ page }) => 
   const canvas = page.getByRole('application', { name: 'Lab topology canvas' })
   await expect(canvas.locator('.react-flow__edge').first()).toBeVisible()
 
+  // Each link wears the subnet netlab assigned it — the p2p edges as an edge
+  // label, the LAN's under its hub. Only the server link table knows these,
+  // so they appear once it resolves.
+  await expect(canvas.locator('.react-flow__edge-textwrapper').first()).toContainText(/\d+\.\d+\.\d+\.\d+\/\d+/)
+
   // Click an edge ON its path — the bottom panel opens with per-endpoint
   // state (node:iface pairs). Retried: the live canvas reseeds once when the
   // links query resolves, which can move the edge between the point

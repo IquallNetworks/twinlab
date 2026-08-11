@@ -5,9 +5,13 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
-  builderReducer,
-  initialBuilderState,
+  canRedo,
+  canUndo,
+  historyReducer,
+  initialHistory,
+  nodeStamp,
   type BuilderAction,
+  type NodeStamp,
 } from '@/components/lab/build/build-state'
 import { BuilderCanvas } from '@/components/lab/build/builder-canvas'
 import { DefinitionEditor } from '@/components/lab/build/definition-editor'
@@ -28,7 +32,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, ApiError } from '@/lib/api'
-import { emitBuildDoc, emptyBuildDoc, parseBuildDoc } from '@/lib/build-doc'
+import { emitBuildDoc, emptyBuildDoc, nextNodeName, parseBuildDoc } from '@/lib/build-doc'
 import { toastError } from '@/lib/error-toast'
 import type { GroupStyles } from '@/lib/group-colors'
 import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
@@ -97,11 +101,15 @@ function BuildTabInner({
   )
 
   const [mode, setMode] = useState<Mode>(parsed.ok ? 'visual' : 'text')
-  const [state, rawDispatch] = useReducer(
-    builderReducer,
-    undefined,
-    () => initialBuilderState(parsed.ok ? parsed.doc : emptyBuildDoc()),
+  const [history, rawDispatch] = useReducer(historyReducer, undefined, () =>
+    initialHistory(parsed.ok ? parsed.doc : emptyBuildDoc()),
   )
+  const state = history.present
+  // The node clipboard: session-scoped and in-memory on purpose — this is a
+  // builder affordance, not an OS clipboard integration (a BuildNode has no
+  // sensible text/plain form, and reading the system clipboard needs a
+  // permission prompt the copy does not deserve).
+  const [clipboard, setClipboard] = useState<NodeStamp | null>(null)
   const [textDirty, setTextDirty] = useState(false)
   const dirty = mode === 'visual' ? state.dirty : textDirty
 
@@ -177,6 +185,85 @@ function BuildTabInner({
     }
     rawDispatch(action)
   }
+
+  // Duplicate / copy / paste all plant a stamp under a fresh name, so they
+  // share one path. The new node lands beside its source rather than on the
+  // dagre spot an unplaced node would get — a copy you cannot see is a copy
+  // you think failed.
+  const PASTE_OFFSET = 48
+  const plant = (stamp: NodeStamp, near: string | null) => {
+    const device = stamp.node.device ?? state.doc.defaultDevice
+    if (device === undefined) {
+      toast.error('Paste needs a device: the copied node had none and the lab has no default')
+      return
+    }
+    const name = nextNodeName(state.doc, device)
+    const source = near !== null ? positionsRef.current[near] : undefined
+    if (source !== undefined) {
+      onPositions(
+        { ...positionsRef.current, [name]: { x: source.x + PASTE_OFFSET, y: source.y + PASTE_OFFSET } },
+        true,
+      )
+    }
+    dispatch({ type: 'insert-node', name, stamp })
+  }
+
+  const duplicateNode = (name: string) => {
+    const stamp = nodeStamp(state.doc, name)
+    if (stamp !== null) plant(stamp, name)
+  }
+
+  const copySelectedNode = () => {
+    if (state.selection.kind !== 'node') return
+    const stamp = nodeStamp(state.doc, state.selection.name)
+    if (stamp === null) return
+    setClipboard(stamp)
+    toast.success(`Copied ${state.selection.name}`)
+  }
+
+  const pasteNode = () => {
+    if (clipboard === null) return
+    plant(clipboard, state.selection.kind === 'node' ? state.selection.name : null)
+  }
+
+  // Editing shortcuts, bound at the window because the canvas is not the only
+  // place a selection can be made (the inspector is outside it). Anything
+  // typed into a field belongs to that field: text inputs have their own undo
+  // stack and CodeMirror owns its keymap entirely.
+  const shortcutsRef = useRef({ copySelectedNode, pasteNode })
+  shortcutsRef.current = { copySelectedNode, pasteNode }
+  useEffect(() => {
+    if (mode !== 'visual') return
+    const isTyping = (target: EventTarget | null): boolean =>
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+      if (isTyping(event.target)) return
+      const key = event.key.toLowerCase()
+      if (key === 'z') {
+        event.preventDefault()
+        rawDispatch({ type: event.shiftKey ? 'redo' : 'undo' })
+      } else if (key === 'y') {
+        // Windows/Linux muscle memory for redo, alongside Ctrl+Shift+Z.
+        event.preventDefault()
+        rawDispatch({ type: 'redo' })
+      } else if (key === 'c') {
+        // Never steal a real text copy: with a selection on the page, Ctrl+C
+        // means "copy that text", not "copy the selected node".
+        if ((window.getSelection()?.toString() ?? '') !== '') return
+        event.preventDefault()
+        shortcutsRef.current.copySelectedNode()
+      } else if (key === 'v') {
+        event.preventDefault()
+        shortcutsRef.current.pasteNode()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [mode])
 
   // Keep the builder in sync with server-side changes, but only while clean:
   // a dirty builder is last-write-wins (as the old edit dialog was) with an
@@ -374,6 +461,13 @@ function BuildTabInner({
                   positions={positions}
                   onPositions={onPositions}
                   groupStyles={groupStyles}
+                  history={{
+                    canUndo: canUndo(history),
+                    canRedo: canRedo(history),
+                    undo: () => rawDispatch({ type: 'undo' }),
+                    redo: () => rawDispatch({ type: 'redo' }),
+                  }}
+                  onPasteNode={clipboard === null ? undefined : pasteNode}
                   topRight={textModeButton}
                 />
               </div>
@@ -387,6 +481,8 @@ function BuildTabInner({
                 dispatch={dispatch}
                 groupStyles={groupStyles}
                 onGroupColor={onGroupColor}
+                onDuplicateNode={duplicateNode}
+                onCopyNode={copySelectedNode}
               />
             </div>
             <div className="flex flex-col gap-2 border-t p-3">

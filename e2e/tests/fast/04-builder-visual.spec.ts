@@ -9,6 +9,14 @@ import { expectToast } from '../../lib/toast'
 // exercises the emit blocker and both unsaved-changes guards.
 test.describe.configure({ mode: 'serial' })
 
+// Taller than the 720px default ON PURPOSE. The "Not saveable yet" panel is
+// an in-flow block ABOVE a fixed-height canvas, so raising it (which the LAN
+// test does deliberately) pushes the canvas down; at 720px a node then sits
+// under the panel and every hover on it is intercepted. That made the LAN
+// test fail roughly one run in three — geometry, not timing, so no amount of
+// waiting fixed it.
+test.use({ viewport: { width: 1280, height: 1000 } })
+
 const canvas = (page: Page) => page.getByRole('region', { name: 'Topology builder canvas' })
 const inspector = (page: Page) => page.locator('aside')
 

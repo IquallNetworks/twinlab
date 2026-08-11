@@ -67,6 +67,36 @@ command palette — never deploys a container), **`journey`** (creates, deploys 
 `e2e-net` topology end to end: nodes, terminal, links, netem, validation, drift, teardown).
 One worker, ordered spec files — the suite is a story, not a grid.
 
+### Watching a run over SSH (UI mode)
+
+There is no display on a remote box, so `--headed` cannot work. UI mode serves itself over
+HTTP instead — forward the port and drive it from your own browser:
+
+```sh
+# on the host (skip the reset when the stack is already up and healthy)
+E2E_SKIP_RESET=1 pnpm exec playwright test --ui-host=127.0.0.1 --ui-port=9323
+# from your machine
+ssh -L 9323:localhost:9323 <host>          # then open http://localhost:9323
+```
+
+Bind 127.0.0.1, not 0.0.0.0 — the tunnel terminates on the remote's loopback, so there is no
+reason to publish the UI on every interface.
+
+**Two things that look like breakage and are not:**
+
+1. **Only `auth.setup.ts` is listed.** UI mode's project filter defaults to the FIRST project
+   in the config array, which is `setup`. Expand the filter panel (the chevron beside the
+   filter box, or click the `Status: … Projects: …` summary) and tick **fast**. The choice is
+   stored per browser and survives a reload. `--project=fast` on the command line does NOT
+   move the UI filter — it only scopes what a run executes.
+2. **A long pause before anything appears.** Starting UI mode runs `globalSetup`, i.e. the
+   whole `stack.sh reset` — `down -v`, an image rebuild, and a fresh `up`. That is minutes,
+   and the tree stays sparse until it finishes. `E2E_SKIP_RESET=1` skips it when the stack is
+   already running.
+
+Because UI mode resets ONCE at startup and then re-runs on demand, `fast/11-builder-l3vpn`
+clears its own lab first, so it can be replayed as many times as you like in one session.
+
 ## Conventions
 
 - **Assert exact strings** — statuses, badges, toasts, counts, summary lines, empty-state and

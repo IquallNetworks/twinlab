@@ -253,6 +253,9 @@ function CanvasInner({
   rankdirRef.current = rankdir
   const selectionRef = useRef(state.selection)
   selectionRef.current = state.selection
+  // Set by the pane click, cleared by the empty selection that follows it.
+  const deselecting = useRef(false)
+  const deselectingAt = useRef(0)
   const firstFit = useRef(true)
 
   // Sync doc → canvas whenever the doc changes: existing nodes keep their
@@ -373,6 +376,15 @@ function CanvasInner({
   // selections are ignored — they also fire spuriously when the node set is
   // rebuilt — deselection is the pane click below.
   const onSelectionChange = ({ nodes: selNodes, edges: selEdges }: OnSelectionChangeParams) => {
+    // A pane click deselects, but React Flow reports the OLD selection once
+    // more on the way there; mirroring it would cancel the deselect. Drop
+    // those, and stop suppressing as soon as the empty selection arrives —
+    // with a deadline so a missed empty event cannot wedge the mirror off.
+    if (deselecting.current) {
+      const empty = selNodes.length === 0 && selEdges.length === 0
+      if (empty || performance.now() - deselectingAt.current > 500) deselecting.current = false
+      if (empty || performance.now() - deselectingAt.current <= 500) return
+    }
     let next: Selection | null = null
     const node = selNodes[0]
     const edge = selEdges[0]
@@ -479,6 +491,14 @@ function CanvasInner({
         }
         onSelectionChange={onSelectionChange}
         onPaneClick={() => {
+          // React Flow emits one more selection change AFTER this that still
+          // carries the old element, before the empty one lands. Mirroring
+          // that would undo the deselect — so suppress the mirror until the
+          // selection actually arrives empty (see onSelectionChange). Without
+          // it, touching a node made the lab settings unreachable without a
+          // page reload.
+          deselecting.current = true
+          deselectingAt.current = performance.now()
           if (selectionRef.current.kind !== 'lab') {
             dispatch({ type: 'select', selection: { kind: 'lab' } })
           }

@@ -58,10 +58,14 @@ projects sit beside the services: **`client/`** (`twinlab-client`, the distribut
 client — PyPI-ready, published at v1.0), **`blackbox/`** (the black-box test suite: 140+ tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker) and **`e2e/`** (the Playwright UX suite, SHIPPED 2026-08-06 — ROADMAP item 14:
-pnpm + @playwright/test, chromium, 50 exact-string specs driving the real frontend against a
+pnpm + @playwright/test, chromium, 54 exact-string specs driving the real frontend against a
 dedicated **`twinlab-e2e`** parallel stack that every run resets to a REAL EMPTY backend via
-`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (30 specs, no containers) → `journey`
-(20 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`); its
+`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (34 specs, no containers) → `journey`
+(20 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`);
+`fast/11-builder-l3vpn` is the builder's own walkthrough-as-a-test — it builds a VyOS L3VPN
+core (defaults, a VRF, PE/P nodes, links) entirely in the visual builder and is the regression
+net for every editing affordance, deliberately ONE test because a draft lives in the page and
+each test gets a fresh one; its
 README carries the driving conventions — never `networkidle` (the SSE stream never settles),
 radix/CodeMirror/xterm helpers in `e2e/lib/`, and the barrier truth that the lifecycle badge
 flips to `deployed` when containers are up while the JOB runs on, so the Last-operation badge
@@ -165,7 +169,15 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   plus per-lab job history through one shared `JobsTable` (row → detail sheet with request/
   result/error JSON; aggregation is one `GET /jobs` query keyed `['jobs', 'all', limit]`, under
   the same `['jobs']` root as the per-lab lists so one invalidation refreshes either). Long ops submit **202 async jobs** awaited via `waitJob`
-  (`src/lib/api.ts`); the **test-suites** panel (rebuilt on the v2 wire 2026-08-03) and
+  (`src/lib/api.ts`), and the **deploy dialog streams progress while one runs** (2026-08-07):
+  the SSE store (`lib/lab-event-store.ts`) now records BOTH named events — discriminated on
+  `source`, not `kind`, since a JobEvent has a `kind` of its own — and the dialog replaces
+  its dead "Redeploying…" button with the lab's live container events plus the job's
+  submit/finish, footed by "Close (keeps running)" because the job is server-side. Its limit
+  is stated in the UI rather than left to be guessed: netlab's output, the image pre-flight
+  and Ansible's per-node push never leave the backend, so a quiet stretch after the
+  containers appear is the config push working. A real job log would be a contract addition;
+  the **test-suites** panel (rebuilt on the v2 wire 2026-08-03) and
   custom-config live on the
   Operations tab. **Whole-lab power + save-config are header-menu entries**, not a Controls card
   — `components/lab/lab-power-menu.tsx` renders them into the lab header's `⋯` menu above a
@@ -183,7 +195,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   forms (unresolvable entries surface as an "N links not rendered" strip, never dropped; LAN
   hubs for multi-access; drift shown both ways), live node state + netem badges overlay it
   (queries shared with the netem controls, running nodes only), selection reuses the connect
-  drawer + node controls, and the toolbar does auto-layout, LR/TB and PNG export; undeployed
+  drawer + node controls, **each link wears its netlab-assigned subnet** (2026-08-07 —
+  `prefix_ipv4` else `prefix_ipv6` from the link table, as an edge label on a p2p and under
+  the hub on a LAN; only the SERVER link table carries addressing, and an unnumbered/L2 link
+  legitimately has none, so both cases simply go unlabelled), and the toolbar does
+  auto-layout, LR/TB and PNG export; undeployed
   labs render as documentation; manual layouts persist per lab in localStorage
   (`topology/layout-store.ts`, shared with the builder). The canvas is **Overview's Visual view**,
   not a tab of its own — `components/lab/definition-view.tsx` gives the Definition card the same
@@ -253,7 +269,24 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   keeps memberships and link endpoints consistent), the canvas
   derives from it
   (drag-to-connect via `validateConnect`, palette adds, index-safe deletions), and the
-  inspector greys out device×module combinations the catalog says can't run. The
+  inspector greys out device×module combinations the catalog says can't run.
+  **Editing affordances (2026-08-07)**: `historyReducer` wraps `builderReducer` for
+  undo/redo (Ctrl/Cmd+Z, +Shift+Z, +Y and toolbar buttons) — DOCUMENT changes only, so a
+  selection is not undoable and neither is a drag (positions are the separate layout
+  resource), and `dirty` is DERIVED from the history depth, which makes undoing back to the
+  loaded definition honestly clean; `insert-node` is ONE reducer path serving both Duplicate
+  (node inspector) and an in-memory node clipboard (Ctrl/Cmd+C/V, paste button on the canvas
+  toolbar), copying settings AND group memberships but never links, since a copy is a new
+  node rather than a second attachment. The **Add control is split**: the left half plants
+  the lab's `defaults.device` in one click, the chevron opens a cmdk-searchable list
+  (devices findable by netlab name or catalog label, then templates / LAN segment / config
+  import) — the supported set grows with every admitted platform, so it is filtered, not
+  enumerated. The SAME searchable picker (`build/device-picker.tsx`, on a new
+  `ui/popover.tsx` — radix's Popover was already in the `radix-ui` umbrella, no new
+  dependency) is the node's Device control and the lab's Default device. Linking has a
+  second, aimed path beside the drag: a target select + Link button on the node, sharing
+  `validateConnect` with the canvas, and the canvas grip itself is a 24px transparent hit
+  area around a 10px dot that stays lit while the node is selected. The
   mpls-l3vpn example — `groups:` block included — AND campus-lan.yml (dict-form links,
   stub, attributed LAN) are fully buildable visually. Text mode
   is the full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;

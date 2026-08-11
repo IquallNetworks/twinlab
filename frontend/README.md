@@ -29,7 +29,7 @@ no token to store.
 | `src/lib/use-lab-events.ts` | The SSE subscription: records events to the activity store and invalidates the `['labs']` / `['jobs']` roots. |
 | `src/router.tsx` | Routes. A pathless auth layout resolves `me` in `beforeLoad` and redirects to `/login` on 401; `/login` sits outside it. |
 | `src/pages/` | `dashboard`, `labs`, `lab-import`, `jobs`, `users`, `groups`, `account`, `login`, and `lab/` — the lab detail layout route with its overview / build / nodes / operations / access children. |
-| `src/components/lab/build/` | The builder: canvas, palette, inspector, and `build-state.ts`, the reducer that owns the document. |
+| `src/components/lab/build/` | The builder: canvas, palette, inspector, the shared searchable `device-picker.tsx`, and `build-state.ts` — the reducer that owns the document, plus the `historyReducer` wrapping it for undo/redo. |
 | `src/components/lab/topology/` | The read-only canvas: node/LAN/stub renderers, dagre layout, PNG export. |
 | `src/lib/build-doc.ts` | **The parser/emitter** — netlab YAML ⇄ a typed core plus lossless `extras` passthrough. Pure, dependency-light, and the round-trip invariant `parse(emit(doc)) == doc` is load-bearing. |
 | `src/lib/topology.ts` | Best-effort parse of netlab's link forms for the read-only canvas. Unresolvable entries surface in a strip, never silently dropped. |

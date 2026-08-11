@@ -1,10 +1,12 @@
-# Twinlab v1.0 — release notes (DRAFT)
+# Twinlab v0.9 — release notes (DRAFT)
 
-**Status: draft for maintainer review.** Nothing here is published, tagged or pushed. Four
-decisions are still open and this document assumes none of them (ROADMAP item 22): the PyPI
-account and whether to use trusted publishing; whether the stack carries a version number
-distinct from the client's; whether a `CHANGELOG.md` is introduced (in which case this file is
-its first entry); and whether the tag is cut on `dev` or after a merge to `main`.
+**Status: draft for maintainer review.** Nothing here is published, tagged or pushed. The
+version is settled (2026-08-11): **0.9.0, one version across the tree** — the v1.0 API contract
+is implemented in full, and 0.9 holds the door open for contract changes before the 1.0
+promise is made. Three decisions are still open and this document assumes none of them
+(ROADMAP item 22): the PyPI account and whether to use trusted publishing; whether a
+`CHANGELOG.md` is introduced (in which case this file is its first entry); and whether the tag
+is cut on `dev` or after a merge to `main`.
 
 ---
 
@@ -17,10 +19,12 @@ test scenarios declaratively, then deploys reproducible lab environments from th
 for validating configurations, orchestration workflows, service provisioning and operational
 procedures before they touch production.
 
-v1.0 is the first release with a settled API contract. The definition is the sole source of
-truth for a lab, and the same definition always produces the same environment.
+v0.9 is the first release. Its API contract is settled — the reviewed v1.0 contract shape,
+implemented in full — and the 0.9 number reserves the right to change it before 1.0 freezes
+it. The definition is the sole source of truth for a lab, and the same definition always
+produces the same environment.
 
-## What is in v1.0
+## What is in v0.9
 
 **A settled HTTP/WebSocket API.** `docs/twinlab_client_shape.py` is the reviewed contract; the
 backend implements it in full (twenty-nine reviewed deltas). Every non-2xx response wears one
@@ -107,7 +111,7 @@ The stack itself is not distributed — Twinlab is deployed from this repository
 ## What backs the release
 
 - Backend, client, netlab-runner and hostprep: `ruff format` + `ruff check` + basedpyright
-  (strict) + pytest — 392 tests.
+  (strict) + pytest — 394 tests.
 - Frontend: `pnpm typecheck` + `pnpm build` + `pnpm check:build-doc` (90 parser/emitter
   round-trip and gate checks).
 - **`blackbox/`** — the contract's enforcement: 154 tests exercising a live stack through the

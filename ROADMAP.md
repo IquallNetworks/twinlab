@@ -1278,7 +1278,7 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     the tag freezes.
 
     **What is already true:** `client/` is the distributable artifact
-    (`twinlab-client`, PyPI-ready, versioned 1.0), the `blackbox/` suite is the
+    (`twinlab-client`, PyPI-ready, versioned 0.9.0), the `blackbox/` suite is the
     contract's enforcement against a live stack, and `docs/twinlab_client_shape.py`
     is the reviewed contract the tag pins. Nothing in the stack itself is
     distributed — Twinlab is deployed from this tree by `docker compose`.
@@ -1296,21 +1296,24 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     **Pre-flight run 2026-08-06 — green, and now STALE.** Every gate, the full
     blackbox suite with the `deploy` marker against a stack reset to empty and
     rebuilt, and a clean `uv build` of the client; draft notes landed at
-    `docs/release-notes-v1.0.md`. Four commit groups have shipped since —
+    `docs/release-notes-v0.9.md` (drafted as v1.0; retitled when the version was
+    settled). Four commit groups have shipped since —
     contract deltas 27, 28 and 29, the digest-pinned VyOS image, and the
     shielded DB session close — so the run does not carry forward and the freshly-built
-    stack requirement above applies to the re-run. One finding from that
-    pre-flight is still open: **every project in the tree reads `version =
-    "0.1.0"`**, the client included, against a README and CLAUDE.md that both
-    say v1.0 — the client's bump is mandatory before publishing, along with its
-    `Development Status :: 3 - Alpha` classifier and the "(not yet published)"
-    line in its README. (The pre-flight's other finding, a badly stale root
-    `README.md`, was closed by the rewrite of 2026-08-06.)
+    stack requirement above applies to the re-run. The pre-flight's version
+    finding is CLOSED 2026-08-11: **the tree is versioned 0.9.0 throughout** —
+    maintainer decision, one version for stack and client, 0.9 rather than a
+    1.0 pre-release so the door stays open for API changes before the 1.0
+    promise; the client's classifier moved to `Development Status :: 4 - Beta`
+    and its repository URLs now point at the public
+    `github.com/IquallNetworks/twinlab` (the personal fork remote is dropped).
+    (The pre-flight's other finding, a badly stale root `README.md`, was
+    closed by the rewrite of 2026-08-06.)
 
     **Undecided, and all of it is the maintainer's call:** the PyPI account and
-    whether to use trusted publishing; whether the stack carries its own version
-    number distinct from the client's; whether a CHANGELOG is introduced; and
-    whether the tag is cut on `dev` or after a merge to `main`. **Pushing,
+    whether to use trusted publishing; whether a CHANGELOG is introduced; and
+    whether the tag — `v0.9.0` — is cut on `dev` or after a merge to `main`.
+    **Pushing,
     merging, tagging and publishing are maintainer actions** — the standing
     convention in `CLAUDE.md` — so this item is prepared, never executed,
     unattended.

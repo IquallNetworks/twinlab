@@ -1,6 +1,6 @@
 [project]
 name = "netlab-runner"
-version = "0.1.0"
+version = "0.9.0"
 description = "Twinlab config-push runner: netlab initial over the docker connection"
 requires-python = ">=3.13"
 dependencies = [

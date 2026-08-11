@@ -1,6 +1,6 @@
 [project]
 name = "twinlab-backend"
-version = "0.1.0"
+version = "0.9.0"
 description = "Twinlab backend: generates containerlab topologies with netlab and drives the containerlab API server."
 readme = "README.md"
 authors = [

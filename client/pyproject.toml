@@ -1,6 +1,6 @@
 [project]
 name = "twinlab-client"
-version = "0.1.0"
+version = "0.9.0"
 description = "Async Python client for the Twinlab API — declarative, reproducible network labs."
 readme = "README.md"
 authors = [
@@ -11,7 +11,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 keywords = ["twinlab", "containerlab", "netlab", "network", "digital-twin", "lab"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Telecommunications Industry",
     "Programming Language :: Python :: 3",
@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/GalileoCap/twinlab-fork"
+Repository = "https://github.com/IquallNetworks/twinlab"
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]

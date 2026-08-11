@@ -102,7 +102,8 @@ the deploy dialog had to apologise in prose for its own quiet stretches. See the
 and frontend bullets for the shape.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
-client — PyPI-ready, published at v1.0), **`blackbox/`** (the black-box test suite: 140+ tests
+client — PyPI-ready, versioned 0.9.0 like the whole tree, publication pending), **`blackbox/`**
+(the black-box test suite: 150+ tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker) and **`e2e/`** (the Playwright UX suite, SHIPPED 2026-08-06 — ROADMAP item 14:
 pnpm + @playwright/test, chromium, 56 exact-string specs driving the real frontend against a

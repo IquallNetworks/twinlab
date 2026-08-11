@@ -1,6 +1,6 @@
 [project]
 name = "twinlab-blackbox"
-version = "0.1.0"
+version = "0.9.0"
 description = "Black-box test suite for the Twinlab API — pins the v1.0 contract against a live stack."
 requires-python = ">=3.13"
 dependencies = [

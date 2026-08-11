@@ -1,6 +1,6 @@
 # twinlab-client
 
-Async Python client for the [Twinlab](https://github.com/GalileoCap/twinlab-fork) API.
+Async Python client for the [Twinlab](https://github.com/IquallNetworks/twinlab) API.
 
 Twinlab generates reproducible simulated network topologies from a declarative
 [netlab](https://netlab.tools/) definition, deployed through
@@ -20,7 +20,7 @@ response raises `TwinlabApiError`.
 uv add twinlab-client   # or: pip install twinlab-client
 ```
 
-(Not yet published — until v1.0, install from the repository path.)
+(Not yet published — install from the repository path.)
 
 ## Quickstart
 
@@ -31,7 +31,7 @@ from twinlab_client import TwinlabClient
 
 
 async def main() -> None:
-    async with TwinlabClient("http://localhost:8000") as client:
+    async with TwinlabClient("http://localhost:5173") as client:
         await client.login("admin", "...")
 
         # The lab name is its durable identity and a netlab identifier:

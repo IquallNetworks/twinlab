@@ -111,8 +111,8 @@ docker tag ghcr.io/sysoleg/vyos-container@sha256:dc8d4233b2b7e9e94d96fd8d10a40a6
 docker compose up -d --build
 ```
 
-- **Web UI** — http://localhost:5173 (`FRONTEND_PORT` / `DEPLOYMENT_URL`)
-- **API** — same origin, under `/api/v1`: the frontend dev server proxies it. The backend port is
+- **Web UI** — http://localhost:5173 (`FRONTEND_PORT`)
+- **API** — same origin, under `/api/v1`: the frontend container proxies it. The backend port is
   *not* published by default.
 - **SSH jump host** — port 2222 (`JUMP_PORT`)
 

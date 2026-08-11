@@ -123,7 +123,15 @@ browser layer's.
 
 The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of seven services:
 
-- **`frontend/`** — Vite + React + TypeScript (pnpm). **Rebuilt in place on the v1.0 wire**
+- **`frontend/`** — Vite + React + TypeScript (pnpm). **Served as a static production build
+  since 2026-08-11**: the compose default is the Dockerfile's `prod` target — `pnpm build`
+  behind nginx (BSD-2-Clause), whose `nginx.conf` owns the `/api/v1` proxy (WS terminal + SSE
+  included, per-request DNS so a recreated backend doesn't strand it on a stale IP); the guide
+  markdown reaches the build through the `docs` additional build context, because
+  `src/content/guide` is a symlink out of the build context and the glob would otherwise match
+  NOTHING silently (a `test -f` in the build stage guards it). The Vite dev server + HMR is the
+  `dev` target, selected by `compose.dev.yaml` (both modes share one image tag — keep `--build`
+  when switching). **Rebuilt in place on the v1.0 wire**
   (step 2 of the frontend rework, phased in `docs/frontend-rework.md`; **Phases 1–5 ALL done —
   frontend step 2 complete**. The parked backend batch is in progress — **link table + link oper
   state DONE 2026-07-30** (contract delta 14; the frontend gained a Links card on the Nodes tab,

@@ -5,9 +5,19 @@ builder with a full-syntax text escape hatch, live topology and link views, a jo
 connect/logs/terminal surfaces, config import, the template library, and the auth/RBAC and account
 screens.
 
-It talks to the backend over `/api/v1`, which the Vite dev server proxies (`VITE_PROXY_TARGET`,
-default `http://localhost:8000`). The session cookie is httpOnly and rides that proxy, so there is
-no token to store.
+It talks to the backend over `/api/v1`, proxied by whichever of the two serving modes is running.
+The compose default is the **production build**: a multi-stage image (`Dockerfile` target `prod`)
+that compiles the bundle and serves it through nginx, whose `nginx.conf` owns the `/api/v1` proxy
+(WebSocket terminal and SSE stream included). Development uses the **Vite dev server** instead —
+`docker compose -f compose.yaml -f compose.dev.yaml up -d --build` — with hot reload over
+bind-mounted source and the proxy from `vite.config.ts` (`VITE_PROXY_TARGET`, default
+`http://localhost:8000`). Either way the session cookie is httpOnly and rides that same-origin
+proxy, so there is no token to store.
+
+The operator guide is compiled into the bundle from `docs/guide/` through the `src/content/guide`
+symlink. That target sits outside the docker build context, so the production build stage pulls it
+in via the `docs` additional build context (compose supplies it; a bare `docker build` needs
+`--build-context docs=../docs`).
 
 ## Stack
 

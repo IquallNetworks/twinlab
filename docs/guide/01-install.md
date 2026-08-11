@@ -25,12 +25,9 @@ recommendation.
 
 | What | Memory |
 | --- | --- |
-| The stack itself, all seven services | about 750 MB |
+| The stack itself, all seven services | about 270 MB |
 | One VyOS node, idle | about 350 MB |
 | The 7-node `mpls-l3vpn` example, running OSPF, LDP and MP-BGP | about 2.4 GB |
-
-The frontend accounts for more than half the stack figure, because it runs a
-Vite dev server rather than a static build.
 
 Node images dominate disk use, not Twinlab itself. A full set of the six
 supported platforms costs roughly 5 GB, and VyOS alone accounts for 2.7 GB.
@@ -100,9 +97,10 @@ disruptive:
 - **`MGMT_SUBNET_POOL`** (default `10.77.0.0/16`) is where each lab's management
   `/24` comes from. Change it only if that range collides with a route on the
   host.
-- **`FRONTEND_PORT`** and **`DEPLOYMENT_URL`** must agree on the port. Behind
-  HTTPS, also set the session cookie to Secure (`SESSION_COOKIE_SECURE` in
-  `compose.yaml`).
+- **`FRONTEND_PORT`** is the published UI port. Behind HTTPS, also set
+  `SESSION_COOKIE_SECURE=true` so the session cookie is Secure-only.
+  (`DEPLOYMENT_URL` only matters under the development override
+  `compose.dev.yaml`, whose dev server rejects unknown `Host` headers.)
 
 ## Node images
 
@@ -210,8 +208,14 @@ docker compose up -d --build
 | API | the same origin, under `/api/v1` |
 | SSH jump host | port 2222 (`JUMP_PORT`) |
 
-The backend port is not published. The frontend proxies `/api/v1` to it, which
-is why the session cookie needs no cross-origin handling.
+The backend port is not published. The frontend container proxies `/api/v1` to
+it, which is why the session cookie needs no cross-origin handling.
+
+Two services do sit on host ports, on **every interface**: clab-api on 8090 and
+the host-preparation sidecar on 8091 (both run on the host network, so compose
+cannot scope their binding). Both are authenticated — host PAM credentials and
+a shared token — but they are privileged services, and nothing outside this
+machine ever needs them. On a host other people can reach, firewall both ports.
 
 Check that it came up:
 

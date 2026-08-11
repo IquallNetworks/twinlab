@@ -44,9 +44,9 @@ services:
       NETLAB_RUNNER_URL: http://netlab-runner:8000
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD}
-      # Local dev is HTTP, so the session cookie can't be Secure-only. Set true
-      # (the default) behind HTTPS in any real deployment.
-      SESSION_COOKIE_SECURE: "false"
+      # Local dev is HTTP, so the session cookie can't be Secure-only by
+      # default here. Behind HTTPS, set SESSION_COOKIE_SECURE=true in .env.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       # Pool the per-lab management /24s are carved from (concurrent labs get
       # distinct mgmt subnets). Override in .env if 10.77/16 clashes with a route.
       MGMT_SUBNET_POOL: ${MGMT_SUBNET_POOL:-10.77.0.0/16}

@@ -92,24 +92,22 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
-    environment:
-      VITE_PROXY_TARGET: http://backend:8000
-      # Vite listens on FRONTEND_PORT inside the container; host:container are the
-      # same port so the mapping holds whatever the value. DEPLOYMENT_URL's host
-      # is allow-listed by the dev server (see frontend/vite.config.ts).
-      FRONTEND_PORT: ${FRONTEND_PORT:-5173}
-      DEPLOYMENT_URL: ${DEPLOYMENT_URL:-http://localhost:5173}
+    build:
+      context: ./frontend
+      # The static production bundle behind nginx (frontend/nginx.conf owns
+      # the /api/v1 proxy, WebSocket and SSE included). Daily development uses
+      # the `dev` target instead — compose.dev.yaml swaps it in, with
+      # bind-mounted source and hot reload.
+      target: prod
+      additional_contexts:
+        # The operator guide is compiled into the bundle from docs/guide/;
+        # src/content/guide is a symlink pointing OUTSIDE the build context,
+        # so the build stage copies the markdown in from this second context.
+        docs: ./docs
     ports:
-      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
-    # Bind-mount source for HMR; keep the image's installed node_modules.
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      # The operator guide the app serves at /docs. src/content/guide is a
-      # symlink to ../../../docs/guide, which resolves to /docs/guide in here —
-      # so the markdown has one home and cannot drift from the repository.
-      - ./docs:/docs:ro
+      # nginx listens on 5173 inside the container; only the published side
+      # moves with FRONTEND_PORT.
+      - "${FRONTEND_PORT:-5173}:5173"
     depends_on:
       backend:
         condition: service_healthy

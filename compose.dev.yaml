@@ -1,0 +1,33 @@
+# Development override: the Vite dev server with hot reload over bind-mounted
+# source, instead of the static production bundle compose.yaml serves.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+#
+# Both modes build to the same image tag, so keep --build when switching
+# between them — a plain `up -d` recreates from whichever mode built last.
+#
+# The dev server owns the /api/v1 proxy in this mode (vite.config.ts) and
+# serves the operator guide through the src/content/guide symlink, which
+# resolves against the ./docs mount below.
+services:
+  frontend:
+    build:
+      target: dev
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
+      # Vite listens on FRONTEND_PORT inside the container, so host and
+      # container sides stay the same port (hence the ports override).
+      # DEPLOYMENT_URL's host is allow-listed by the dev server, which
+      # rejects unknown Host headers.
+      FRONTEND_PORT: ${FRONTEND_PORT:-5173}
+      DEPLOYMENT_URL: ${DEPLOYMENT_URL:-http://localhost:5173}
+    ports: !override
+      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
+    # Bind-mount source for HMR; keep the image's installed node_modules.
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      # The operator guide the app serves at /docs. src/content/guide is a
+      # symlink to ../../../docs/guide, which resolves to /docs/guide in here —
+      # so the markdown has one home and cannot drift from the repository.
+      - ./docs:/docs:ro

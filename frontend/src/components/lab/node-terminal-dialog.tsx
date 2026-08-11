@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { API_BASE } from '@/lib/base-path'
 
 type Protocol = 'ssh' | 'shell'
 type Status = 'connecting' | 'open' | 'closed'
@@ -35,7 +36,7 @@ function terminalUrl(
   rows: number,
 ) {
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const path = `/api/v1/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/terminal`
+  const path = `${API_BASE}/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/terminal`
   const params = new URLSearchParams({ protocol, cols: String(cols), rows: String(rows) })
   // ssh only, and only when set — empty leaves clab-api's default user in place.
   if (protocol === 'ssh' && sshUsername.trim() !== '') params.set('ssh_username', sshUsername.trim())

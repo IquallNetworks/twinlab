@@ -99,6 +99,10 @@ services:
       # the `dev` target instead — compose.dev.yaml swaps it in, with
       # bind-mounted source and hot reload.
       target: prod
+      args:
+        # '' (the default) serves the UI at the origin root; '/twinlab'-shaped
+        # serves it under that subpath for a fronting proxy (see .env.example).
+        BASE_PATH: ${FRONTEND_BASE_PATH:-}
       additional_contexts:
         # The operator guide is compiled into the bundle from docs/guide/;
         # src/content/guide is a symlink pointing OUTSIDE the build context,

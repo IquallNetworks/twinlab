@@ -20,7 +20,22 @@ const port = Number.parseInt(process.env.FRONTEND_PORT || '5173', 10)
 const deploymentUrl = process.env.DEPLOYMENT_URL
 const allowedHosts = deploymentUrl ? [new URL(deploymentUrl).hostname] : undefined
 
+// Deployment base path, for serving the app under a subpath behind a fronting
+// proxy (compose build arg FRONTEND_BASE_PATH): '' at the root (the default),
+// or '/twinlab'-shaped — leading slash, no trailing slash. Baked into the
+// bundle (asset URLs, router basepath, API/SSE/WS paths via
+// src/lib/base-path.ts) and into the image's nginx config, so it is a
+// build-time choice. Validated here because a malformed value would otherwise
+// surface as a blank page with 404 assets.
+const basePath = process.env.BASE_PATH ?? ''
+if (basePath !== '' && !/^\/[A-Za-z0-9._~-]+(\/[A-Za-z0-9._~-]+)*$/.test(basePath)) {
+  throw new Error(
+    `BASE_PATH must be empty or like "/twinlab" (leading slash, no trailing slash); got ${JSON.stringify(basePath)}`,
+  )
+}
+
 export default defineConfig({
+  base: `${basePath}/`,
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

@@ -52,10 +52,12 @@ import {
   runtimeActionsReportSchema,
 } from '@/lib/schemas'
 
-// The frontend is served same-origin with the backend (the dev server proxies
-// /api/v1 → backend), so the httpOnly session cookie rides along automatically;
-// there is no token to store or attach here.
-const BASE = '/api/v1'
+import { API_BASE } from '@/lib/base-path'
+
+// The frontend is served same-origin with the backend (both serving modes
+// proxy /api/v1 → backend), so the httpOnly session cookie rides along
+// automatically; there is no token to store or attach here.
+const BASE = API_BASE
 
 /** A failed backend response or job, carrying the HTTP status (so callers can
  * branch, e.g. 401 → not authenticated / 404 → no such lab), the stable error

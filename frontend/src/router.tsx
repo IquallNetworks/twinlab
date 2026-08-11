@@ -25,6 +25,7 @@ import { LabImportPage } from '@/pages/lab-import'
 import { LabsPage } from '@/pages/labs'
 import { LoginPage } from '@/pages/login'
 import { UsersPage } from '@/pages/users'
+import { BASE_PATH } from '@/lib/base-path'
 
 export const queryClient = new QueryClient()
 
@@ -239,6 +240,9 @@ const routeTree = rootRoute.addChildren([
 
 export const router = createRouter({
   routeTree,
+  // '' at the origin root, '/twinlab' under a subpath build; the router
+  // spells root as '/'.
+  basepath: BASE_PATH || '/',
   context: { queryClient },
   defaultPreload: 'intent',
   defaultErrorComponent: RouteErrorFallback,

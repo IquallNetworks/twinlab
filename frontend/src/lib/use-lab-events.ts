@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 
 import { recordJobEvent, recordLabEvent } from '@/lib/lab-event-store'
 import { jobEventSchema, labEventSchema } from '@/lib/schemas'
+import { API_BASE } from '@/lib/base-path'
 
 // Coalesce bursts (a deploy emits create/start/… in quick succession) into one
 // refetch, and let it settle before firing so the read reflects the new state.
@@ -20,7 +21,7 @@ export function useLabEvents(): void {
   const queryClient = useQueryClient()
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const source = new EventSource('/api/v1/events')
+    const source = new EventSource(`${API_BASE}/events`)
 
     // All lab queries are keyed under ['labs'] (list, detail, interfaces,
     // links), so one prefix invalidation refreshes whatever is on screen; job

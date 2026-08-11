@@ -30,14 +30,30 @@ CMD ["pnpm", "dev"]
 # mode: a docs context that no longer contains the guide would otherwise
 # build an app whose glob import silently matched nothing.
 FROM base AS build
+# Deployment base path: '' serves at the origin root, '/twinlab'-shaped serves
+# under a subpath (compose wires FRONTEND_BASE_PATH through). Baked into the
+# bundle by Vite (which also validates the shape) and into nginx.conf here:
+# SPA_LOCATION falls back to '/' at the root, and ROOT_REDIRECT points a bare
+# / at a subpath deployment's real home.
+ARG BASE_PATH=""
 COPY . .
 COPY --from=docs guide/ /docs/guide/
-RUN test -f src/content/guide/README.md && pnpm build
+RUN test -f src/content/guide/README.md \
+ && BASE_PATH="$BASE_PATH" pnpm build \
+ && SPA_LOCATION="${BASE_PATH:-/}" \
+ && ROOT_REDIRECT="" \
+ && if [ -n "$BASE_PATH" ]; then ROOT_REDIRECT="location = / { return 302 $BASE_PATH/; }"; fi \
+ && sed -e "s|\${BASE_PATH}|$BASE_PATH|g" \
+        -e "s|\${SPA_LOCATION}|$SPA_LOCATION|g" \
+        -e "s|\${ROOT_REDIRECT}|$ROOT_REDIRECT|g" nginx.conf > nginx.rendered.conf
 
 # Production: nginx (BSD-2-Clause) serves the bundle and proxies /api/v1 to
 # the backend — HTTP, WebSocket (the node terminal) and SSE (the event
 # stream) alike. nginx.conf carries the routing details.
 FROM nginx:1.29-alpine AS prod
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+ARG BASE_PATH=""
+COPY --from=build /app/nginx.rendered.conf /etc/nginx/conf.d/default.conf
+# At the root this is html/ exactly as before; a subpath build nests the
+# bundle so URL paths map onto the filesystem with no aliasing.
+COPY --from=build /app/dist /usr/share/nginx/html${BASE_PATH}
 EXPOSE 5173

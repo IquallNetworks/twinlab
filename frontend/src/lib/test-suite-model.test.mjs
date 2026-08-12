@@ -1,8 +1,12 @@
-// Checks for lib/test-suite-model.ts — `pnpm check:test-suites`.
+// Checks for lib/test-suite-model.ts and its two companions — `pnpm test`
+// (or `pnpm check:test-suites` for just this file).
 //
-// Same arrangement as check-build-doc.mjs, and for the same reason: the module
-// is pure and the frontend has no test runner, so this bundles it with the
-// vite already in devDependencies and exercises it under plain node.
+// Ported verbatim from scripts/check-test-suite-model.mjs when vitest arrived
+// (2026-08-12): the assertions are unchanged, the vite-bundle-then-import
+// arrangement is gone — vitest transforms the TS imports itself. Kept as .mjs
+// because the checks deliberately feed the validators MALFORMED shapes, which
+// is the point of a gate test and which typed test code would have to cast
+// its way around, line by line, for no added truth.
 //
 // What it guards is narrower than build-doc's round-trip, because a suite's
 // schema is CLOSED — there is no lossy emit to worry about. The invariant here
@@ -10,39 +14,26 @@
 // rejects must be an "error", and nothing the PUT accepts may be, or the
 // builder would refuse a suite the contract allows.
 
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { expect, it } from 'vitest'
 
-import { build } from 'vite'
-
-const outDir = mkdtempSync(
-  join((mkdirSync('node_modules/.tmp', { recursive: true }), 'node_modules/.tmp'), 'suite-model-'),
-)
-
-async function bundle(entry, fileName) {
-  try {
-    await build({
-      configFile: false,
-      logLevel: 'error',
-      build: {
-        outDir,
-        emptyOutDir: false,
-        ssr: true,
-        lib: { entry, formats: ['es'], fileName },
-      },
-    })
-  } catch (err) {
-    console.error(`could not bundle ${entry}:`, err)
-    process.exit(1)
-  }
-}
-
-await bundle('src/lib/test-suite-model.ts', 'test-suite-model')
-await bundle('src/lib/fact-completions.ts', 'fact-completions')
-await bundle('src/lib/test-results.ts', 'test-results')
-
-const {
+import {
+  completionRequest,
+  factCompletions,
+  factRoot,
+} from '@/lib/fact-completions'
+import {
+  formatElapsed,
+  labValidation,
+  matchesFilter,
+  orphanedTests,
+  outcomesByTest,
+  readStatus,
+  reportTally,
+  rollUp,
+  suiteStatus,
+  tallyLine,
+} from '@/lib/test-results'
+import {
   blankCase,
   blankSuite,
   blankTest,
@@ -57,35 +48,15 @@ const {
   uniqueName,
   validateSuites,
   withMatcher,
-} = await import(pathToFileURL(resolve(outDir, 'test-suite-model.js')).href)
-const { completionRequest, factCompletions, factRoot } = await import(
-  pathToFileURL(resolve(outDir, 'fact-completions.js')).href
-)
-const {
-  formatElapsed,
-  labValidation,
-  matchesFilter,
-  orphanedTests,
-  outcomesByTest,
-  readStatus,
-  reportTally,
-  rollUp,
-  suiteStatus,
-  tallyLine,
-} = await import(pathToFileURL(resolve(outDir, 'test-results.js')).href)
-rmSync(outDir, { recursive: true, force: true })
+} from '@/lib/test-suite-model'
 
-let pass = 0
-const failures = []
-
+/** The old runner's contract, verbatim: a check returns a problem string or
+ * something falsy. A throw is a failure either way — vitest reports it. */
 function check(name, fn) {
-  try {
+  it(name, () => {
     const problem = fn()
-    if (problem) failures.push(`${name}: ${problem}`)
-    else pass += 1
-  } catch (err) {
-    failures.push(`${name}: threw ${err && err.stack ? err.stack : err}`)
-  }
+    if (problem) expect.fail(String(problem))
+  })
 }
 
 // The lab the checks author against: a VyOS router, an FRR router and a linux
@@ -648,10 +619,3 @@ check('a unique name skips what is taken instead of overwriting it', () => {
   if (uniqueName(['check', 'check2'], 'check') !== 'check3') return 'the counter did not advance'
   return null
 })
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} check(s) failed:\n`)
-  for (const failure of failures) console.error(`  - ${failure}`)
-  process.exit(1)
-}
-console.log(`test-suite-model: ${pass} checks passed`)

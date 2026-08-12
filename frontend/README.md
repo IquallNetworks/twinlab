@@ -61,13 +61,22 @@ pnpm install
 pnpm dev             # http://localhost:5173
 pnpm typecheck       # tsc -b --noEmit
 pnpm build           # tsc -b && vite build
+pnpm test            # vitest — src/**/*.test.{ts,tsx,mjs}
 pnpm check:build-doc # parser/emitter invariants
 ```
 
-All three checks are gates. `check:build-doc` runs 90 round-trip, gate and emit-blocker cases
-against `build-doc.ts` — including all three `examples/` definitions — by bundling the pure module
-with vite's own API and running it under plain node. **The frontend has no test runner**, so this
-is its only regression net; changes to the parser or emitter belong with a case there.
+All four checks are gates (the two `check:*` scripts are now aliases scoping `pnpm test` to one
+file). `pnpm test` is **vitest** (2026-08-12): pure modules run under node, component tests opt
+into jsdom with a `// @vitest-environment jsdom` docblock and drive real renders through
+`@testing-library/react` — which is where behaviour that used to be verifiable only through a
+live stack and the e2e suite belongs now (the colour-grammar assertions in
+`status-badge.test.tsx` are the worked example). The old hand-rolled check runners
+(`scripts/*.mjs`, which bundled the pure modules with vite's JS API to run under plain node)
+are gone — both ported verbatim: `src/lib/build-doc.test.mjs` (90 round-trip, gate and
+emit-blocker cases against `build-doc.ts`, all three `examples/` definitions included) and
+`src/lib/test-suite-model.test.mjs` (48 checks over the suite model, fact completions and the
+results module). Kept `.mjs` on purpose: gate checks deliberately feed the parsers malformed
+input, which typed test code would cast around line-by-line for no added truth.
 
 The browser layer's end-to-end coverage lives in `../e2e` (Playwright, against its own stack).
 Nothing there uses `data-testid` — specs locate by role and label, so keep `<Label htmlFor>`

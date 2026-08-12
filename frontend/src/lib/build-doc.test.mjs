@@ -1,57 +1,31 @@
-// Round-trip checks for lib/build-doc.ts — `pnpm check:build-doc`.
+// Round-trip checks for lib/build-doc.ts — `pnpm test`
+// (or `pnpm check:build-doc` for just this file).
 //
-// The parser/emitter is the one piece of the frontend with real invariants
-// (parse(emit(doc)) == doc, and every netlab spelling landing in exactly one
-// of the typed core or the extras), and the frontend has no test runner. So
-// this bundles the module — it is deliberately pure: no React, no `@/` alias,
-// no zod — with the vite already in devDependencies, and exercises it under
-// plain node. Adding a test runner would replace this wholesale; until then it
-// is the parser's only regression net.
+// The parser/emitter is the one piece of the frontend with real invariants:
+// parse(emit(doc)) == doc, and every netlab spelling landing in exactly one
+// of the typed core or the extras. Ported verbatim from
+// scripts/check-build-doc.mjs when vitest arrived (2026-08-12) — the
+// assertions are unchanged, the vite-bundle-then-import arrangement is gone.
+// Kept as .mjs for the same reason as test-suite-model.test.mjs: gate checks
+// deliberately feed the parser malformed input.
 //
 // Checks are (name, fn) pairs; fn returns null when it passes or a problem
 // string when it does not, so a failure explains itself.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
-import { build } from 'vite'
+import { expect, it } from 'vitest'
 
-// Output goes under node_modules so the bundle's `yaml` import resolves the
-// same way the app's does.
-const outDir = mkdtempSync(join((mkdirSync('node_modules/.tmp', { recursive: true }), 'node_modules/.tmp'), 'build-doc-'))
-try {
-  await build({
-    configFile: false,
-    logLevel: 'error',
-    build: {
-      outDir,
-      emptyOutDir: true,
-      ssr: true,
-      lib: { entry: 'src/lib/build-doc.ts', formats: ['es'], fileName: 'build-doc' },
-    },
-  })
-} catch (err) {
-  console.error('could not bundle src/lib/build-doc.ts:', err)
-  process.exit(1)
-}
+import { buildDocEquals, emitBuildDoc, parseBuildDoc } from '@/lib/build-doc'
 
-const { parseBuildDoc, emitBuildDoc, buildDocEquals } = await import(
-  pathToFileURL(resolve(outDir, 'build-doc.js')).href
-)
-rmSync(outDir, { recursive: true, force: true })
-
-let pass = 0
-const failures = []
-
+/** The old runner's contract, verbatim: a check returns a problem string or
+ * something falsy. A throw is a failure either way — vitest reports it. */
 function check(name, fn) {
-  try {
+  it(name, () => {
     const problem = fn()
-    if (problem) failures.push(`${name}: ${problem}`)
-    else pass += 1
-  } catch (err) {
-    failures.push(`${name}: threw ${err && err.stack ? err.stack : err}`)
-  }
+    if (problem) expect.fail(String(problem))
+  })
 }
 
 /** parse -> emit -> parse must yield an equal doc. Returns a problem or null. */
@@ -96,7 +70,7 @@ const DEV = ['vyos', 'linux', 'frr', 'routeros7', 'bird', 'dnsmasq']
 
 // ---------------------------------------------------------------- regression
 // The repo's own examples must keep round-tripping.
-const EXAMPLES = fileURLToPath(new URL('../../examples/', import.meta.url))
+const EXAMPLES = fileURLToPath(new URL('../../../examples/', import.meta.url))
 for (const file of ['mpls-l3vpn.yml', 'campus-lan.yml', 'mixed-nos.yml']) {
   check(`example ${file}`, () => roundTrip(readFileSync(`${EXAMPLES}${file}`, 'utf8'), DEV))
 }
@@ -783,7 +757,3 @@ check('2-member LAN still blocks at emit', () => {
   doc.links[0].members = doc.links[0].members.slice(0, 2)
   return emitBuildDoc(doc).ok ? 'expected an emit blocker' : null
 })
-
-console.log(`\n${pass} passed, ${failures.length} failed`)
-for (const failure of failures) console.log(`\nFAIL ${failure}`)
-process.exit(failures.length === 0 ? 0 : 1)

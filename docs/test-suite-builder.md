@@ -226,7 +226,9 @@ pinning the delta (catalog flags derived per device, dry-run gating, rendered co
 structure, expectation outcome).
 
 Frontend: `pnpm typecheck` + `pnpm build`, plus a `pnpm check:` harness over the pure suite-model
-module — the `check:build-doc` pattern, since the frontend still has no test runner.
+module — originally the `check:build-doc` script pattern; since 2026-08-12 the same 48
+assertions run as a vitest file (`src/lib/test-suite-model.test.mjs`), the frontend having
+gained a real test runner.
 
 E2E: a new **fast** spec, since authoring is a PUT and needs no containers; journey 04 gains the
 Try path against the live lab. (Both were reworked onto the Tests tab below — `fast/13` is now

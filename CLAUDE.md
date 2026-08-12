@@ -363,7 +363,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   still does not close on an outside click, since a test is work in progress. `pnpm
   check:test-suites` (48 checks over the suite model, the completion module AND the pure
   results module `lib/test-results.ts` — grouping, roll-up, tallies, the lab aggregate, the
-  filter — the `check:build-doc` arrangement) guards all three. **Whole-lab power + save-config are header-menu entries**, not a Controls card
+  filter — since 2026-08-12 a vitest file, assertions unchanged) guards all three. **Whole-lab power + save-config are header-menu entries**, not a Controls card
   — `components/lab/lab-power-menu.tsx` renders them into the lab header's `⋯` menu above a
   separator from destroy/delete, each offered only where it acts (a MIXED lab shows both Start
   and Stop, since it has containers in both states; freeze and save name their reason when the
@@ -475,7 +475,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   stub, attributed LAN) are fully buildable visually. Text mode
   is the full-syntax escape hatch (the old EditDefinitionDialog is gone). Saves PUT the emitted YAML;
   `netlab_invalid` renders as a panel with the envelope's `extras.stderr` (`ApiError` carries
-  extras). Unsaved changes get a router blocker + beforeunload guard. The parser/emitter's invariants are guarded by **`pnpm check:build-doc`** (`frontend/scripts/`) — 90 round-trip/gate/blocker checks incl. all three `examples/` definitions, bundling the pure module with vite's own API and running it under plain node, since the frontend has no test runner. Phase 5 (editor +
+  extras). Unsaved changes get a router blocker + beforeunload guard. The parser/emitter's invariants are guarded by **`pnpm check:build-doc`** — 90 round-trip/gate/blocker checks incl. all three `examples/` definitions, since 2026-08-12 a vitest file (`src/lib/build-doc.test.mjs`, assertions unchanged; the vite-API-bundle scripts are gone). Phase 5 (editor +
   polish): a shared **`CodeEditor`** (`components/code-editor.tsx`, hand-rolled CodeMirror 6
   wrapper — controlled value with an echo guard, compartments, minimalSetup + explicit
   extensions, themed purely from identity CSS vars with three `--id-code-*` syntax tokens)
@@ -500,8 +500,12 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   invalidates the `['labs']`/`['jobs']` query roots. API access goes through the typed,
   zod-parsed client (`src/lib/api.ts`) raising the `{code, message, extras}` envelope as
   `ApiError`; dev server proxies `/api/v1` (`VITE_PROXY_TARGET`, default
-  `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build` + `pnpm check:build-doc`
-  + `pnpm check:test-suites`.
+  `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build` + **`pnpm test`** (vitest, added 2026-08-12
+  — pure modules under node, component tests opt into jsdom per file and render through
+  @testing-library/react; `status-badge.test.tsx` pins the Tests tab's colour grammar, and
+  behaviour-level coverage that used to need the e2e stack belongs here now) +
+  `pnpm check:build-doc` + `pnpm check:test-suites` (both now vitest files; the `check:*`
+  names are aliases scoping `pnpm test` to one file).
 - **`backend/`** — FastAPI (uv, **Python 3.14**, ids are stdlib **UUIDv7**). Turns a declarative
   netlab definition into a running lab: runs `netlab create` to generate a containerlab topology,
   then deploys it through the clab-api server (piped inline as `topologyContent`); the generated

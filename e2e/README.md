@@ -58,7 +58,7 @@ the dev stack).
 ## Running
 
 ```sh
-pnpm test                 # full run: reset stack → setup → fast → journey (~20–30 min)
+pnpm test                 # full run: reset stack → setup → fast → journey (~7–8 min warm)
 pnpm test:fast            # setup + the fast tier only (no containers deployed)
 pnpm test:journey         # runs its dependencies too; add --no-deps to skip the fast tier
 pnpm report               # open the HTML report of the last run
@@ -70,6 +70,40 @@ empty states, users/groups, lab authoring, builder, templates, import, account, 
 command palette — never deploys a container), **`journey`** (creates, deploys and operates the
 `e2e-net` topology end to end: nodes, terminal, links, netem, validation, drift, teardown).
 One worker, ordered spec files — the suite is a story, not a grid.
+
+### The iteration loop
+
+A full run measures ~7.5 min of wall clock with a warm image cache (2026-08-12: 85s
+reset+overhead, 3.5m fast, 2.5m journey — 67 specs) and meaningfully more when the frontend
+build layer is cold, since any source edit invalidates it. Right for the gate before a push,
+wrong for every edit in between. In between:
+
+```sh
+# Bring the stack up with the Vite dev server instead of the static build:
+# frontend edits hot-reload into the running stack, no image rebuild ever.
+scripts/stack.sh reset dev        # or `up dev` if the stack state is fine as-is
+
+# Iterate at the tier level (E2E_CLEAN empties the running stack through the
+# API in seconds — labs, users, groups, templates, keys):
+E2E_CLEAN=1 pnpm test:fast                        # the whole no-container tier
+E2E_CLEAN=1 pnpm test:journey -- --no-deps        # only when deploy/ops paths changed
+
+# A SINGLE spec file pairs with E2E_SKIP_RESET, not E2E_CLEAN: the tiers are
+# ordered stories (13-tests-tab edits the lab 04/05 built), so one file only
+# works on top of the state a previous run left behind. Same for re-running
+# exactly what failed after a fix:
+E2E_SKIP_RESET=1 pnpm exec playwright test tests/fast/13-tests-tab.spec.ts --project=fast
+E2E_SKIP_RESET=1 pnpm exec playwright test --last-failed
+
+# The gate, once, before pushing — prod build, pristine stack, everything:
+pnpm test
+```
+
+`E2E_CLEAN` is honest about what it is: empty enough for the loop, not pristine (sessions and
+id sequences survive, and it needs the stack already up). The specs that assert a virgin
+stack, and the prod nginx frontend the users actually get, are what the final `pnpm test`
+still exists for. Same idea elsewhere: backend iteration runs the touched pytest files and
+blackbox with `-m "not deploy"`, with the full suites at the same pre-push gate.
 
 ### Watching a run over SSH (UI mode)
 

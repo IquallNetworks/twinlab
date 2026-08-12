@@ -28,7 +28,22 @@ async function editTest(page: Page, suite: string, name: string): Promise<Locato
 
 test('a suite is created, then its first test is written', async ({ page }) => {
   await page.goto(`/labs/${FAST_LAB}/tests`)
-  await expect(page.getByText('No test suites yet.')).toBeVisible()
+
+  // Start from nothing even on a re-run — UI mode and E2E_SKIP_RESET replay
+  // this spec on the state a previous run left (the 11-builder precedent).
+  // Once "Loading…" is gone the body is settled, so the one-shot isVisible
+  // below cannot race the suites query; if suites exist, the JSON escape
+  // hatch clears the whole map in one save.
+  await expect(page.getByText('Loading…')).toBeHidden()
+  const empty = page.getByText('No test suites yet.')
+  if (!(await empty.isVisible())) {
+    await page.getByRole('button', { name: 'JSON' }).click()
+    const json = page.getByRole('dialog')
+    await setEditorText(json.locator('.cm-editor'), '{}')
+    await json.getByRole('button', { name: 'Save' }).click()
+    await expectToast(page, 'Saved test suites')
+  }
+  await expect(empty).toBeVisible()
 
   // A suite is a container: name, stage, description, and nothing else. The
   // work is in the tests, which is why creating one is this small.

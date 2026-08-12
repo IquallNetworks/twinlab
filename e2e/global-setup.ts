@@ -6,12 +6,18 @@ import { E2E_ROOT, stackEnv } from './lib/env'
 // The whole point of the suite: every run opens on a REAL EMPTY backend. The
 // reset drops the stack's volumes and brings it back up, so the backend
 // entrypoint re-runs migrations, re-seeds RBAC and re-creates the bootstrap
-// admin. E2E_SKIP_RESET=1 skips the cycle for local spec iteration — the run
-// then starts from whatever state the last one left.
+// admin. Two cheaper modes for local spec iteration: E2E_CLEAN=1 empties the
+// RUNNING stack through the API instead (seconds — empty enough for the loop,
+// not pristine), and E2E_SKIP_RESET=1 skips the cycle entirely — the run then
+// starts from whatever state the last one left. The gated pre-push run uses
+// neither.
 export default async function globalSetup(): Promise<void> {
   const env = stackEnv()
-  if (process.env.E2E_SKIP_RESET !== '1') {
-    execFileSync(path.join(E2E_ROOT, 'scripts', 'stack.sh'), ['reset'], { stdio: 'inherit' })
+  const stack = path.join(E2E_ROOT, 'scripts', 'stack.sh')
+  if (process.env.E2E_CLEAN === '1') {
+    execFileSync(stack, ['clean'], { stdio: 'inherit' })
+  } else if (process.env.E2E_SKIP_RESET !== '1') {
+    execFileSync(stack, ['reset'], { stdio: 'inherit' })
   }
   await waitReady(env.baseUrl)
 }

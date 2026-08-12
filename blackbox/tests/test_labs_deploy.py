@@ -28,6 +28,7 @@ from twinlab_client import (
     PowerAction,
     SuiteReport,
     TestCase,
+    TestCaseDraft,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -47,6 +48,24 @@ pytestmark = pytest.mark.deploy
 
 # A linux-node deploy takes tens of seconds; leave slack for a loaded host.
 JOB_WAIT = 600.0
+
+# A suite whose expectation never holds, so the run POLLS for its whole `wait`
+# window — long enough to prove the dry-run probe is reachable while the job
+# holds the per-lab mutex, without the test having to race a fast one.
+_SLOW_SUITE = {
+    "bb-dryrun": TestSuite(
+        tests={
+            "never": ValidationTest(
+                nodes=["n1"],
+                run=TestCase(
+                    command="echo running",
+                    expect=TestExpectation(contains="this-never-appears"),
+                ),
+                wait=15,
+            )
+        },
+    )
+}
 
 
 async def _deployed_lab(admin: TwinlabClient, make_lab: LabFactory) -> LabDetail:
@@ -682,3 +701,115 @@ async def test_configure_steps_report_the_push_and_the_gate(
     # the gate ended.
     assert "nodes ok" in done.steps[1].message
     assert "1/1 passed" in done.steps[2].message
+
+
+async def test_dry_run_case_answers_from_the_live_node(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Delta 31, the whole point of the endpoint: run a case that was never
+    saved and read what it printed — with nothing stored as a side effect."""
+    lab = await _deployed_lab(admin, make_lab)
+
+    # No expectation: the answer IS the output, and claiming a status would
+    # answer a question nobody asked.
+    probe = await admin.dry_run_test_case(
+        lab.name, "n1", TestCaseDraft(command="ip -o link show lo")
+    )
+    assert probe.node == "n1"
+    assert probe.device == "linux"
+    assert "lo" in probe.output
+    assert probe.status is None
+    assert probe.parsed is None
+    assert probe.parse_error is None
+
+    # With one, the outcome comes back too — so a matcher can be iterated
+    # without a save/run round trip.
+    judged = await admin.dry_run_test_case(
+        lab.name,
+        "n1",
+        TestCaseDraft(command="ip -o link show lo", expect=TestExpectation(contains="UP")),
+    )
+    assert judged.status == "pass"
+    failing = await admin.dry_run_test_case(
+        lab.name,
+        "n1",
+        TestCaseDraft(
+            command="ip -o link show lo", expect=TestExpectation(contains="definitely-not-there")
+        ),
+    )
+    assert failing.status == "fail"
+    assert failing.detail
+
+    # It stored NOTHING: no last run, no config-time gate, no job row.
+    suites = await admin.get_test_suites(lab.name)
+    assert suites.last_validation == {}
+    assert not [job for job in await admin.list_jobs(lab.name) if job.kind == "suite_run"]
+
+
+async def test_dry_run_returns_the_parsed_structure_and_its_failures(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """A compare asserts over PARSED data, so the structure has to be readable
+    before one can be written — and when parsing fails, seeing the raw output
+    is what fixes the case, so that is a 200 rather than an error."""
+    lab = await _deployed_lab(admin, make_lab)
+
+    # A JSON SCALAR, deliberately: quoting is consumed on the way to the node
+    # (a shell-quoted object literal arrives with its quotes stripped), and the
+    # node image is alpine, whose busybox `ip` has no `-j`. The parse path does
+    # not care about the shape — it is json.loads over stdout either way — and
+    # the rich structures are covered by the backend's own unit tests.
+    parsed = await admin.dry_run_test_case(
+        lab.name, "n1", TestCaseDraft(command="echo 123", parse="json")
+    )
+    assert parsed.parsed == 123
+    assert parsed.parse_error is None
+
+    broken = await admin.dry_run_test_case(
+        lab.name, "n1", TestCaseDraft(command="echo not-json-at-all", parse="json")
+    )
+    assert broken.parse_error is not None
+    assert "not-json-at-all" in broken.output  # the raw output survives
+    assert broken.parsed is None
+    assert broken.status is None
+
+
+async def test_dry_run_rejects_an_impossible_case(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """The authoring errors the builder greys out client-side, pinned here as
+    the server's own answer: a `cli` case on a device whose catalog entry says
+    cli_mode is False, and a node that is not in the lab."""
+    lab = await _deployed_lab(admin, make_lab)
+
+    with pytest.raises(TwinlabApiError) as no_cli:
+        _ = await admin.dry_run_test_case(
+            lab.name, "n1", TestCaseDraft(command="show version", mode="cli")
+        )
+    assert no_cli.value.status_code == 422
+    assert no_cli.value.code == "invalid_case"
+
+    with pytest.raises(TwinlabApiError) as unknown:
+        _ = await admin.dry_run_test_case(lab.name, "nope", TestCaseDraft(command="true"))
+    assert unknown.value.status_code == 422
+    assert unknown.value.code == "unknown_node"
+
+
+async def test_dry_run_stays_available_while_a_job_holds_the_mutex(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """Why it is synchronous rather than a job (delta 24's reasoning for batch
+    actions): an authoring aid that 409s because someone else is deploying is
+    not an aid. A suite run submitted at the same moment WOULD 409."""
+    lab = await _deployed_lab(admin, make_lab)
+    _ = await admin.put_test_suites(lab.name, _SLOW_SUITE)
+    job = await admin.run_test_suite(lab.name, "bb-dryrun")
+    try:
+        probe = await admin.dry_run_test_case(lab.name, "n1", TestCaseDraft(command="echo alive"))
+        assert "alive" in probe.output
+        # The mutex is real — the suite-run path is the one that refuses.
+        with pytest.raises(TwinlabApiError) as blocked:
+            _ = await admin.run_test_suite(lab.name, "bb-dryrun")
+        assert blocked.value.code == "job_in_flight"
+    finally:
+        _ = await admin.wait_job(lab.name, job.id, timeout=JOB_WAIT)

@@ -112,16 +112,55 @@ system df` footprint through the runner, ~1s+, any authenticated user) and `GET
 `host_resources` deploy step. This CLOSES the ROADMAP's Phase 6 item 9 scope question in
 favour of the lightweight answer; a time-series/alerting stack stays parked (and carries a
 Grafana AGPL-3.0 licensing call before it can start).
+— and delta 31 the TEST-SUITE BUILDER, implemented 2026-08-11, design record
+`docs/test-suite-builder.md`: suites are Twinlab's validation story and
+authoring one was a `<textarea>` — one CodeEditor holding the whole set as
+JSON, so the schema's rules (`expect` is exactly-one-of-four, `compare` pairs
+with `parse` both ways) surfaced as a 422 AFTER the suite was written, and the
+vocabulary a case needs (the lab's nodes, its device slugs, its fact paths) was
+offered nowhere. Three pieces: the builder is TOTAL because the suite schema is
+CLOSED — Twinlab owns every field, so no extras passthrough and no lossy emit,
+state IS the wire object and Visual/JSON switching is lossless BOTH ways (which
+Build's Visual/Text pair cannot promise); `CatalogDevice` gains `cli_mode` and
+`textfsm`, DERIVED from `CLI_ENTRIES`/`TEXTFSM_PLATFORMS` exactly as delta 22
+derived `config_import`, so the frontend keeps no copy of either table (the two
+axes are independent — linux has no CLI but does have TextFSM templates, FRR
+has a CLI but answers JSON); and `POST /labs/{name}/test-suites/dry-run` runs
+ONE unsaved case on ONE node returning the rendered+adapted command, the
+stdout and the PARSED STRUCTURE — the piece `_run_check` computes, asserts
+against and DISCARDS, which is why writing a `compare` has meant predicting
+TextFSM's or `vtysh … json`'s output shape. See the backend and frontend
+bullets for the shape.
+— and delta 32 EDIT-PROOF TEST TARGETING, implemented 2026-08-11 (same design
+record): a test's target was a required node LIST, which silently stops
+covering a lab that grows — add a router and every existing test keeps testing
+the old set, the worst way for a check to be wrong. So the target is THREE
+selectors unioned — `all_nodes` (the default for a new test), `groups` (the
+definition's own, so "every core router" stays true as the core grows) and
+`nodes` — composing as "the group, plus these". Resolution order is FIRST
+APPEARANCE, which is what keeps it compatible: a nodes-only test resolves to
+exactly `test.nodes`, result order included, so every pre-existing suite is
+untouched; `nodes` merely stopped being required, and what is newly rejected
+(a test targeting NOTHING) the old `min_length=1` rejected too. TWO netlab
+facts drive the implementation and both are the opposite of the obvious guess:
+netlab does NOT flatten a nested group (`core: [inner, n3]` stays literally
+that in the expanded topology, verified against 26.07) so Twinlab flattens
+with a cycle guard, and netlab INJECTS bookkeeping groups of its own
+(`netlab_no_collect`, `netlab_no_reload` on a plain linux lab) so the NAME SET
+comes from the definition while MEMBERSHIP comes from the expanded topology.
+The resolved map rides `GET /labs/{name}/facts` rather than a resource of its
+own, because a builder needs both halves at once.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, versioned 0.9.0 like the whole tree, publication pending), **`blackbox/`**
 (the black-box test suite: 160+ tests
 exercising a live stack through the client only; all green, README documents env config and the
 `deploy` marker) and **`e2e/`** (the Playwright UX suite, SHIPPED 2026-08-06 — ROADMAP item 14:
-pnpm + @playwright/test, chromium, 58 exact-string specs driving the real frontend against a
+pnpm + @playwright/test, chromium, 67 exact-string specs driving the real frontend against a
 dedicated **`twinlab-e2e`** parallel stack that every run resets to a REAL EMPTY backend via
-`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (35 specs, no containers) → `journey`
-(20 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`);
+`e2e/scripts/stack.sh reset`; projects `setup` → `fast` (45 specs, no containers — incl.
+`fast/13-tests-tab`, since authoring a suite is a PUT) → `journey`
+(21 specs deploying/operating/destroying the purpose-built vyos+frr+linux `e2e-net`);
 `fast/11-builder-l3vpn` is the builder's own walkthrough-as-a-test — it builds a VyOS L3VPN
 core (defaults, a VRF, PE/P nodes, links) entirely in the visual builder and is the regression
 net for every editing affordance, deliberately ONE test because a draft lives in the page and
@@ -233,7 +272,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   its 503 is a card that says so rather than a spinner; the lab Nodes table gained CPU and Memory
   columns off `['labs', name, 'usage']`, rendering `—` and never `0` for an unmeasured node);
   **lab detail is routed tabs** under `/labs/$name` (layout route; children
-  overview/build/nodes/operations/access; the index redirects role-aware via
+  overview/build/nodes/tests/operations/access; the index redirects role-aware via
   `defaultLabTab(lab.permissions)` — authors land on Overview, pure consumers on Nodes; Access
   renders only with `lab:grant`); a per-node **Connect drawer** (mgmt IP, web console + logs
   launchers, and SSH guidance from `lib/ssh.ts`: the `~/.ssh/config` `Host twinlab-jump` block +
@@ -263,9 +302,68 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   events are attributed to a job with no correlation id: the per-lab job mutex means the
   lab's events between `created_at` and `finished_at` are exactly that job's. The old
   in-UI apology for the quiet stretch is gone — `config_push_started` says it;
-  the **test-suites** panel (rebuilt on the v2 wire 2026-08-03) and
-  custom-config live on the
-  Operations tab. **Whole-lab power + save-config are header-menu entries**, not a Controls card
+  **custom-config** lives on the Operations tab, and **validation has a TESTS TAB of its own**
+  (`/labs/$name/tests`, 2026-08-11 — frontend-only, no contract change; design record's
+  closing section in `docs/test-suite-builder.md`, which REVERSES that record's own "not a
+  tab" decision and says why). Delta 31 fixed AUTHORING and left READING untouched: after a
+  run the panel served one flat `(test, node)` table — the wire's shape, correctly, and the
+  wrong shape to read, since a test on eight nodes arrived as eight undifferentiated rows and
+  what the test targeted or ran was visible nowhere but inside the editor. So **the TEST is
+  the unit**: the tab is the navigation, a test is a CARD carrying its target, its command(s)
+  and its flags with the last run folded on as one pill per node (click one and it opens onto
+  the rendered+adapted command, the raw OUTPUT — which the old table never showed — and the
+  compare diff), and the **modal is now ONE test** (`components/lab/tests/test-edit-dialog.tsx`
+  over the delta-31 `test-case-editor.tsx`), with the suite's own three fields a small
+  settings dialog and the whole-map **JSON a third** — still LOSSLESS both ways, because the
+  suite schema is CLOSED (Twinlab owns every field), which parse/emit can never quite promise.
+  A lab-wide summary and an All/Problems/Not-run filter sit above the suites (the summary's
+  counts ARE that filter — click "1 failed"). A READING PASS on 2026-08-12 fixed six things
+  the shipped tab got wrong, all found by screenshotting it: the visual weight was INVERTED
+  (shadcn's `default` badge is a solid fill and `destructive` a pale tint, so nineteen passes
+  shouted while the one failure whispered) — the grammar now lives in
+  `components/lab/tests/status-badge.tsx`, a pass is a quiet outline, a fail is outlined red,
+  `error` is the ONLY solid fill (so the roll-up's ranking is visible, not merely true), every
+  state carries an icon, and the stage badge stopped competing for the same amber; per-node
+  pills lost their elapsed time (it is on the opened result) and an ALL-PASSING run folds them
+  behind its tally; a passing `compare` diff folds away and the result header leads with the
+  REASON rather than repeating the pill that opened it, with copy buttons on command+output;
+  suite descriptions clamp to two lines and a suite matching nothing under a filter shrinks to
+  ONE line; the test header's actions became a fixed column (`flex-wrap` dropped Edit/⋯ under
+  a two-line description on some cards only); and the dialog went TWO-COLUMN at `lg` — what
+  the test IS on the left, what it DOES on the right — with Try moved above the assertion
+  inside `TestCaseEditor`, since its parsed output is what a `compare` is written against.
+  DELIBERATELY not changed: the roll-up ranking `skip` above `pass`, which is a decision about
+  what a badge MEANS rather than a fix, and is parked. Three things
+  that had to be DECIDED: a create cannot save first (`command` is `min_length=1` and an empty
+  suite is rejected, so the settings dialog HANDS OFF to the test editor and both are written
+  on one Save — a placeholder command would ship a trivially-passing test; the e2e suite
+  caught the first implementation PUTting the blank), a roll-up ranks `error` ABOVE `fail` (a
+  fail is an assertion that came back false, an error is one that could not be made at all)
+  with the tally line always showing the full picture, and orphaned results — rows naming a
+  test since renamed or deleted — are REPORTED rather than dropped. `Run all` is the single
+  verb in a client-side loop; there is no batch endpoint and should not be, since the per-lab
+  job mutex forbids concurrency anyway. Everything the picker needs is resolved ONCE per page
+  by `lib/use-suite-authoring.ts`. The delta-31/32 substance is unchanged underneath: nodes
+  are checkboxes over the DEFINITION's nodes (parsed with `parseBuildDoc`, so a suite is
+  authorable before deploy), the device-keyed run form is seeded from the lab's own devices,
+  `mode: cli` is offered only where every target device's catalog `cli_mode` allows it, the
+  compare⟺parse coupling is STRUCTURAL (choosing compare selects a parse mode; clearing parse
+  moves the matcher off compare) rather than validated, and client-side gates MIRROR the
+  server's and never exceed them — an `error` is what the PUT rejects and blocks Save, a
+  `warning` is what fails at RUN time and does not (a `textfsm` case on a device with no
+  template set; a node not in the lab — and unknown nodes are not flagged at all before the
+  lab has a definition). **Try** is the loop-closer: it POSTs the exact unsaved case to the
+  dry-run endpoint and renders the adapted command, the real output and the parsed structure
+  directly above the `compare` being written against it. **Delta 32**'s target picker (All
+  nodes / groups + nodes, showing what it resolves to, a group-covered node
+  ticked-and-disabled rather than pretending to be independent) and its command field — a
+  one-line CodeMirror COMPLETING the lab's fact namespace inside `{{ }}`
+  (`lib/fact-completions.ts` is pure and editor-free so the harness can drive it; the
+  CodeMirror adapter lives with the case editor) — both moved into that per-test dialog, which
+  still does not close on an outside click, since a test is work in progress. `pnpm
+  check:test-suites` (48 checks over the suite model, the completion module AND the pure
+  results module `lib/test-results.ts` — grouping, roll-up, tallies, the lab aggregate, the
+  filter — the `check:build-doc` arrangement) guards all three. **Whole-lab power + save-config are header-menu entries**, not a Controls card
   — `components/lab/lab-power-menu.tsx` renders them into the lab header's `⋯` menu above a
   separator from destroy/delete, each offered only where it acts (a MIXED lab shows both Start
   and Stop, since it has containers in both states; freeze and save name their reason when the
@@ -402,7 +500,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   invalidates the `['labs']`/`['jobs']` query roots. API access goes through the typed,
   zod-parsed client (`src/lib/api.ts`) raising the `{code, message, extras}` envelope as
   `ApiError`; dev server proxies `/api/v1` (`VITE_PROXY_TARGET`, default
-  `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build` + `pnpm check:build-doc`.
+  `http://localhost:8000`). Gates: `pnpm typecheck` + `pnpm build` + `pnpm check:build-doc`
+  + `pnpm check:test-suites`.
 - **`backend/`** — FastAPI (uv, **Python 3.14**, ids are stdlib **UUIDv7**). Turns a declarative
   netlab definition into a running lab: runs `netlab create` to generate a containerlab topology,
   then deploys it through the clab-api server (piped inline as `topologyContent`); the generated
@@ -490,7 +589,14 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   and default clab image both mirrored from the installed netlab with drift-guard tests, plus
   best-effort image presence via the runner's `GET /images` — matching policy stays in the
   backend, untagged names normalize to `:latest`; runner unreachable degrades to
-  `image_present=null` + `live=false`, never an error; any authenticated user),
+  `image_present=null` + `live=false`, never an error; any authenticated user; **delta 31**
+  adds `cli_mode` and `textfsm` — whether a test case may declare `mode: cli` / `parse: textfsm`
+  on the device — DERIVED from `cli_adapters.CLI_ENTRIES` and `validation.TEXTFSM_PLATFORMS` on
+  the same never-drift principle as `config_import`, so admitting a platform needs NO extra edit
+  here and a client never keeps its own copy; the axes are independent, so linux is
+  `cli_mode:false, textfsm:true` and frr the reverse),
+  **`GET /labs/{name}/facts`** also serves the resolved group map (delta 32) —
+  see the test-suites bullet — and
   **host resources** (delta 30, design record `docs/host-resources.md`: **`GET /host`** is the
   machine's own cpu/load/memory/swap/disk read from `/proc` via **psutil** (BSD-3) — the backend
   container reads the HOST's values there, since `/proc/stat`, `/proc/meminfo` and
@@ -615,7 +721,20 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   --host`; IOS truncates `ping … repeat` on a one-shot exec — proven side-by-side) and is a
   deliberate no-op over docker exec. Suite `stage` semantics are unchanged (`config-time` gates a
   configure, skip RETAINS the prior gate, failure = deployed + `validation_failed`); the pipeline
-  lives in `services/validation.py`, results persist per-suite in `last_validation`, and
+  lives in `services/validation.py`, results persist per-suite in `last_validation`;
+  **`POST /labs/{name}/test-suites/dry-run`** (delta 31, `lab:validate`, deployed lab,
+  design record `docs/test-suite-builder.md`) runs ONE unsaved `TestCaseDraft` (a sibling of
+  `TestCase` whose `expect` is optional — NOT a subclass, since narrowing a mutable field is
+  unsound and basedpyright says so; `AnyTestCase` is what the read-only pipeline stages take)
+  on ONE node and returns the RENDERED+ADAPTED command, the stdout and the PARSED structure —
+  which `_run_check` computes, asserts against and discards, so a `compare` has always had to be
+  predicted rather than read; a parse failure is a 200 carrying `parse_error` with the raw
+  output intact (in a saved run the same failure is status `error`, correctly — there it breaks
+  an assertion that can then no longer be made), 422 `invalid_case`/`unknown_node`, 502
+  `exec_failed`. SYNCHRONOUS on purpose: no `wait` means one exec, and staying sync keeps the
+  probe usable WHILE a job holds the per-lab mutex (delta 24's reasoning for batch actions).
+  Writes nothing — no `last_validation`, no gate, no job row. Deliberately NOT included: a
+  `wait`, a multi-node probe, a suite-level dry run, or a new permission. And
   `examples/mpls-l3vpn.test-suites.json` keeps the device-keyed shape with every
   address rendered from facts — the IOL flavor left with the platform on 2026-08-05, so its
   worked example of `textfsm` + `compare`-over-parsed-output and of two live device keys is

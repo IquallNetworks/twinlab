@@ -74,6 +74,8 @@ from twinlab_client.models import (
     SshKey,
     SshKeyGenerated,
     TerminalProtocol,
+    TestCaseDraft,
+    TestCaseDryRunResult,
     TestSuite,
     TestSuitesResponse,
     UserInfo,
@@ -806,6 +808,38 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         gate. Pre-accept: 404 unknown suite; 409 job_in_flight."""
         payload = await self._send_json("POST", f"/labs/{name}/test-suites/{suite}/run")
         return _wire.parse_job(payload)
+
+    async def dry_run_test_case(
+        self, name: str, node: str, run: TestCaseDraft
+    ) -> TestCaseDryRunResult:
+        """POST /labs/{name}/test-suites/dry-run — lab:validate. Run ONE
+        unsaved case on ONE node and get back what it did: the rendered and
+        adapted command, the stdout, and — when the draft declared `parse` —
+        the parsed structure a `compare` has to be written against.
+
+        **Synchronous**, unlike `run_test_suite`. A suite run is a job because
+        its worst case is the sum of every test's `wait`; a draft has no
+        `wait` at all, so this is one exec. Staying sync also keeps it usable
+        WHILE a job holds the per-lab mutex — an authoring aid that 409s
+        because someone else is deploying is not an aid.
+
+        Writes nothing: no last_validation, no config-time gate, no job row.
+
+        lab:validate rather than lab:edit, because it EXECUTES on a node. It
+        grants nothing new — `run_test_suite` already runs arbitrary commands
+        under that permission; this aims it at a case that is not stored yet.
+
+        409 ``no_definition`` / ``lab_not_running``; 422 ``unknown_node`` and
+        ``invalid_case`` (a template that will not render, a `cli` case on a
+        device whose CatalogDevice.cli_mode is False); 502 ``exec_failed``
+        when the command could not be run at all. A command that RAN and
+        whose output would not parse is a success carrying ``parse_error``."""
+        payload = await self._send_json(
+            "POST",
+            f"/labs/{name}/test-suites/dry-run",
+            json_body={"node": node, "run": _wire.test_case_draft_to_wire(run)},
+        )
+        return _wire.parse_test_case_dry_run_result(payload)
 
     # ------------------------------------------------------------------ #
     # Labs — custom config

@@ -1,18 +1,27 @@
+import asyncio
 import json
 
 import pydantic
 import pytest
 
-from twinlab_backend.models import TestCase, TestExpectation, TestSuite, ValidationTest
+from twinlab_backend.models import (
+    TestCase,
+    TestCaseDraft,
+    TestExpectation,
+    TestSuite,
+    ValidationTest,
+)
 from twinlab_backend.result import Err, Ok, Result
 from twinlab_backend.services.validation import (
     NodeExecutor,
     NodeFacts,
     check_suite_templates,
+    dry_run_case,
     evaluate_expectation,
     parse_output,
     render_expectation,
     render_template,
+    resolve_targets,
     run_suite,
 )
 
@@ -388,3 +397,196 @@ async def test_run_suite_compare_pipeline_end_to_end() -> None:
     report = await run_suite(_executor_ok(stdout), _FACTS, "s", _suite(test))
     assert report.passed == 1
     assert report.results[0].diff is not None and report.results[0].diff["complies"]
+
+
+# --- Dry run: one unsaved case, and what it actually printed (delta 31) ---
+
+
+def _draft(**kwargs: object) -> TestCaseDraft:
+    return TestCaseDraft.model_validate({"command": "show", **kwargs})
+
+
+async def test_dry_run_without_expectation_reports_no_outcome() -> None:
+    """The core authoring case: no expectation yet, so the answer is the
+    output — and claiming a status would answer a question nobody asked."""
+    result = await dry_run_case(_executor_ok("neighbor 10.0.0.2 Full"), _FACTS, "r1", _draft())
+    assert isinstance(result, Ok)
+    assert result.value.output == "neighbor 10.0.0.2 Full"
+    assert result.value.device == "vyos"
+    assert result.value.status is None
+    assert result.value.parsed is None
+
+
+async def test_dry_run_returns_the_parsed_structure() -> None:
+    """What no other response carries: a compare asserts over PARSED data, so
+    the structure has to be readable before one can be written."""
+    result = await dry_run_case(
+        _executor_ok('{"peers": {"10.0.0.2": {"state": "Established"}}}'),
+        _FACTS,
+        "r1",
+        _draft(parse="json"),
+    )
+    assert isinstance(result, Ok)
+    assert result.value.parsed == {"peers": {"10.0.0.2": {"state": "Established"}}}
+    assert result.value.parse_error is None
+    assert result.value.status is None
+
+
+async def test_dry_run_renders_and_adapts_the_command() -> None:
+    result = await dry_run_case(
+        _executor_ok("out"),
+        _FACTS,
+        "r1",
+        _draft(command="ping {{ nodes.r2.loopback.ipv4 | address }}", mode="cli"),
+    )
+    assert isinstance(result, Ok)
+    # Rendered from facts AND wrapped for VyOS op-mode — what actually ran.
+    assert result.value.command == "/opt/vyatta/bin/vyatta-op-cmd-wrapper ping 10.0.0.2"
+
+
+async def test_dry_run_evaluates_a_supplied_expectation() -> None:
+    passing = await dry_run_case(
+        _executor_ok("state is Full"),
+        _FACTS,
+        "r1",
+        _draft(expect=TestExpectation(contains="Full")),
+    )
+    assert isinstance(passing, Ok)
+    assert passing.value.status == "pass"
+
+    failing = await dry_run_case(
+        _executor_ok("state is Init"),
+        _FACTS,
+        "r1",
+        _draft(expect=TestExpectation(contains="Full")),
+    )
+    assert isinstance(failing, Ok)
+    assert failing.value.status == "fail"
+    assert failing.value.detail != ""
+
+
+async def test_dry_run_parse_failure_is_an_answer_not_an_error() -> None:
+    """A parse failure is exactly what the author needs to SEE — so it comes
+    back 200 with the raw output intact, unlike a suite run where it is an
+    error result."""
+    result = await dry_run_case(_executor_ok("not json at all"), _FACTS, "r1", _draft(parse="json"))
+    assert isinstance(result, Ok)
+    assert result.value.parse_error is not None
+    assert result.value.output == "not json at all"
+    assert result.value.parsed is None
+    assert result.value.status is None
+
+
+async def test_dry_run_rejects_a_cli_case_on_a_shell_only_device() -> None:
+    result = await dry_run_case(_executor_ok("out"), _FACTS, "h1", _draft(mode="cli"))
+    assert isinstance(result, Err)
+    assert result.error.kind == "invalid_case"
+
+
+async def test_dry_run_rejects_an_unknown_node() -> None:
+    result = await dry_run_case(_executor_ok("out"), _FACTS, "nope", _draft())
+    assert isinstance(result, Err)
+    assert result.error.kind == "unknown_node"
+
+
+async def test_dry_run_reports_a_broken_template_as_the_caller_s_error() -> None:
+    result = await dry_run_case(
+        _executor_ok("out"), _FACTS, "r1", _draft(command="{{ node.nonexistent.thing }}")
+    )
+    assert isinstance(result, Err)
+    assert result.error.kind == "invalid_case"
+
+
+async def test_dry_run_surfaces_an_exec_failure_as_upstream() -> None:
+    result = await dry_run_case(_executor_err("node is down"), _FACTS, "r1", _draft())
+    assert isinstance(result, Err)
+    assert result.error.kind == "exec_failed"
+
+
+async def test_draft_may_declare_parse_without_an_expectation() -> None:
+    """The coupling a stored case enforces does not apply while authoring —
+    "show me the parsed structure" is how a compare gets written."""
+    assert _draft(parse="json").expect is None
+    with pytest.raises(pydantic.ValidationError, match="compare and parse"):
+        _ = TestCaseDraft.model_validate(
+            {"command": "show", "parse": "json", "expect": {"contains": "x"}}
+        )
+
+
+# --- Targeting: all_nodes / groups / nodes, unioned (delta 32) ---
+
+_GROUPS = {"core": ["r1", "r2"], "edge": ["h1"]}
+
+
+def _targeted(**kwargs: object) -> ValidationTest:
+    return ValidationTest.model_validate(
+        {"run": {"command": "true", "expect": {"contains": "x"}}, **kwargs}
+    )
+
+
+def test_a_nodes_only_test_resolves_to_exactly_its_nodes_in_order() -> None:
+    """The compatibility guarantee: every suite written before delta 32 keeps
+    its target AND its result order."""
+    assert resolve_targets(_targeted(nodes=["h1", "r1"]), _FACTS, _GROUPS) == ["h1", "r1"]
+
+
+def test_all_nodes_takes_the_lab_in_topology_order() -> None:
+    assert resolve_targets(_targeted(all_nodes=True), _FACTS, _GROUPS) == ["r1", "r2", "h1"]
+
+
+def test_groups_resolve_to_their_members() -> None:
+    assert resolve_targets(_targeted(groups=["core"]), _FACTS, _GROUPS) == ["r1", "r2"]
+
+
+def test_groups_and_nodes_union_without_duplicating() -> None:
+    """The case the maintainer asked for: a group plus named extras — and a
+    node already in the group must not run twice."""
+    target = _targeted(groups=["core"], nodes=["h1", "r1"])
+    assert resolve_targets(target, _FACTS, _GROUPS) == ["r1", "r2", "h1"]
+
+
+def test_an_unknown_group_contributes_nothing() -> None:
+    # The definition can be edited out from under a stored suite; that is the
+    # caller's problem to report, not a reason to fail the whole run.
+    assert resolve_targets(_targeted(groups=["gone"], nodes=["r1"]), _FACTS, _GROUPS) == ["r1"]
+
+
+def test_a_test_must_target_something() -> None:
+    with pytest.raises(pydantic.ValidationError, match="must target something"):
+        _ = _targeted()
+
+
+def test_run_suite_runs_the_resolved_targets() -> None:
+    """End to end through the runner: a group target produces one result per
+    member, which is what makes the target edit-proof rather than decorative."""
+    test = ValidationTest(
+        run=TestCase(command="show", expect=TestExpectation(contains="ok")),
+        groups=["core"],
+    )
+    report = asyncio.run(
+        run_suite(_executor_ok("ok"), _FACTS, "s", TestSuite(tests={"t": test}), _GROUPS)
+    )
+    assert report.passed == 2
+    assert [r.node for r in report.results] == ["r1", "r2"]
+
+
+def test_put_time_checks_render_against_group_targets() -> None:
+    """The PUT dry-renders per TARGET node, so a template that only breaks on a
+    group member has to be caught by the group resolution too."""
+    suites = {
+        "s": TestSuite(
+            tests={
+                "t": ValidationTest(
+                    run=TestCase(
+                        # h1 (linux) has no loopback in the namespace; r1 does.
+                        command="ping {{ node.loopback.ipv4 }}",
+                        expect=TestExpectation(contains="x"),
+                    ),
+                    groups=["edge"],
+                )
+            }
+        )
+    }
+    problems = check_suite_templates(suites, _FACTS, {"edge": ["h1"]})
+    assert problems, "a group member's failing render was not reported"
+    assert problems[0]["test"] == "t"

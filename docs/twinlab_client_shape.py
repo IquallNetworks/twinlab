@@ -504,7 +504,7 @@ activate toggle, self password change, get group, API keys.
 
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -742,6 +742,21 @@ class CatalogDevice:
     # deployability — linux has no config-dump concept — and widens only with
     # a per-device parser (a NOS-sweep-adjacent decision, never implicit).
     config_import: bool
+    # PROPOSED (delta 31): the two per-device capabilities a test CASE depends
+    # on. Both are DERIVED server-side from the tables that actually decide —
+    # cli_adapters.CLI_ENTRIES and validation.TEXTFSM_PLATFORMS — exactly as
+    # config_import is derived from the importer's parser set, so neither can
+    # drift from behaviour. They exist because a client authoring a case
+    # otherwise has to keep its own copy of both tables, and would go stale the
+    # first time a platform is admitted (admitting one already touches up to
+    # six files; this makes it zero more).
+    cli_mode: bool  # `mode: "cli"` is meaningful here — the device has a CLI
+    #                 of its own to reach. False for shell-only devices (linux,
+    #                 dnsmasq), where a `cli` case is a 422 at run time.
+    textfsm: bool  # `parse: "textfsm"` resolves a platform for this device.
+    #                False means a textfsm case errors — there is no template
+    #                set to parse with, and Twinlab never silently falls back
+    #                to raw output.
 
 
 @dataclass(frozen=True, slots=True)
@@ -1688,10 +1703,33 @@ class ValidationTest:
     the types; the accepted cost is repeating a shared matcher across
     cases (a `default`-case merge is a possible ADDITIVE later extension).
     `wait` (0-600 s) polls until the expectation holds — the convergence
-    knob."""
+    knob.
 
-    nodes: list[str]
+    PROPOSED (delta 32): the target is THREE selectors, unioned, because a
+    node list is not edit-proof — add a router to the lab and every test
+    silently keeps testing the old set, which is the failure mode where a
+    suite quietly stops covering what it was written to cover.
+
+      all_nodes=True                    every node in the lab
+      groups=["core"]                   every member of those groups
+      nodes=["x", "y"]                  exactly these
+      groups=["core"], nodes=["x"]      the group's members plus x
+
+    At least one must select something (the empty test is a 422, as an
+    empty `nodes` was). Groups are the DEFINITION's groups, resolved to
+    node names — nested groups flattened; see LabFacts.groups for what a
+    name resolves to. Resolution order is first
+    appearance: all_nodes in topology order, then each group's members,
+    then the explicit nodes — which leaves a nodes-only test running in
+    exactly the order it always did."""
+
     run: TestCase | dict[str, TestCase]
+    # PROPOSED (delta 32): was required and the only selector. Still the
+    # precise one; now optional because a test may select purely by group
+    # or by "everything".
+    nodes: list[str] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)
+    all_nodes: bool = False
     wait: int = 0
     description: str = ""
 
@@ -1748,6 +1786,65 @@ class TestSuitesResponse:
     config_time_status: ConfigTimeStatus  # APPROVED — wire today: config_time_ok
 
 
+# --------------------------------------------------------------------------- #
+# Test-case dry run (delta 31, PROPOSED 2026-08-11)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class TestCaseDraft:
+    """One case being AUTHORED — a TestCase whose `expect` is optional
+    (delta 31). That is the whole difference: a saved case must assert
+    something, a case you are still writing need not, because the first
+    question is "what does this command print on this node?"."""
+
+    command: str
+    expect: TestExpectation | None = None
+    parse: ParseMode | None = None
+    mode: CommandMode = "shell"
+    interactive: bool = False
+    # NOTE the coupling relaxes with the expectation: a stored TestCase must
+    # pair `compare` with `parse` in BOTH directions, but a draft declaring
+    # `parse` and no `expect` is legal — asking to SEE the parsed structure is
+    # precisely how a compare gets written. With an `expect` present the full
+    # rule applies again.
+
+
+@dataclass(frozen=True, slots=True)
+class TestCaseDryRunResult:
+    """What one unsaved case did on one node (delta 31).
+
+    `parsed` is the piece no existing response carries: `_run_check`
+    computes the parsed structure to assert against and then discards it,
+    so a `compare` — which asserts over PARSED data — has always had to be
+    predicted rather than read. Here it is returned, which is what makes a
+    compare writable without guessing at TextFSM's or `vtysh … json`'s
+    output shape.
+
+    The last three are present ONLY when the draft supplied an `expect`:
+    with no expectation there is no outcome to report, and saying "pass"
+    would be a lie about a question nobody asked."""
+
+    node: str
+    device: str  # the node's netlab device — which CLI adapter and TextFSM
+    #              platform applied, and why a `cli`/`textfsm` case may 422
+    command: str  # the RENDERED and ADAPTED command — what actually ran
+    output: str  # captured stdout (bounded like TestResult.output)
+    parsed: object | None  # the parse result when `parse` was set; None
+    #                        otherwise, or when parsing failed. `object`
+    #                        because its shape is the device's, not Twinlab's.
+    # A parse failure is an ANSWER here rather than an error: this is set, the
+    # raw `output` survives, and the response is a 200 — seeing what the parser
+    # choked on is exactly how the case gets fixed. In a SAVED run the same
+    # failure is a TestResult with status "error", because there the parse
+    # feeds an assertion that can then no longer be made.
+    parse_error: str | None
+    elapsed_ms: int
+    status: Literal["pass", "fail"] | None = None
+    detail: str = ""
+    diff: dict[str, object] | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class LabFacts:
     """The per-node fact namespace test-suite templates render against —
@@ -1768,6 +1865,16 @@ class LabFacts:
     with `facts()`."""
 
     nodes: dict[str, dict[str, object]]
+    # PROPOSED (delta 32): the definition's groups, each resolved to the
+    # NODE names it selects — nested groups flattened, so a consumer never
+    # reimplements that. Only the groups the definition itself declares:
+    # netlab's expanded topology also carries internal bookkeeping groups
+    # (`netlab_no_collect`, `netlab_no_reload`) which are never targetable.
+    # Empty when the definition declares none. Served here rather than as a
+    # resource of its own because the two are asked for together: a suite
+    # builder needs the namespace to template against AND the groups to
+    # target by.
+    groups: dict[str, list[str]]
 
 
 # --------------------------------------------------------------------------- #
@@ -2705,6 +2812,37 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         the sum of every test's `wait`, hence a job). Runs one suite (any
         stage); persists as its last run but NEVER moves the config-time
         gate. Pre-accept: 404 unknown suite; 409 job_in_flight."""
+        raise NotImplementedError
+
+    async def dry_run_test_case(
+        self, name: str, node: str, run: TestCaseDraft
+    ) -> TestCaseDryRunResult:
+        """PROPOSED (delta 31) POST /labs/{name}/test-suites/dry-run —
+        lab:validate. Run ONE unsaved case on ONE node and report what it
+        did, including the parsed structure a `compare` must be written
+        against.
+
+        **Synchronous**, unlike run_test_suite. A suite run is 202 + a job
+        because its worst case is the sum of every test's `wait`; a dry run
+        has no `wait` at all (one exec, no convergence polling — the
+        question is "what does this print, now", and polling would only
+        make a wrong command take a minute to say so). Staying sync also
+        keeps it usable WHILE a job holds the per-lab mutex, which is
+        exactly delta 24's reasoning for batch runtime actions: an
+        authoring aid that 409s because someone is deploying is not an aid.
+
+        Writes NOTHING — no last_validation, no config-time gate, no job
+        row. It is a question, not an operation.
+
+        Permission is lab:validate, not lab:edit: authoring is lab:edit,
+        but this EXECUTES on a node, which is the suite-run class. It grants
+        nothing new — run_test_suite already runs arbitrary commands under
+        the same permission; this aims it at a case that is not stored yet.
+
+        409 no_definition on a bare record, 409 lab_not_running unless
+        deployed, 422 unknown_node, and the case's own 422s (a `cli` case on
+        a device with CatalogDevice.cli_mode False, a `textfsm` case where
+        textfsm is False, compare/parse mismatch)."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #

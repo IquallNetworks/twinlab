@@ -11,7 +11,7 @@ never sends suites to netlab — this is Twinlab's own validation, not
 `netlab validate`.
 
 Suites live on the lab record, so they survive a destroy and a redeploy. You
-author them as JSON on the **Operations** tab, under **Edit suites**.
+author, run and read them on the lab's **Tests** tab.
 
 Every test follows the same pipeline:
 
@@ -49,6 +49,99 @@ node produces its own result.
 assertion to hold, rather than failing on the first attempt. Protocols take time
 to come up, so a routing assertion nearly always wants one. `0` means a single
 attempt.
+
+## The Tests tab
+
+The tab *is* the suite list. Each suite is a card; each test inside it is a card
+of its own carrying what the test is — its target, its command, the flags that
+change how the command is read — and, underneath, the last run folded onto it as
+one pill per node.
+
+That layout is the point. A test that ran on eight nodes arrives from the API as
+eight separate rows; here it is one test with eight verdicts, which is how the
+question is actually asked.
+
+Above the suites: what the whole lab's validation says, and a filter —
+**All tests**, **Problems** (only what failed or errored), **Not run**. The
+summary's counts are that filter from the other side: click **1 failed** to go
+look at it. A suite with nothing matching the current filter shrinks to a single
+line rather than rendering its whole header to say so.
+
+## Building one
+
+**Edit** on a test card opens that test, and nothing else. Targets are picked
+from the lab's own nodes and groups, the assertion is one choice out of four,
+and the command language and parse mode are offered only where the device can
+actually do them.
+
+The suite's own three fields — name, stage, description — are **Suite settings**
+in the suite's `⋯` menu. **New suite** asks for those and then hands you
+straight to its first test: a suite with no tests is not something the API
+accepts, and neither is a test with no command, so both are written on one
+Save. Cancel there leaves nothing behind.
+
+**JSON** opens the whole set as text, for pasting a suite in whole or editing
+something faster by hand. Nothing is lost in either direction — Twinlab owns
+every field in the suite schema, so there is nothing for a round trip to drop.
+
+The test dialog will not close on a stray click outside it — use Cancel when you
+mean to discard.
+
+In the command field, typing `{{` completes against **this lab's** facts: the
+node paths that actually exist, with `| address` offered after a pipe. It is
+the same namespace the Facts dialog shows, offered where you are using it
+rather than somewhere to transcribe from.
+
+The builder refuses to save what the server would reject — two assertions, a
+`compare` with nothing to parse, a broken regex — and says which test and field
+is at fault. It also *warns* about things that will fail later without blocking
+the save: a `textfsm` parse on a device with no template set, or a node that is
+not in the lab. Those are real runtime errors, but the server accepts them, and
+the builder does not get to be stricter than the API.
+
+### Choosing what a test runs on
+
+A test's target is one of three things:
+
+- **Every node in the lab** — the default for a new test, and the one that
+  stays correct. Add a router next month and it is tested too, without anyone
+  remembering to come back here.
+- **Groups** — the groups your definition already declares. "Every core
+  router" keeps meaning that as the core grows, and you are reusing a fact the
+  topology already states rather than restating it.
+- **Named nodes** — for the tests that really are about one node.
+
+Groups and nodes compose: tick `core` and then `h1`, and the test runs on the
+group's members plus `h1`. A node a group already covers shows as ticked and
+cannot be unticked on its own — the group is what selected it.
+
+The line under the picker always says what the target currently resolves to, so
+"runs on r1, r2, r3" is visible before you save. A target that resolves to
+nothing is refused, because a test that silently never runs is worse than no
+test at all.
+
+### Try: see the output before you assert on it
+
+The hard part of writing a test is not the syntax. It is that you are asserting
+on output you have not seen.
+
+Every case has a **Try** button. It runs *that exact case*, unsaved, on a node
+you pick, and shows you three things:
+
+- the **command that actually ran** — after your Jinja templates resolved and
+  after Twinlab rewrote it for the device's CLI, so you can see what the node
+  really received;
+- the **output**, as the node printed it;
+- the **parsed structure**, when the case declares a parse mode.
+
+That last one is what makes `compare` writable. A `compare` asserts over parsed
+data, so without seeing the structure you are guessing at the shape TextFSM or
+`show … json` produces. Try puts it on screen directly above the `compare` you
+are writing against it.
+
+Try needs a **deployed** lab — it runs a real command on a real node. It stores
+nothing: no results, no gate, no job. Running it while a deploy is in progress
+is fine.
 
 ## Commands, and the mistake everyone makes once
 
@@ -121,7 +214,7 @@ Both work. The path tells you which risk you took.
 instead of silently asserting against nothing. That also means the old spelling
 of a key that moved into `_extras` fails rather than quietly emptying.
 
-The **Facts** viewer on the Operations tab shows exactly what a node offers.
+The **Facts** viewer on the Tests tab shows exactly what a node offers.
 
 Twinlab checks your templates when you save the suite, and dry-renders them when
 the lab has facts. A broken template is a 422 that names the suite, the test and
@@ -189,7 +282,8 @@ and what was extra. That is usually faster to read than a regex failure.
   deploy worked. The network did not converge.
 - **`runtime`** suites run only when you ask.
 
-Any suite runs on demand from the Operations tab, whatever its stage. Running
+Any suite runs on demand from the Tests tab, whatever its stage — **Run** on the
+suite, or **Run all** for every suite in turn. Running
 one needs `lab:validate` and a running lab — the **Run** button is disabled
 otherwise, and says "Run is available while the lab is running".
 
@@ -197,7 +291,7 @@ A skipped config-time gate keeps the previous verdict rather than resetting it.
 
 ## Reading results
 
-Results persist per suite, so the panel shows the last run.
+Results persist per suite, so the tab always shows the last run.
 
 | Status | Meaning |
 | --- | --- |
@@ -209,8 +303,26 @@ Results persist per suite, so the panel shows the last run.
 `fail` and `error` are worth distinguishing. `fail` is a finding about the
 network. `error` is a problem with the test.
 
-Each result carries the rendered command, the captured output, what it expected,
-and the structured diff when a `compare` decided it.
+Attention goes to what is wrong. A pass is a quiet outline, a fail is
+outlined in red, and an `error` — the only solid fill on the page — is the
+loudest thing on it. Every verdict carries an icon too, so the reading never
+depends on colour alone. A run where **every** node passed folds its pills away
+behind the tally, since a row of identical verdicts is not what anyone came to
+read; click the tally to open them.
+
+Click a node's pill and the result opens: the command **as it actually ran**
+(rendered from facts, and rewritten for the device's own CLI where `mode: cli`
+asked for that), the captured output, what it expected, and the structured diff
+when a `compare` decided it (folded away on a pass, where it says only that
+the spec held). The command and the output both copy in one click — the command
+is the artifact to paste into a terminal when you want to see it fail by hand.
+
+A test's headline badge is its worst node, and `error` outranks `fail` there —
+a fail is an assertion that came back false, an error is one that could not be
+made at all. The tally line beside it always shows the full picture.
+
+If you rename or delete a test, the suite says so rather than dropping the
+orphaned results silently: they were about a test with that name, once.
 
 ## Worked examples
 

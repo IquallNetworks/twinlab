@@ -107,8 +107,11 @@ from twinlab_client.models import (
     SuiteReport,
     TemplateVariant,
     TestCase,
+    TestCaseDraft,
+    TestCaseDryRunResult,
     TestExpectation,
     TestResult,
+    TestStatus,
     TestSuite,
     TestSuitesResponse,
     UserInfo,
@@ -264,6 +267,21 @@ def _get_literal[T: str](obj: dict[str, object], key: str, where: str, allowed: 
     return _literal_value(_get_str(obj, key, where), key, where, allowed)
 
 
+def _get_opt_test_status(obj: dict[str, object], where: str) -> TestStatus | None:
+    """`status` where absent is meaningful (delta 31: a dry run with no
+    expectation has no outcome), so null/absent is None rather than a fault.
+
+    Concrete rather than a generic `_get_opt_literal`: a generic helper's T
+    solves to its `str` bound at the call site, because literal types are
+    widened during constraint solving unless an exact literal type is
+    expected — and `TestStatus | None` is not exact enough to stop it. The
+    annotation on `status` below is the exact expected type that does."""
+    if obj.get("status") is None:
+        return None
+    status: TestStatus = _get_literal(obj, "status", where, TEST_STATUSES)
+    return status
+
+
 # --------------------------------------------------------------------------- #
 # Health
 # --------------------------------------------------------------------------- #
@@ -410,6 +428,8 @@ def parse_catalog_device(value: object) -> CatalogDevice:
         image=_get_str(obj, "image", where),
         image_present=_get_opt_bool(obj, "image_present", where),
         config_import=_get_bool(obj, "config_import", where),
+        cli_mode=_get_bool(obj, "cli_mode", where),
+        textfsm=_get_bool(obj, "textfsm", where),
     )
 
 
@@ -1057,8 +1077,12 @@ def parse_validation_test(value: object) -> ValidationTest:
         else {device: parse_test_case(case) for device, case in run_obj.items()}
     )
     return ValidationTest(
-        nodes=_get_str_list(obj, "nodes", where),
         run=run,
+        nodes=_get_str_list(obj, "nodes", where),
+        # Delta 32: both absent on every suite authored before it, and the
+        # server omits them when unused, so neither is required on the wire.
+        groups=_get_str_list(obj, "groups", where) if "groups" in obj else [],
+        all_nodes=obj.get("all_nodes") is True,
         wait=_get_int(obj, "wait", where),
         description=_get_str(obj, "description", where),
     )
@@ -1093,6 +1117,31 @@ def parse_test_result(value: object) -> TestResult:
         detail=_get_str(obj, "detail", where),
         diff=diff,
         elapsed_ms=_get_int(obj, "elapsed_ms", where),
+    )
+
+
+def parse_test_case_dry_run_result(value: object) -> TestCaseDryRunResult:
+    where = "TestCaseDryRunResult"
+    obj = as_object(value, where)
+    diff = obj.get("diff")
+    if diff is not None:
+        diff = dict(as_object(diff, f"{where}.diff"))
+    # Absent whenever the draft carried no expectation, which is the common
+    # authoring case — so the key's absence is normal, not a wire fault.
+    status = _get_opt_test_status(obj, where)
+    return TestCaseDryRunResult(
+        node=_get_str(obj, "node", where),
+        device=_get_str(obj, "device", where),
+        command=_get_str(obj, "command", where),
+        output=_get_str(obj, "output", where),
+        # Deliberately untyped: the structure is the device's own (TextFSM
+        # rows, `vtysh … json`), which Twinlab passes through rather than owns.
+        parsed=obj.get("parsed"),
+        parse_error=_get_opt_str(obj, "parse_error", where),
+        elapsed_ms=_get_int(obj, "elapsed_ms", where),
+        status=status,
+        detail=_get_str(obj, "detail", where),
+        diff=diff,
     )
 
 
@@ -1135,7 +1184,14 @@ def parse_lab_facts(value: object) -> LabFacts:
     nodes: dict[str, dict[str, object]] = {}
     for name, node_value in as_object(_req(obj, "nodes", where), where).items():
         nodes[name] = dict(as_object(node_value, f"{where}.nodes[{name}]"))
-    return LabFacts(nodes=nodes)
+    groups: dict[str, list[str]] = {}
+    raw_groups = obj.get("groups")
+    if raw_groups is not None:
+        for name, members in as_object(raw_groups, f"{where}.groups").items():
+            groups[name] = [
+                m for m in as_list(members, f"{where}.groups[{name}]") if isinstance(m, str)
+            ]
+    return LabFacts(nodes=nodes, groups=groups)
 
 
 # --------------------------------------------------------------------------- #
@@ -1297,6 +1353,22 @@ def expectation_to_wire(expectation: TestExpectation) -> dict[str, object]:
     return wire
 
 
+def test_case_draft_to_wire(draft: TestCaseDraft) -> dict[str, object]:
+    """Delta 31. `expect` is OMITTED when absent rather than sent as null —
+    the server's draft model defaults it to None, and an explicit null would
+    only be a second spelling of the same thing."""
+    wire: dict[str, object] = {
+        "command": draft.command,
+        "mode": draft.mode,
+        "interactive": draft.interactive,
+    }
+    if draft.expect is not None:
+        wire["expect"] = expectation_to_wire(draft.expect)
+    if draft.parse is not None:
+        wire["parse"] = draft.parse
+    return wire
+
+
 def test_case_to_wire(case: TestCase) -> dict[str, object]:
     wire: dict[str, object] = {
         "command": case.command,
@@ -1315,12 +1387,20 @@ def validation_test_to_wire(test: ValidationTest) -> dict[str, object]:
         if isinstance(test.run, TestCase)
         else {device: test_case_to_wire(case) for device, case in test.run.items()}
     )
-    return {
-        "nodes": list(test.nodes),
+    wire: dict[str, object] = {
         "run": run,
+        "nodes": list(test.nodes),
         "wait": test.wait,
         "description": test.description,
     }
+    # Delta 32: omitted when unused, so a nodes-only test still serializes to
+    # exactly what it always did — the wire stays readable and old suites
+    # round-trip byte-identically.
+    if test.groups:
+        wire["groups"] = list(test.groups)
+    if test.all_nodes:
+        wire["all_nodes"] = True
+    return wire
 
 
 def test_suite_to_wire(suite: TestSuite) -> dict[str, object]:

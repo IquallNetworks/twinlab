@@ -19,6 +19,7 @@ import json
 import re
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -30,8 +31,11 @@ from napalm.base.exceptions import ValidationException
 from textfsm import TextFSMError, clitable
 
 from twinlab_backend.models import (
+    AnyTestCase,
     SuiteReport,
     TestCase,
+    TestCaseDraft,
+    TestCaseDryRunResult,
     TestExpectation,
     TestResult,
     TestSuite,
@@ -213,8 +217,38 @@ def _test_cases(test: ValidationTest) -> dict[str, TestCase]:
     return dict(test.run)
 
 
+# The definition's groups with members resolved by netlab (delta 32), keyed by
+# group name. Passed alongside the facts wherever a test's target is resolved.
+type NodeGroups = dict[str, list[str]]
+
+
+def resolve_targets(test: ValidationTest, facts: NodeFacts, groups: NodeGroups) -> list[str]:
+    """The nodes a test runs on: the union of `all_nodes`, each named group's
+    members, and the explicit `nodes` (delta 32).
+
+    Order is FIRST APPEARANCE — all_nodes in topology order, then each group in
+    the order listed, then the explicit nodes. That is not arbitrary: it makes a
+    nodes-only test resolve to exactly `test.nodes`, so every suite written
+    before this existed keeps its result order.
+
+    An unknown group contributes nothing rather than erroring. Groups are a
+    definition-derived convenience, and the definition can be edited out from
+    under a stored suite; a test that ends up targeting nothing is reported per
+    the caller's own rules, which is more useful than failing the whole run."""
+    seen: dict[str, None] = {}
+    if test.all_nodes:
+        for node in facts:
+            seen.setdefault(node, None)
+    for group in test.groups:
+        for node in groups.get(group, []):
+            seen.setdefault(node, None)
+    for node in test.nodes:
+        seen.setdefault(node, None)
+    return list(seen)
+
+
 def _mode_target_devices(
-    case_device: str, test: ValidationTest, facts: NodeFacts | None
+    case_device: str, test: ValidationTest, facts: NodeFacts | None, groups: NodeGroups
 ) -> list[str]:
     """The devices a case's `mode` must be legal for: the case's own device
     when it is device-keyed, else every target node's device (which needs
@@ -223,16 +257,25 @@ def _mode_target_devices(
         return [case_device]
     if facts is None:
         return []
-    return [device for node in test.nodes if (device := _node_device(node, facts)) is not None]
+    return [
+        device
+        for node in resolve_targets(test, facts, groups)
+        if (device := _node_device(node, facts)) is not None
+    ]
 
 
 def check_suite_templates(
-    suites: dict[str, TestSuite], facts: NodeFacts | None
+    suites: dict[str, TestSuite], facts: NodeFacts | None, groups: NodeGroups | None = None
 ) -> list[dict[str, str]]:
     """PUT-time template validation: syntax-check every template string always,
     and dry-render each per target node when facts are available (a lab with a
     definition). Returns one {suite, test, field, error} entry per problem —
-    the 422 `template_invalid` payload."""
+    the 422 `template_invalid` payload.
+
+    `groups` resolves a test's group target (delta 32); absent means the same
+    thing as absent facts — a suite authored before the definition, whose
+    targets simply cannot be enumerated yet."""
+    resolved_groups: NodeGroups = {} if groups is None else groups
     problems: list[dict[str, str]] = []
     for suite_name, suite in suites.items():
         for test_name, test in suite.tests.items():
@@ -241,7 +284,7 @@ def check_suite_templates(
                 # Delta 28: `mode: cli` on a device with no CLI of its own is
                 # an authoring error, and a device-keyed case names its device
                 # outright — so this is caught even on a lab with no facts yet.
-                for target in _mode_target_devices(device, test, facts):
+                for target in _mode_target_devices(device, test, facts, resolved_groups):
                     if case.mode == "cli" and not cli_capable(target):
                         problems.append(
                             {
@@ -270,7 +313,7 @@ def check_suite_templates(
                         continue
                     if facts is None:
                         continue
-                    for node in test.nodes:
+                    for node in resolve_targets(test, facts, resolved_groups):
                         rendered = render_template(template, node, facts)
                         if isinstance(rendered, Err):
                             problems.append(
@@ -290,7 +333,7 @@ def check_suite_templates(
 # --------------------------------------------------------------------------- #
 
 
-def parse_output(case: TestCase, device: str, stdout: str) -> Result[object, str]:
+def parse_output(case: AnyTestCase, device: str, stdout: str) -> Result[object, str]:
     """Turn stdout into the data `compare` asserts on, per the case's declared
     parse mode. A miss is an error result upstream — never a silent raw
     fallback."""
@@ -478,16 +521,107 @@ async def _run_check(
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 
+@dataclass(frozen=True, slots=True)
+class DryRunError:
+    """Why a dry run produced no answer at all. `kind` is what the route maps
+    to a status: an unknown node or a broken case is the caller's (422), an
+    exec that could not run is upstream's (502)."""
+
+    kind: Literal["unknown_node", "invalid_case", "exec_failed"]
+    message: str
+
+
+async def dry_run_case(
+    executor: NodeExecutor, facts: NodeFacts, node: str, draft: TestCaseDraft
+) -> Result[TestCaseDryRunResult, DryRunError]:
+    """Delta 31: run one UNSAVED case on one node and report what it did.
+
+    The same pipeline as `_run_check`, with two deliberate differences. There
+    is no `wait` — one exec, because the question is what the command prints
+    now, not whether the network converges. And the PARSED structure is
+    RETURNED rather than consumed: a `compare` asserts over parsed data, so
+    without this it has to be predicted from the device's output format.
+
+    A parse failure comes back as a successful answer carrying `parse_error`
+    and the raw output, since that pair is what fixes the case. Only a case
+    that cannot be rendered or adapted, or an exec that could not run, is an
+    Err — the same "could not run" line the HTTP layer draws everywhere."""
+    started = time.monotonic()
+    device = _node_device(node, facts)
+    if device is None:
+        return Err(DryRunError("unknown_node", f"node {node!r} is not in the lab's fact namespace"))
+
+    command = render_template(draft.command, node, facts)
+    if isinstance(command, Err):
+        return Err(DryRunError("invalid_case", command.error))
+    expect: TestExpectation | None = None
+    if draft.expect is not None:
+        rendered = render_expectation(draft.expect, node, facts)
+        if isinstance(rendered, Err):
+            return Err(DryRunError("invalid_case", rendered.error))
+        expect = rendered.value
+
+    # Delta 28: the adapted command is what runs and what the caller should
+    # read, so it is what comes back — a `cli` case on a shell-only device
+    # fails HERE, which is the authoring error the PUT would also reject.
+    adapted = adapt_command(device, command.value, mode=draft.mode, interactive=draft.interactive)
+    if isinstance(adapted, Err):
+        return Err(DryRunError("invalid_case", adapted.error))
+
+    run = await executor(node, adapted.value, draft.interactive)
+    if isinstance(run, Err):
+        return Err(DryRunError("exec_failed", run.error))
+
+    def answer(
+        parsed: object | None = None,
+        parse_error: str | None = None,
+        status: Literal["pass", "fail"] | None = None,
+        detail: str = "",
+        diff: dict[str, object] | None = None,
+    ) -> Ok[TestCaseDryRunResult]:
+        return Ok(
+            TestCaseDryRunResult(
+                node=node,
+                device=device,
+                command=adapted.value,
+                output=run.value[:_MAX_OUTPUT_CHARS],
+                parsed=parsed,
+                parse_error=parse_error,
+                elapsed_ms=_elapsed_ms(started),
+                status=status,
+                detail=detail,
+                diff=diff,
+            )
+        )
+
+    parsed = parse_output(draft, device, run.value)
+    if isinstance(parsed, Err):
+        return answer(parse_error=parsed.error)
+    # parse_output echoes raw stdout when no parse mode was declared; only a
+    # DECLARED parse yields a structure worth reporting as one.
+    structure = parsed.value if draft.parse is not None else None
+    if expect is None:
+        return answer(parsed=structure)
+    passed, detail, diff = evaluate_expectation(parsed.value, expect)
+    return answer(parsed=structure, status="pass" if passed else "fail", detail=detail, diff=diff)
+
+
 async def run_suite(
-    executor: NodeExecutor, facts: NodeFacts, suite_name: str, suite: TestSuite
+    executor: NodeExecutor,
+    facts: NodeFacts,
+    suite_name: str,
+    suite: TestSuite,
+    groups: NodeGroups | None = None,
 ) -> SuiteReport:
     """Run every (test, node) in a suite and tally the outcomes. The executor
     resolves each node's transport (netlab exec); `facts` supplies the render
-    namespace and each node's device for case resolution."""
+    namespace and each node's device for case resolution, and `groups` resolves
+    a test's group target (delta 32)."""
+    resolved_groups: NodeGroups = {} if groups is None else groups
     results = [
         await _run_check(executor, facts, test_name, test, node)
         for test_name, test in suite.tests.items()
-        for node in test.nodes
+        for node in resolve_targets(test, facts, resolved_groups)
     ]
     return SuiteReport(
         suite=suite_name,
@@ -502,12 +636,15 @@ async def run_suite(
 
 
 async def run_config_time_suites(
-    executor: NodeExecutor, facts: NodeFacts, suites: dict[str, TestSuite]
+    executor: NodeExecutor,
+    facts: NodeFacts,
+    suites: dict[str, TestSuite],
+    groups: NodeGroups | None = None,
 ) -> list[SuiteReport]:
     """Run the `config-time` suites (in declaration order) — the automatic gate
     at the end of a configure. Runtime suites are left for on-demand runs."""
     return [
-        await run_suite(executor, facts, name, suite)
+        await run_suite(executor, facts, name, suite, groups)
         for name, suite in suites.items()
         if suite.stage == "config-time"
     ]

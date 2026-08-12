@@ -52,6 +52,12 @@ export interface CatalogDevice {
   // Whether the device's default image exists on the host Docker daemon.
   // null = unknown (catalog not live, or the static fallback).
   imagePresent: boolean | null
+  // Delta 31: what a test CASE may declare on this device. Independent axes —
+  // linux has no CLI of its own but does have a TextFSM template set, and FRR
+  // has a CLI but answers in JSON. Both come from the server catalog; the
+  // values below are only the last-known fallback.
+  cliMode: boolean
+  textfsm: boolean
 }
 
 // Used only until `GET /catalog` answers: the last-known supported set (the
@@ -84,6 +90,8 @@ export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
       'vxlan',
     ],
     imagePresent: null,
+    cliMode: true,
+    textfsm: true,
   },
   {
     device: 'frr',
@@ -108,6 +116,8 @@ export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
       'vxlan',
     ],
     imagePresent: null,
+    cliMode: true,
+    textfsm: false,
   },
   {
     device: 'routeros7',
@@ -115,6 +125,8 @@ export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
     kind: 'router',
     modules: ['bfd', 'bgp', 'mpls', 'ospf', 'vlan', 'vrf', 'vxlan'],
     imagePresent: null,
+    cliMode: true,
+    textfsm: true,
   },
   // bird carries no MPLS in netlab's clab module matrix.
   {
@@ -134,6 +146,8 @@ export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
       'vxlan',
     ],
     imagePresent: null,
+    cliMode: true,
+    textfsm: false,
   },
   {
     device: 'dnsmasq',
@@ -141,8 +155,20 @@ export const FALLBACK_DEVICE_CATALOG: readonly CatalogDevice[] = [
     kind: 'host',
     modules: ['dhcp', 'lag', 'routing', 'vlan'],
     imagePresent: null,
+    cliMode: false,
+    textfsm: false,
   },
-  { device: 'linux', label: 'Linux host', kind: 'host', modules: ['lag', 'routing', 'vlan'], imagePresent: null },
+  {
+    device: 'linux',
+    label: 'Linux host',
+    kind: 'host',
+    modules: ['lag', 'routing', 'vlan'],
+    imagePresent: null,
+    // No CLI of its own — its shell IS the interface — but ntc-templates does
+    // carry a linux set, so the two flags genuinely disagree here.
+    cliMode: false,
+    textfsm: true,
+  },
 ]
 
 export function catalogDevice(

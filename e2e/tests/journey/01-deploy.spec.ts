@@ -27,20 +27,26 @@ test('create and author the journey lab', async ({ page }) => {
 })
 
 test('attach the test suites; runs are gated on a running lab', async ({ page }) => {
-  await page.goto(`/labs/${E2E_NET_NAME}/operations`)
-  await expect(page.getByText('No test suites defined — add some with “Edit suites”.')).toBeVisible()
+  await page.goto(`/labs/${E2E_NET_NAME}/tests`)
+  await expect(page.getByText('No test suites yet.')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Edit suites' }).click()
+  // Pasting a whole suite set is what the JSON escape hatch is for; the
+  // visual path authors one test at a time (fast/13 drives that side).
+  await page.getByRole('button', { name: 'JSON' }).click()
   const dialog = page.getByRole('dialog')
   await setEditorText(dialog.locator('.cm-editor'), E2E_NET_SUITES)
   await dialog.getByRole('button', { name: 'Save' }).click()
   await expectToast(page, 'Saved test suites')
 
-  // Both suites list with stage badges and untouched summaries.
+  // Both suites list with stage badges, and every test shows what it targets
+  // and what it runs without opening anything.
   await expect(page.getByText('convergence', { exact: true })).toBeVisible()
   await expect(page.getByText('reachability', { exact: true })).toBeVisible()
   await expect(page.locator('[data-slot="badge"]', { hasText: 'config-time' })).toBeVisible()
-  await expect(page.getByText('Not run yet.')).toHaveCount(2)
+  await expect(page.getByText('Never run.')).toHaveCount(2)
+  await expect(page.getByTestId('test-convergence-ospf_adjacency')).toBeVisible()
+  await expect(page.getByTestId('test-reachability-loopback_ping')).toBeVisible()
+
   const run = page.getByRole('button', { name: 'Run', exact: true }).first()
   await expect(run).toBeDisabled()
   await expect(run).toHaveAttribute('title', 'Run is available while the lab is running')
@@ -101,9 +107,18 @@ test('deploy with config push, watched from jobs, dashboard and the header', asy
     timeout: 600_000,
   })
 
-  // The config-time gate ran green: 3 adjacency results + 1 compare.
-  await page.goto(`/labs/${E2E_NET_NAME}/operations`)
-  const convergence = page.getByText('convergence', { exact: true }).locator('xpath=ancestor::div[2]')
-  await expect(convergence.getByText('passing')).toBeVisible()
-  await expect(page.getByText(/4 passed · 0 failed/)).toBeVisible()
+  // The config-time gate ran green: 3 adjacency results + 1 compare. The
+  // Tests tab folds those onto the tests that produced them — one row of
+  // per-node pills each, rather than four undifferentiated rows.
+  await page.goto(`/labs/${E2E_NET_NAME}/tests`)
+  const convergence = page.locator('[data-slot="card"]', { hasText: 'convergence' }).first()
+  await expect(convergence.locator('[data-slot="badge"]', { hasText: 'passing' })).toBeVisible()
+  await expect(convergence.getByText('4 passed')).toBeVisible()
+  const adjacency = page.getByTestId('test-convergence-ospf_adjacency')
+  // A run where every node passed folds its pills behind the tally — there is
+  // nothing to point at — so the nodes are one click away, not on the page.
+  await adjacency.getByRole('button', { name: '3 passed' }).click()
+  for (const node of ['r1', 'r2', 'r3']) {
+    await expect(adjacency.getByRole('button', { name: node, exact: true })).toBeVisible()
+  }
 })

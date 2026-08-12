@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
-    "check:build-doc": "node scripts/check-build-doc.mjs"
+    "check:build-doc": "node scripts/check-build-doc.mjs",
+    "check:test-suites": "node scripts/check-test-suite-model.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

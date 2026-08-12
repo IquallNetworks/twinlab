@@ -31,6 +31,7 @@ from twinlab_client import (
     SshKeyGenerated,
     TemplateVariant,
     TestCase,
+    TestCaseDraft,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -672,6 +673,80 @@ async def test_put_test_suites_shared_case_roundtrip(make_client: ClientFactory)
     assert response.test_suites == suites
 
 
+async def test_dry_run_test_case_sends_a_draft_and_reads_the_structure(
+    make_client: ClientFactory,
+) -> None:
+    """The authoring probe: no expectation, so no outcome — and the parsed
+    structure comes back, which is what makes a compare writable."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/labs/lab1/test-suites/dry-run"
+        body = json.loads(request.content)
+        assert body["node"] == "r1"
+        # `expect` is omitted rather than null when the draft carries none.
+        assert "expect" not in body["run"]
+        assert body["run"] == {
+            "command": "show bgp summary json",
+            "mode": "cli",
+            "interactive": False,
+            "parse": "json",
+        }
+        return httpx.Response(
+            200,
+            json={
+                "node": "r1",
+                "device": "vyos",
+                "command": "vtysh -c 'show bgp summary json'",
+                "output": '{"peers": {}}',
+                "parsed": {"peers": {}},
+                "parse_error": None,
+                "elapsed_ms": 42,
+                "status": None,
+                "detail": "",
+                "diff": None,
+            },
+        )
+
+    async with make_client(handler) as client:
+        result = await client.dry_run_test_case(
+            "lab1",
+            "r1",
+            TestCaseDraft(command="show bgp summary json", mode="cli", parse="json"),
+        )
+    assert result.parsed == {"peers": {}}
+    assert result.status is None
+    assert result.parse_error is None
+    # The ADAPTED command is what ran, so it is what comes back.
+    assert result.command == "vtysh -c 'show bgp summary json'"
+
+
+async def test_dry_run_test_case_reports_a_parse_failure_as_an_answer(
+    make_client: ClientFactory,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "node": "r1",
+                "device": "vyos",
+                "command": "show version",
+                "output": "not json at all",
+                "parsed": None,
+                "parse_error": "invalid JSON",
+                "elapsed_ms": 7,
+                "status": None,
+                "detail": "",
+                "diff": None,
+            },
+        )
+
+    async with make_client(handler) as client:
+        result = await client.dry_run_test_case("lab1", "r1", TestCaseDraft(command="show version"))
+    # A 200, not an error: seeing the raw output is how the case gets fixed.
+    assert result.parse_error == "invalid JSON"
+    assert result.output == "not json at all"
+
+
 async def test_device_catalog_parses(make_client: ClientFactory) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/catalog"
@@ -687,6 +762,8 @@ async def test_device_catalog_parses(make_client: ClientFactory) -> None:
                         "image": "ghcr.io/sysoleg/vyos-container",
                         "image_present": True,
                         "config_import": True,
+                        "cli_mode": True,
+                        "textfsm": True,
                     },
                     {
                         "device": "linux",
@@ -696,6 +773,10 @@ async def test_device_catalog_parses(make_client: ClientFactory) -> None:
                         "image": "python:3.13-alpine",
                         "image_present": None,
                         "config_import": False,
+                        # linux has no CLI of its own but DOES have a TextFSM
+                        # template set — the two axes are independent.
+                        "cli_mode": False,
+                        "textfsm": True,
                     },
                 ],
                 "live": True,
@@ -711,6 +792,9 @@ async def test_device_catalog_parses(make_client: ClientFactory) -> None:
     assert catalog.devices[0].config_import is True
     assert catalog.devices[1].image_present is None
     assert catalog.devices[1].config_import is False
+    # Delta 31: independent axes — vyos has both, linux only the template set.
+    assert (catalog.devices[0].cli_mode, catalog.devices[0].textfsm) == (True, True)
+    assert (catalog.devices[1].cli_mode, catalog.devices[1].textfsm) == (False, True)
 
 
 async def test_device_catalog_unknown_role_is_protocol_error(make_client: ClientFactory) -> None:

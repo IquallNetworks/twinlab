@@ -319,6 +319,19 @@ async def set_node_facts(
     return lab
 
 
+async def set_node_groups(
+    session: AsyncSession, name: str, node_groups: dict[str, object]
+) -> Lab | LabStoreError:
+    """Persist a lab's resolved group map (delta 32) — same lifecycle as
+    `set_node_facts`, and written from the same artifacts."""
+    lab = await get_lab(session, name)
+    if lab is None:
+        return LabStoreError("not_found", name)
+    lab.node_groups = node_groups
+    await session.commit()
+    return lab
+
+
 async def set_host_bridges(
     session: AsyncSession, name: str, bridges: list[str] | None
 ) -> Lab | LabStoreError:
@@ -370,14 +383,15 @@ async def update_definition(
     mgmt_subnet: str,
     links: dict[str, object],
     node_facts: dict[str, object],
+    node_groups: dict[str, object],
 ) -> Lab | LabStoreError:
     """Replace a lab's stored definition without touching its runtime. The caller
     validates the definition (and pins the lab's name and mgmt subnet into it)
     first; here we only persist. `links` and `node_facts` are the definition's
-    derived link table (serialized {"links": [...]}) and fact namespace, both
-    byproducts of the validating `netlab create` — stored together so the caches
-    can never describe a different definition. `not_found` when the lab was
-    never recorded here."""
+    derived link table (serialized {"links": [...]}), fact namespace and
+    resolved group map — all byproducts of the validating `netlab create`,
+    stored together so the caches can never describe a different definition.
+    `not_found` when the lab was never recorded here."""
     lab = await get_lab(session, name)
     if lab is None:
         return LabStoreError("not_found", name)
@@ -385,6 +399,7 @@ async def update_definition(
     lab.mgmt_subnet = mgmt_subnet
     lab.links = links
     lab.node_facts = node_facts
+    lab.node_groups = node_groups
     try:
         await session.commit()
     except IntegrityError:

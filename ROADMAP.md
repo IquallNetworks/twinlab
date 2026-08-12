@@ -1613,6 +1613,172 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     shared field-help map, which would keep UI and guide from drifting but is
     machinery to build only if the reference page proves hard to keep in sync.
 
+### Test-suite builder (contract delta 31) · **done 2026-08-11**
+
+26. **A builder for test suites, and the loop it closes.** Design record
+    `docs/test-suite-builder.md`. Suites are Twinlab's validation story, and
+    authoring one was a `<textarea>`: the whole surface was a single CodeEditor
+    holding the entire set as JSON, so the schema's rules (`expect` is
+    exactly-one-of-four, `compare` pairs with `parse` both ways) surfaced as a
+    422 *after* the suite was written, and the vocabulary a case needs — the
+    lab's nodes, its device slugs, its fact paths — was offered nowhere.
+
+    Three pieces, deliberately different sizes.
+
+    **26.1 The builder is total, because the schema is CLOSED.** Unlike a netlab
+    definition, Twinlab owns every field of a suite, so `lib/test-suite-model.ts`
+    needs no extras passthrough and no lossy-emit story — state IS the wire
+    object, which makes Visual/JSON switching lossless in *both* directions,
+    something Build's Visual/Text pair cannot promise. The one exception is
+    `compare`, an arbitrary spec handed to napalm-validate: it gets an embedded
+    JSON sub-editor, which is honest, because it is another library's grammar.
+    The client-side gates MIRROR the server's rather than inventing their own,
+    and `pnpm check:test-suites` (18 checks, the `check:build-doc` arrangement)
+    guards exactly that boundary: an "error" is what the PUT rejects and blocks
+    Save, a "warning" is what fails at RUN time and does not — the builder does
+    not get to be stricter than the contract.
+
+    **26.2 Device capability became catalog data.** `CatalogDevice` gained
+    `cli_mode` and `textfsm`, DERIVED from `CLI_ENTRIES` and
+    `TEXTFSM_PLATFORMS` the way delta 22 derived `config_import` from the
+    importer's parser set. Without them the builder would keep a third device
+    table in the frontend and go stale the first time a platform is admitted.
+    The two axes are independent, which is why both exist: linux has no CLI but
+    does have a TextFSM template set, FRR has a CLI but answers in JSON.
+
+    **26.3 The dry run — the part a form alone does not fix.** `POST
+    /labs/{name}/test-suites/dry-run` runs ONE unsaved case on ONE node and
+    returns the rendered+adapted command, the stdout, and the PARSED structure
+    — the piece `_run_check` computes, asserts against and discards, which is
+    why writing a `compare` has meant predicting TextFSM's or `vtysh … json`'s
+    output shape. Synchronous, not a job: a draft has no `wait`, so it is one
+    exec, and staying sync keeps it usable while a job holds the per-lab mutex
+    (delta 24's reasoning for batch actions). Writes nothing. A parse failure is
+    a 200 carrying `parse_error` with the raw output intact — in a saved run the
+    same failure is status `error`, correctly, because there it breaks an
+    assertion that can then no longer be made.
+
+    Deliberately NOT included: a `wait` on the probe (convergence polling is for
+    a real assertion, not for "what does this print"), a multi-node probe (would
+    need a concurrency policy the sequential runner lacks; widening the scalar
+    later is additive), a suite-level dry run (that is `run_test_suite` with
+    extra steps), a new permission (authoring stays `lab:edit`, probing is
+    `lab:validate` — it executes on a node, so it is the suite-run class), and
+    client-side Jinja (a JS reimplementation would render differently, which is
+    worse than not rendering at all).
+
+    Coverage: backend unit tests + a catalog drift guard, blackbox pinning both
+    halves (including that the probe answers while a suite-run job holds the
+    mutex), a new **fast** e2e spec (authoring is a PUT, so no containers), and
+    the operator guide's test-suites page.
+
+### Edit-proof test targeting (contract delta 32) · **done 2026-08-11**
+
+27. **A test's target, and why a node list was the wrong one.** Same design
+    record as item 26. `ValidationTest.nodes` was required, and a node list is
+    not edit-proof: add a router and every existing test keeps testing the old
+    set — silently. Nothing fails; the suite just stops covering what it was
+    written to cover.
+
+    Three selectors, unioned: `all_nodes` (the default for a new test),
+    `groups` — the definition's own, so "every core router" stays true as the
+    core grows and the suite reuses a fact the topology already states — and
+    `nodes` for the tests that really are about one node. They compose:
+    `groups: [core], nodes: [x, y]`.
+
+    **Compatibility rides on the resolution order**, which is first appearance:
+    a nodes-only test resolves to exactly `test.nodes`, result order included,
+    so every suite written before this is untouched. `nodes` merely stopped
+    being required, and what is newly rejected — a test targeting NOTHING — the
+    old `min_length=1` rejected too.
+
+    **Two netlab facts drove the implementation, both the opposite of the
+    obvious guess.** netlab does NOT flatten a nested group: `core: [inner, n3]`
+    stays literally that in the expanded topology (verified against 26.07), so
+    Twinlab flattens, with a cycle guard. And netlab injects bookkeeping groups
+    of its own — `netlab_no_collect` and `netlab_no_reload` appear on a plain
+    linux lab — which must never be a test target. So membership comes from the
+    expanded topology, the NAME SET from the definition, and the flattening is
+    ours. The resolved map rides `GET /labs/{name}/facts` (migration 0022
+    caches it beside `node_facts`, same regenerable lifecycle), because a
+    builder needs the groups to target by and the namespace to template against
+    in the same breath.
+
+    Deliberately absent: a device selector (a device-keyed `run` already
+    expresses "every VyOS node", with the command attached) and
+    negation/globbing (a pattern that silently matches a new node is the
+    edit-proofing problem in a new costume; groups are the declared,
+    reviewable way to say "this set, and keep it current").
+
+    Shipped alongside, from the same review: the builder dialog no longer closes
+    on an outside click, and the command field became a one-line CodeMirror that
+    completes the lab's own fact namespace inside `{{ }}` —
+    `lib/fact-completions.ts`, pure and editor-free so `pnpm check:test-suites`
+    drives it.
+
+### The Tests tab · **done 2026-08-11**
+
+28. **Validation gets a page, and the test becomes the unit.** Frontend only —
+    the wire is unchanged and there is no contract delta. Same design record as
+    items 26 and 27, whose closing section REVERSES its own "not a tab"
+    decision and says why: that argument was about *authoring*, and authoring
+    was never the whole job.
+
+    Delta 31 fixed authoring and left reading exactly as it was. After a run,
+    the Operations card served one flat `(test, node)` table — the shape the
+    API serves, correctly, and the wrong shape to read. A test that ran on
+    eight nodes arrived as eight undifferentiated rows; a six-test suite over
+    eight nodes as forty-eight, ordered by nothing anyone was thinking about.
+    And the test itself — what it targeted, what it ran, whether it was
+    device-keyed — was visible nowhere except inside an editor that held the
+    entire lab behind a rail, so the one dialog carried the navigation as well
+    as the work.
+
+    So: `/labs/$name/tests` is the navigation, a **test is a card** (target,
+    command(s), flags, and the last run folded on as one pill per node, each
+    opening onto the rendered+adapted command, the raw OUTPUT — which the old
+    table never showed at all — and the compare diff), and the **modal is one
+    test**. The suite's three fields are a small settings dialog; the whole-map
+    JSON is a third, still lossless both ways because the schema is closed. A
+    lab-wide summary and an All/Problems/Not-run filter sit above the suites.
+
+    Three things had to be decided rather than assumed. **A create cannot save
+    first** — `TestCase.command` is `min_length=1` and an empty suite is
+    rejected too, so "create a shell, fill it in after" is not a flow that
+    exists; the settings dialog hands its fields to the test editor and both
+    are written on one Save, since a placeholder command would ship a
+    trivially-passing test. (The e2e suite caught the first implementation
+    PUTting the blank.) **A roll-up ranks `error` above `fail`** — a fail is an
+    assertion that came back false, an error is one that could not be made at
+    all — with the tally line always showing the full picture. **Orphaned
+    results are reported**, not dropped: rename a test and the last run still
+    holds rows naming it, and hiding them would be tidier and dishonest.
+
+    `Run all` is the single verb in a client-side loop. No batch endpoint, and
+    there should not be one: the per-lab job mutex forbids concurrency anyway,
+    and running them in turn lets each suite's results land as it finishes.
+
+    Coverage: `lib/test-results.ts` is pure and joins the suite model and the
+    completion module under `pnpm check:test-suites` (48 checks); `fast/13`
+    became `13-tests-tab.spec.ts` (8 specs), journey 01 and 04 moved onto the
+    tab, and the operator guide's test-suites page was rewritten around it.
+
+    **A reading pass followed on 2026-08-12**, from screenshotting the shipped
+    tab rather than reasoning about it. Six fixes, all about reading: the
+    visual weight was INVERTED (shadcn's `default` badge is a solid fill and
+    `destructive` a pale tint, so nineteen passes shouted while the one failure
+    whispered) — the grammar now lives in one module, a pass is quiet, `error`
+    is the only solid fill, and every state carries an icon; per-node pills
+    lost their elapsed time and an all-passing run folds them behind its tally;
+    a passing `compare` diff folds away and the result leads with the reason,
+    with copy buttons on command and output; suite descriptions clamp to two
+    lines and a suite matching nothing under a filter shrinks to one; the test
+    header's actions became a fixed column (they wrapped under a two-line
+    description); and the edit dialog went two-column, with Try moved above the
+    assertion it feeds. Deliberately NOT changed: the roll-up ranking `skip`
+    above `pass` — a decision about what a badge means, parked for its own
+    discussion.
+
 ### i18n · **deferred**
 
 Internationalization is deferred project-wide, not just for the frontend rework

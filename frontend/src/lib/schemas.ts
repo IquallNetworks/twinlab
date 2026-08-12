@@ -167,7 +167,12 @@ export const testCaseSchema = z.object({
 export type TestCase = z.infer<typeof testCaseSchema>
 
 export const validationTestSchema = z.object({
-  nodes: z.array(z.string()),
+  // Delta 32: the target is three selectors, unioned — a bare node list is not
+  // edit-proof (add a router and every test silently keeps testing the old
+  // set). `nodes` stays first-class but is no longer required on its own.
+  nodes: z.array(z.string()).default([]),
+  groups: z.array(z.string()).default([]),
+  all_nodes: z.boolean().default(false),
   // One case for all nodes, or a device-keyed dict (a TestCase always carries
   // `command`, so presence of that key discriminates the union).
   run: z.union([testCaseSchema, z.record(z.string(), testCaseSchema)]),
@@ -175,6 +180,38 @@ export const validationTestSchema = z.object({
   description: z.string(),
 })
 export type ValidationTest = z.infer<typeof validationTestSchema>
+
+// Delta 31: a case being AUTHORED. The only difference from testCaseSchema is
+// that `expect` is optional — a stored case must assert something, a draft
+// need not, because the first question is what the command prints.
+export const testCaseDraftSchema = z.object({
+  command: z.string(),
+  expect: testExpectationSchema.optional(),
+  parse: z.enum(['json', 'textfsm']).nullable().optional(),
+  mode: z.enum(['shell', 'cli']).optional(),
+  interactive: z.boolean().optional(),
+})
+export type TestCaseDraft = z.infer<typeof testCaseDraftSchema>
+
+// What one unsaved case did on one node. `parsed` is the piece no other
+// response carries — a compare asserts over PARSED data, and a suite run
+// discards the structure after asserting, so writing one has meant predicting
+// the device's output shape. A parse failure arrives here as a 200 with
+// `parse_error` set and `output` intact: seeing what the parser choked on is
+// how the case gets fixed. status/detail/diff appear only with an expectation.
+export const testCaseDryRunResultSchema = z.object({
+  node: z.string(),
+  device: z.string(),
+  command: z.string(), // the RENDERED and ADAPTED command — what actually ran
+  output: z.string(),
+  parsed: z.unknown().nullable().optional(),
+  parse_error: z.string().nullable().optional(),
+  elapsed_ms: z.number(),
+  status: z.enum(['pass', 'fail']).nullable().optional(),
+  detail: z.string(),
+  diff: z.record(z.string(), z.unknown()).nullable().optional(),
+})
+export type TestCaseDryRunResult = z.infer<typeof testCaseDryRunResultSchema>
 
 export const testSuiteSchema = z.object({
   stage: z.string(), // "config-time" | "runtime"
@@ -202,6 +239,11 @@ export const labFactsSchema = z.object({
   // typing the core here would freeze netlab's node schema into the frontend,
   // and the payload is only ever displayed, never destructured.
   nodes: z.record(z.string(), z.record(z.string(), z.unknown())),
+  // Delta 32: the definition's groups, each resolved to the NODE names it
+  // selects (nesting flattened, netlab's internal groups excluded). What a
+  // test's `groups:` target picks — and served here because the builder needs
+  // the namespace and the groups in the same breath.
+  groups: z.record(z.string(), z.array(z.string())).default({}),
 })
 export type LabFacts = z.infer<typeof labFactsSchema>
 
@@ -213,6 +255,12 @@ export const catalogDeviceSchema = z.object({
   image: z.string(), // netlab's default clab image (untagged = ":latest")
   image_present: z.boolean().nullable(), // null = presence unknown (see live)
   config_import: z.boolean(), // delta 22: dumped configs of this device import
+  // Delta 31: the two per-device capabilities a test CASE depends on, derived
+  // server-side so the builder never keeps its own copy of either table. The
+  // axes are independent — linux has no CLI but does have TextFSM templates,
+  // FRR has a CLI but answers in JSON.
+  cli_mode: z.boolean(), // `mode: 'cli'` reaches a CLI here
+  textfsm: z.boolean(), // `parse: 'textfsm'` resolves a platform here
 })
 export type CatalogDeviceWire = z.infer<typeof catalogDeviceSchema>
 

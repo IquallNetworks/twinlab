@@ -1,4 +1,10 @@
-import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import {
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completionKeymap,
+  type CompletionSource,
+} from '@codemirror/autocomplete'
 import { indentWithTab } from '@codemirror/commands'
 import { json, jsonParseLinter } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
@@ -13,7 +19,13 @@ import {
 import { jinja2 } from '@codemirror/legacy-modes/mode/jinja2'
 import { linter, lintGutter } from '@codemirror/lint'
 import { Compartment, EditorState, type Extension } from '@codemirror/state'
-import { EditorView, keymap, lineNumbers, placeholder as cmPlaceholder } from '@codemirror/view'
+import {
+  EditorView,
+  keymap,
+  lineNumbers,
+  placeholder as cmPlaceholder,
+  tooltips,
+} from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import { minimalSetup } from 'codemirror'
 import { useEffect, useRef } from 'react'
@@ -65,6 +77,10 @@ const editorTheme = EditorView.theme({
     border: '1px solid var(--border)',
     borderRadius: '2px',
     fontFamily: 'var(--font-sans)',
+    /* The host CodeMirror creates for an external tooltip parent is
+     * `pointer-events: none`, and the tooltip inherits it — so a completion
+     * list rendered outside the editor is visible but unclickable. */
+    pointerEvents: 'auto',
   },
   '.cm-diagnostic-error': { borderLeftColor: 'var(--destructive)' },
   '.cm-lintRange-error': {
@@ -135,6 +151,8 @@ export function CodeEditor({
   placeholder,
   autoFocus = false,
   lint = false,
+  gutter = true,
+  completions,
   className,
 }: {
   value: string
@@ -144,6 +162,12 @@ export function CodeEditor({
   placeholder?: string
   autoFocus?: boolean
   lint?: boolean
+  /** Line numbers. Off for a one-line field, where the gutter is noise. */
+  gutter?: boolean
+  /** Completion source, e.g. the lab's fact namespace. Routed through a ref so
+   * a source that closes over changing data (the target node's facts) stays
+   * current without reconfiguring the editor. */
+  completions?: CompletionSource
   className?: string
 }) {
   const effectiveReadOnly = readOnly ?? onChange === undefined
@@ -160,8 +184,26 @@ export function CodeEditor({
    * ref keeps it current without reconfiguring. */
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
-  const mountConfig = useRef({ value, language, lint, readOnly: effectiveReadOnly, placeholder, autoFocus })
-  mountConfig.current = { value, language, lint, readOnly: effectiveReadOnly, placeholder, autoFocus }
+  const completionsRef = useRef(completions)
+  completionsRef.current = completions
+  const mountConfig = useRef({
+    value,
+    language,
+    lint,
+    readOnly: effectiveReadOnly,
+    placeholder,
+    autoFocus,
+    gutter,
+  })
+  mountConfig.current = {
+    value,
+    language,
+    lint,
+    readOnly: effectiveReadOnly,
+    placeholder,
+    autoFocus,
+    gutter,
+  }
 
   useEffect(() => {
     const parent = containerRef.current
@@ -176,8 +218,22 @@ export function CodeEditor({
           /* Before minimalSetup so closeBracketsKeymap wins over the default
            * Backspace binding. */
           keymap.of([...closeBracketsKeymap, indentWithTab]),
+          keymap.of(completionKeymap),
           minimalSetup,
-          lineNumbers(),
+          ...(init.gutter ? [lineNumbers()] : []),
+          autocompletion({
+            override: [
+              (context) => completionsRef.current?.(context) ?? null,
+            ],
+          }),
+          /* A tooltip is absolutely positioned INSIDE the editor, so every
+           * ancestor that clips clips it: this component's own rounded
+           * `overflow-hidden` wrapper first, then whatever scrolls around it.
+           * The completion list came out as a sliver at the bottom edge of a
+           * one-line field, which reads as being painted behind the form.
+           * Parenting to the body takes it out of the clipping chain
+           * entirely — and CodeMirror's z-index (500) clears the dialog's. */
+          tooltips({ parent: document.body }),
           bracketMatching(),
           closeBrackets(),
           indentOnInput(),

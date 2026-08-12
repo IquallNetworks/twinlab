@@ -147,3 +147,24 @@ async def test_runner_list_images_error_is_typed() -> None:
     result = await client.list_images()
     assert isinstance(result, Err)
     assert result.error.reason == "runner"
+
+
+def test_catalog_reports_per_device_case_capabilities() -> None:
+    """Delta 31: `cli_mode` and `textfsm` are DERIVED from the tables that
+    decide (cli_adapters.CLI_ENTRIES, validation.TEXTFSM_PLATFORMS), so this
+    is a drift guard — admitting or withdrawing a platform must move these
+    together with the tables, not silently leave a client greying out the
+    wrong control."""
+    by_device = {d.device: d for d in build_catalog(None).devices}
+
+    # A CLI of its own: op-mode wrapper, vtysh, birdc, or an SSH transport
+    # that already lands in the CLI.
+    assert [d for d in by_device if by_device[d].cli_mode] == ["vyos", "frr", "routeros7", "bird"]
+    # Shell-only: their shell IS the interface, so `mode: cli` is a 422.
+    assert not by_device["dnsmasq"].cli_mode
+    assert not by_device["linux"].cli_mode
+
+    # TextFSM is a different axis entirely — linux has no CLI but does have a
+    # template set, and FRR has a CLI but speaks JSON instead.
+    assert [d for d in by_device if by_device[d].textfsm] == ["vyos", "routeros7", "linux"]
+    assert not by_device["frr"].textfsm

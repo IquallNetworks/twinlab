@@ -150,6 +150,7 @@ def _artifacts(nodes: dict[str, str], devices: dict[str, str]) -> ClabArtifacts:
         topology={"topology": {"nodes": {name: {"image": image} for name, image in nodes.items()}}},
         links=[],
         node_facts={name: {"device": device} for name, device in devices.items()},
+        node_groups={},
         host_bridges=(),
         kernel_modules=(),
     )

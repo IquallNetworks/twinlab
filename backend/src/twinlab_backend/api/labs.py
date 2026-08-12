@@ -88,6 +88,8 @@ from twinlab_backend.models import (
     SaveConfigResponse,
     SuiteReport,
     TemplateVariantModel,
+    TestCaseDryRunRequest,
+    TestCaseDryRunResult,
     TestSuite,
     TestSuitesResponse,
     UpdateCustomConfigRequest,
@@ -141,6 +143,7 @@ from twinlab_backend.services.validation import (
     NodeExecutor,
     NodeFacts,
     check_suite_templates,
+    dry_run_case,
     run_config_time_suites,
     run_suite,
 )
@@ -355,17 +358,24 @@ def _runner_executor(
     return execute
 
 
-async def _node_facts_for(db: AsyncSession, lab: Lab, library: BuiltinLibrary) -> NodeFacts:
-    """The lab's fact namespace, PARTITIONED (delta 26: promised core in place,
-    everything else under `_extras`) — from the record's cache, lazily
-    regenerated from the stored definition when the cache predates the column.
-    Callers guarantee `lab.definition` is set.
+async def _lab_namespace_for(
+    db: AsyncSession, lab: Lab, library: BuiltinLibrary
+) -> tuple[NodeFacts, dict[str, list[str]]]:
+    """The lab's fact namespace and its RESOLVED group map — from the record's
+    caches, lazily regenerated from the stored definition when either predates
+    its column. Callers guarantee `lab.definition` is set.
 
-    The cache holds netlab's RAW dicts; partitioning happens here, at the serve
-    boundary, so the member lists can change without a migration."""
+    Both in ONE helper because both come out of ONE `netlab create`: asking for
+    them separately would pay the subprocess twice on a cold record.
+
+    The facts cache holds netlab's RAW dicts; partitioning (delta 26) happens
+    here, at the serve boundary, so the member lists can change without a
+    migration. Groups are stored already resolved — netlab flattens nested
+    groups, and re-deriving that would be reimplementing it."""
     stored = _stored_node_facts(lab)
-    if stored is not None:
-        return partition_node_facts(stored)
+    groups = _stored_node_groups(lab)
+    if stored is not None and groups is not None:
+        return partition_node_facts(stored), groups
     if lab.definition is None:  # callers pre-check; defensive for typing
         raise ApiError(409, "no_definition", f"lab '{lab.name}' has no stored definition yet")
     artifacts = await run_in_threadpool(
@@ -375,8 +385,15 @@ async def _node_facts_for(db: AsyncSession, lab: Lab, library: BuiltinLibrary) -
         # Unexpected — the stored definition passed its PUT-time dry run.
         raise _netlab_failed(artifacts.error.message, artifacts.error.stderr)
     facts = artifacts.value.node_facts
+    resolved = artifacts.value.node_groups
     _ = await lab_store.set_node_facts(db, lab.name, dict(facts))
-    return partition_node_facts(facts)
+    _ = await lab_store.set_node_groups(db, lab.name, dict(resolved))
+    return partition_node_facts(facts), resolved
+
+
+async def _node_facts_for(db: AsyncSession, lab: Lab, library: BuiltinLibrary) -> NodeFacts:
+    facts, _groups = await _lab_namespace_for(db, lab, library)
+    return facts
 
 
 async def _run_config_time(
@@ -397,8 +414,8 @@ async def _run_config_time(
     if skip or not any(s.stage == "config-time" for s in suites.values()):
         return "configured", None
     executor = _runner_executor(runner, definition, _config_fileset(library, lab))
-    facts = await _node_facts_for(db, lab, library)
-    reports = await run_config_time_suites(executor, facts, suites)
+    facts, groups = await _lab_namespace_for(db, lab, library)
+    reports = await run_config_time_suites(executor, facts, suites, groups)
     ok = all(r.ok for r in reports)
     stored: dict[str, object] = {r.suite: r.model_dump(mode="json") for r in reports}
     _ = await lab_store.record_validation(
@@ -660,6 +677,20 @@ def _stored_links(lab: Lab) -> list[TopologyLink] | None:
         return [TopologyLink.model_validate(item) for item in cast("list[object]", raw)]
     except ValidationError:
         return None
+
+
+def _stored_node_groups(lab: Lab) -> dict[str, list[str]] | None:
+    """The cached resolved group map, or None when the column was never
+    written for this lab (which is what triggers the backfill — an empty map
+    is a real answer, "this definition declares no groups")."""
+    raw = lab.node_groups
+    if not isinstance(raw, dict):
+        return None
+    groups: dict[str, list[str]] = {}
+    for name, members in raw.items():
+        if isinstance(members, list):
+            groups[name] = [m for m in cast("list[object]", members) if isinstance(m, str)]
+    return groups
 
 
 def _stored_node_facts(lab: Lab) -> dict[str, dict[str, object]] | None:
@@ -1157,6 +1188,7 @@ async def update_lab_definition(
         mgmt_subnet,
         serialize_links(validated.value.links),
         dict(validated.value.node_facts),
+        dict(validated.value.node_groups),
     )
     if isinstance(updated, lab_store.LabStoreError):
         if updated.reason == "subnet_taken":
@@ -1299,6 +1331,7 @@ async def _deploy_job(
         # predating the columns).
         _ = await lab_store.set_links(db, lab_name, serialize_links(artifacts.links))
         _ = await lab_store.set_node_facts(db, lab_name, dict(artifacts.node_facts))
+        _ = await lab_store.set_node_groups(db, lab_name, dict(artifacts.node_groups))
         _ = await lab_store.mark_deployed(db, lab_name, deployed_definition=definition)
         return await _finish_deploy(
             deployed.value,
@@ -1524,7 +1557,12 @@ async def put_test_suites(
     # templates that fail at run time (or reject ones that work).
     cached = _stored_node_facts(lab)
     problems = check_suite_templates(
-        request.test_suites, None if cached is None else partition_node_facts(cached)
+        request.test_suites,
+        None if cached is None else partition_node_facts(cached),
+        # Delta 32: a test may target by group, so resolving its nodes needs the
+        # group map — from the cache only, never regenerated: the PUT must not
+        # pay a `netlab create` to validate a suite.
+        _stored_node_groups(lab),
     )
     if problems:
         raise ApiError(
@@ -1564,11 +1602,11 @@ async def _suite_run_job(
         if definition is None:
             raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
         executor = _runner_executor(runner, definition, _config_fileset(library, lab))
-        facts = await _node_facts_for(db, lab, library)
+        facts, groups = await _lab_namespace_for(db, lab, library)
         await steps.record(
             "suite_started", f"suite '{suite}' ({target.stage}): {len(target.tests)} tests"
         )
-        report = await run_suite(executor, facts, suite, target)
+        report = await run_suite(executor, facts, suite, target, groups)
         total = report.passed + report.failed + report.skipped + report.errored
         await steps.record(
             "suite_finished",
@@ -1624,6 +1662,53 @@ async def run_test_suite(
 
     spawn_job(http_request, job, lab_name, work)
     return job_out(job, lab_name)
+
+
+@router.post(
+    "/{lab_name}/test-suites/dry-run",
+    dependencies=[Depends(require_lab(perms.LAB_VALIDATE))],
+)
+async def dry_run_test_case(
+    lab_name: LabName,
+    request: TestCaseDryRunRequest,
+    runner: RunnerClientDep,
+    library: BuiltinLibraryDep,
+    db: SessionDep,
+) -> TestCaseDryRunResult:
+    """Delta 31: run ONE unsaved case on ONE node and report what it did —
+    the authoring probe behind the suite builder.
+
+    SYNCHRONOUS, unlike the suite run above. That run is 202 + a job because
+    its worst case is the sum of every test's `wait`; a draft has no `wait`,
+    so this is one exec. Staying sync is also what keeps it usable WHILE a
+    job holds the per-lab mutex — delta 24's reasoning for batch actions: an
+    authoring aid that 409s because someone else is deploying is not an aid.
+
+    lab:validate rather than lab:edit: authoring is lab:edit, but this
+    EXECUTES on a node, which is the suite-run class. It grants nothing new —
+    run_test_suite already runs arbitrary commands under that permission.
+
+    Writes nothing: no last_validation, no config-time gate, no job row."""
+    lab = await lab_store.get_lab(db, lab_name)
+    if lab is None:
+        raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
+    definition = lab.definition
+    if definition is None:
+        raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
+    if lab.status != "deployed":
+        raise ApiError(409, "lab_not_running", f"lab '{lab_name}' is not deployed")
+
+    executor = _runner_executor(runner, definition, _config_fileset(library, lab))
+    facts = await _node_facts_for(db, lab, library)
+    outcome = await dry_run_case(executor, facts, request.node, request.run)
+    if isinstance(outcome, Ok):
+        return outcome.value
+    failure = outcome.error
+    if failure.kind == "unknown_node":
+        raise ApiError(422, "unknown_node", failure.message)
+    if failure.kind == "invalid_case":
+        raise ApiError(422, "invalid_case", failure.message)
+    raise ApiError(502, "exec_failed", f"could not run on '{request.node}': {failure.message}")
 
 
 # --- Custom-config templates: the seam for config netlab doesn't model (MPLS-TE,
@@ -2284,7 +2369,8 @@ async def lab_facts(
         raise ApiError(
             409, "no_definition", f"lab '{lab_name}' has no definition to derive facts from"
         )
-    return LabFactsResponse(nodes=await _node_facts_for(db, lab, library))
+    facts, groups = await _lab_namespace_for(db, lab, library)
+    return LabFactsResponse(nodes=facts, groups=groups)
 
 
 async def _lab_lifecycle(

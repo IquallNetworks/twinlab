@@ -142,16 +142,69 @@ class TestCase(BaseModel):
         return self
 
 
+class TestCaseDraft(BaseModel):
+    """A case being AUTHORED (delta 31): a TestCase whose `expect` is optional.
+
+    That is the only difference, and it is the one a dry run needs — a stored
+    case must assert something, but a case you are still writing need not,
+    because the first question is what the command prints. So `parse` without
+    `expect` is legal here and only here: "show me the parsed structure" is
+    exactly how a `compare` gets written.
+
+    A SIBLING of TestCase rather than its base: making TestCase a subclass that
+    narrows `expect` back to required is unsound (a mutable field's type is
+    invariant), and the shared pipeline needs only to READ these fields, which
+    `AnyTestCase` expresses without either type lying about the other."""
+
+    command: str = Field(min_length=1)
+    expect: TestExpectation | None = None
+    parse: ParseMode | None = None
+    mode: CommandMode = "shell"
+    interactive: bool = False
+
+    @model_validator(mode="after")
+    def _compare_requires_parse(self) -> TestCaseDraft:
+        # No expectation, no coupling to enforce: a draft declaring `parse`
+        # alone is asking to SEE the parsed structure, which is the point.
+        if self.expect is None:
+            return self
+        if (self.expect.compare is not None) != (self.parse is not None):
+            raise ValueError(
+                "compare and parse go together: compare asserts over parsed data, "
+                "and parsed data is only asserted with compare"
+            )
+        return self
+
+
+# What the render → adapt → parse pipeline accepts: a stored case or one still
+# being authored. Those stages only read `command`/`parse`/`mode`/`interactive`,
+# which both carry identically.
+type AnyTestCase = TestCase | TestCaseDraft
+
+
 class ValidationTest(BaseModel):
-    """One assertion: run a case on each of `nodes` and check the outcome.
+    """One assertion: run a case on the target nodes and check the outcome.
     `run` is ONE case for every node or a DEVICE-KEYED dict (netlab device
     names: "vyos", "iol", "linux", ...) — case-level keying (delta 17): each
     node picks its device's complete recipe, and a node whose device has no
     case reports `skip`, not an error. `wait` polls for a converged result
-    (seconds; 0 = a single attempt) — the convergence knob."""
+    (seconds; 0 = a single attempt) — the convergence knob.
 
-    nodes: list[_Name] = Field(min_length=1)
+    The TARGET is three selectors, unioned (delta 32). A bare node list is not
+    edit-proof: add a router and every existing test keeps testing the old set
+    silently, which is the worst way for a check to be wrong. So `all_nodes`
+    takes the whole lab, `groups` takes every member of the named groups (the
+    definition's groups, RESOLVED by netlab — nested ones already flattened),
+    and `nodes` names them outright; `groups` + `nodes` is "the group, plus
+    these". At least one must select something.
+
+    `nodes` is no longer required, but a nodes-only test is unchanged in every
+    respect including RESULT ORDER — see `resolve_targets`."""
+
     run: TestCase | dict[_Name, TestCase]
+    nodes: list[_Name] = Field(default_factory=list)
+    groups: list[_Name] = Field(default_factory=list)
+    all_nodes: bool = False
     wait: int = Field(default=0, ge=0, le=600)  # seconds to poll before failing
     description: str = ""
 
@@ -159,6 +212,16 @@ class ValidationTest(BaseModel):
     def _device_keyed_run_not_empty(self) -> ValidationTest:
         if isinstance(self.run, dict) and not self.run:
             raise ValueError("a device-keyed run needs at least one case")
+        return self
+
+    @model_validator(mode="after")
+    def _targets_something(self) -> ValidationTest:
+        # The old `nodes` min_length=1 said the same thing; this says it across
+        # all three selectors. A test that targets nothing is never intentional.
+        if not self.all_nodes and not self.groups and not self.nodes:
+            raise ValueError(
+                "a test must target something: set all_nodes, or name groups, or name nodes"
+            )
         return self
 
 
@@ -206,6 +269,49 @@ class SuiteReport(BaseModel):
         return self.failed == 0 and self.errored == 0
 
 
+class TestCaseDryRunRequest(BaseModel):
+    """Delta 31: run ONE unsaved case on ONE node. The authoring probe — it
+    stores nothing and moves no gate.
+
+    One node, not a list: the question a draft asks is "does this work on r1",
+    and a list would need a concurrency policy the sequential suite runner does
+    not have. No `wait` either — `wait` is convergence polling for a real
+    assertion, while this asks what the command prints NOW; polling would only
+    make a wrong command take a minute to say so."""
+
+    node: _Name
+    run: TestCaseDraft
+
+
+class TestCaseDryRunResult(BaseModel):
+    """What one unsaved case did on one node (delta 31).
+
+    `parsed` is the piece no other response carries: `_run_check` computes the
+    parsed structure, asserts against it and discards it, so a `compare` — which
+    asserts over PARSED data — has always had to be predicted rather than read.
+
+    A parse failure is an ANSWER here rather than an error: `parse_error` is set,
+    `output` still carries the raw stdout, and the response is a 200, because
+    seeing what the parser choked on is exactly how the case gets fixed.
+
+    The last three are populated ONLY when the draft supplied an `expect`. With
+    no expectation there is no outcome, and reporting "pass" would answer a
+    question nobody asked."""
+
+    node: str
+    device: str  # which CLI adapter and TextFSM platform applied
+    command: str  # the RENDERED and ADAPTED command — what actually ran
+    output: str  # captured stdout, bounded like TestResult.output
+    # Shape is the device's, not Twinlab's — hence `object`. None when the
+    # draft declared no `parse`, or when parsing failed (see parse_error).
+    parsed: object | None = None
+    parse_error: str | None = None
+    elapsed_ms: int
+    status: Literal["pass", "fail"] | None = None
+    detail: str = ""
+    diff: dict[str, object] | None = None
+
+
 class UpdateTestSuitesRequest(BaseModel):
     # Replace a lab's whole suite set. Stored on the record, never sent to
     # `netlab create`, so it can't trip netlab's topology attribute validation.
@@ -232,6 +338,12 @@ class LabFactsResponse(BaseModel):
     typing the core would freeze netlab's whole node schema into our models."""
 
     nodes: dict[str, dict[str, object]]
+    # Delta 32: the definition's groups with members RESOLVED by netlab's own
+    # expansion (nested groups already flattened), which is what a test's
+    # `groups:` target selects. Served here rather than as its own resource
+    # because the two are asked for together — a suite builder needs the
+    # namespace to template against and the groups to target by.
+    groups: dict[str, list[str]]
 
 
 class TemplateVariantModel(BaseModel):

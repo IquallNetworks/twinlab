@@ -52,6 +52,21 @@ nodes: [n1, n2]
 links: [n1-n2]
 """
 
+# Groups, including a NESTED one (delta 32): `core` names `inner`, not its
+# members, because that is what netlab's expanded topology actually contains —
+# the flattening is Twinlab's. Linux nodes only, so this never needs a deploy.
+GROUPED_LAB_DEFINITION: Final = """\
+provider: clab
+defaults.device: linux
+groups:
+  inner:
+    members: [n1, n2]
+  core:
+    members: [inner, n3]
+nodes: [n1, n2, n3]
+links: [n1-n2, n2-n3]
+"""
+
 # Two DIFFERENT NOSes in one topology, both on the docker-exec transport, so a
 # mixed-platform deploy stays cheap. VyOS and bird speak plain OSPFv2 to each
 # other; the linux host is the third device class.

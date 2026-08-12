@@ -13,12 +13,14 @@ from pydantic import BaseModel
 from twinlab_backend.auth.dependencies import CurrentUserDep
 from twinlab_backend.deps import RunnerClientDep
 from twinlab_backend.result import Ok
+from twinlab_backend.services.cli_adapters import cli_capable
 from twinlab_backend.services.configimport.platforms import import_capable_devices
 from twinlab_backend.services.device_catalog import (
     SUPPORTED_DEVICES,
     DeviceRole,
     image_reference,
 )
+from twinlab_backend.services.validation import TEXTFSM_PLATFORMS
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
@@ -34,6 +36,13 @@ class CatalogDeviceOut(BaseModel):
     # (POST /import/*). Narrower than deployability — derived from the
     # importer's parser set, so it can never drift from what actually parses.
     config_import: bool
+    # Delta 31: the two per-device capabilities a test CASE depends on, derived
+    # from the tables that actually decide (cli_adapters.CLI_ENTRIES,
+    # validation.TEXTFSM_PLATFORMS) on the same never-drift principle. A client
+    # authoring a case would otherwise keep its own copy of both, and go stale
+    # the first time a platform is admitted.
+    cli_mode: bool  # `mode: "cli"` reaches a CLI here; False = shell-only
+    textfsm: bool  # `parse: "textfsm"` resolves a platform for this device
 
 
 class DeviceCatalogOut(BaseModel):
@@ -60,6 +69,8 @@ def build_catalog(present_images: frozenset[str] | None) -> DeviceCatalogOut:
                     else image_reference(spec.image) in present_images
                 ),
                 config_import=spec.device in importable,
+                cli_mode=cli_capable(spec.device),
+                textfsm=spec.device in TEXTFSM_PLATFORMS,
             )
             for spec in SUPPORTED_DEVICES
         ],

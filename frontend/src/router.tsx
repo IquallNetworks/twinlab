@@ -20,6 +20,7 @@ import { BuildTab } from '@/pages/lab/build-tab'
 import { LabDetailLayout } from '@/pages/lab/lab-detail-layout'
 import { NodesTab } from '@/pages/lab/nodes-tab'
 import { OperationsTab } from '@/pages/lab/operations-tab'
+import { TestsTab } from '@/pages/lab/tests-tab'
 import { OverviewTab } from '@/pages/lab/overview-tab'
 import { LabImportPage } from '@/pages/lab-import'
 import { LabsPage } from '@/pages/labs'
@@ -152,6 +153,15 @@ const labNodesRoute = createRoute({
   },
 })
 
+const labTestsRoute = createRoute({
+  getParentRoute: () => labDetailRoute,
+  path: '/tests',
+  component: function LabTestsRouteComponent() {
+    const { name } = labTestsRoute.useParams()
+    return <TestsTab name={name} />
+  },
+})
+
 const labOperationsRoute = createRoute({
   getParentRoute: () => labDetailRoute,
   path: '/operations',
@@ -228,6 +238,7 @@ const routeTree = rootRoute.addChildren([
       labTopologyRoute,
       labBuildRoute,
       labNodesRoute,
+      labTestsRoute,
       labOperationsRoute,
       labAccessRoute,
     ]),

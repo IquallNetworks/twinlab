@@ -207,6 +207,13 @@ class Lab(Base):
     # decision. Same lifecycle as `links`: a regenerable cache written by the
     # PUT dry-run, refreshed on deploy, lazily backfilled by GET .../facts.
     node_facts: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
+    # The definition's groups with members RESOLVED by netlab's own expansion
+    # (contract delta 32): what a test's `groups:` target selects, and what
+    # GET /labs/{name}/facts serves beside the namespace. Same regenerable-cache
+    # lifecycle as `node_facts` — and NULL is distinguishable from `{}`, which
+    # matters: "not generated yet" triggers the backfill, "no groups declared"
+    # is a final answer.
+    node_groups: Mapped[dict[str, object] | None] = mapped_column(JSONB(), default=None)
     # The shared manual topology arrangement (contract delta 19): a
     # {canvas-id: {x, y}} map written by PUT /labs/{name}/layout. OPAQUE
     # presentation data — ids are never validated against the definition.

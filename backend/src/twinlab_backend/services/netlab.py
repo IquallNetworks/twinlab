@@ -303,6 +303,10 @@ class ClabArtifacts:
     topology: ClabTopology
     links: list[TopologyLink]
     node_facts: dict[str, dict[str, object]]
+    # Delta 32: the definition's groups with members RESOLVED — netlab has
+    # already flattened nested groups by this point, so nothing downstream
+    # reimplements that expansion. Empty when the definition declares none.
+    node_groups: dict[str, list[str]]
     host_bridges: tuple[str, ...]
     kernel_modules: tuple[KernelModule, ...]
 
@@ -327,6 +331,76 @@ def _extract_node_facts(raw_expanded: object) -> Result[dict[str, dict[str, obje
             return Err(NetlabError(f"{_EXPANDED_OUTPUT} node {name!r} was not a mapping", ""))
         facts[name] = cast("dict[str, object]", data)
     return Ok(facts)
+
+
+def _declared_group_names(definition: str) -> set[str]:
+    """The group names the DEFINITION declares. netlab's expanded topology also
+    carries internal groups of its own (`netlab_no_collect`, `netlab_no_reload`
+    — observed on a plain linux lab), which are bookkeeping and must never be
+    offered as a test target, so the user's own document decides the set."""
+    try:
+        parsed: Any = yaml.safe_load(definition)
+    except yaml.YAMLError:
+        return set()
+    if not isinstance(parsed, dict):
+        return set()
+    groups = cast("dict[str, object]", parsed).get("groups")
+    if not isinstance(groups, dict):
+        return set()
+    return set(cast("dict[str, object]", groups))
+
+
+def _flatten_group(name: str, raw_members: dict[str, list[str]], seen: frozenset[str]) -> list[str]:
+    """Resolve one group's members to NODE names, expanding any member that is
+    itself a group.
+
+    netlab does NOT do this: a nested group's parent keeps naming the child
+    (`core: [inner, n3]`, verified against netlab 26.07), so the flattening is
+    ours. `seen` breaks a membership cycle — netlab rejects one, but a resolver
+    that can loop is a resolver that will."""
+    out: list[str] = []
+    for member in raw_members.get(name, []):
+        if member in raw_members:
+            if member in seen:
+                continue
+            out.extend(_flatten_group(member, raw_members, seen | {member}))
+        else:
+            out.append(member)
+    # Dedup preserving first appearance: a node may sit in two nested groups.
+    return list(dict.fromkeys(out))
+
+
+def _extract_node_groups(raw_expanded: object, definition: str) -> dict[str, list[str]]:
+    """The definition's groups with members resolved to node names (delta 32).
+
+    Membership comes from the EXPANDED topology (netlab has applied its own
+    rules by then); the NAME SET comes from the definition (so netlab's
+    internal groups stay out); and the flattening of nested groups is ours,
+    because netlab leaves it undone.
+
+    Best-effort by design: groups are a targeting convenience, so an
+    unexpectedly shaped topology yields an empty map rather than failing a
+    create. Everything a test can still do without groups — name its nodes, or
+    select them all — keeps working."""
+    if not isinstance(raw_expanded, dict):
+        return {}
+    groups = cast("dict[str, object]", raw_expanded).get("groups")
+    if not isinstance(groups, dict):
+        return {}
+    raw_members: dict[str, list[str]] = {}
+    for name, data in cast("dict[str, object]", groups).items():
+        if not isinstance(data, dict):
+            continue
+        members = cast("dict[str, object]", data).get("members")
+        if not isinstance(members, list):
+            continue
+        raw_members[name] = [m for m in cast("list[object]", members) if isinstance(m, str)]
+    declared = _declared_group_names(definition)
+    return {
+        name: _flatten_group(name, raw_members, frozenset({name}))
+        for name in raw_members
+        if name in declared
+    }
 
 
 def read_lab_name(definition: str) -> str | None:
@@ -571,6 +645,9 @@ def create_clab_topology(
             topology=cast("ClabTopology", parsed),
             links=links.value,
             node_facts=node_facts.value,
+            # raw_doc, not `expanded`: the latter is the validated model, and
+            # `groups` is not one of the members it declares.
+            node_groups=_extract_node_groups(raw_doc, definition),
             host_bridges=_host_bridges(expanded),
             kernel_modules=_kernel_modules(expanded),
         )

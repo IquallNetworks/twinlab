@@ -2,15 +2,14 @@ import { useQuery } from '@tanstack/react-query'
 
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { CustomConfig } from '@/components/lab/custom-config'
-import { TestSuites } from '@/components/lab/test-suites'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { PERM_LAB_EDIT, PERM_LAB_VALIDATE } from '@/lib/lab-permissions'
+import { PERM_LAB_EDIT } from '@/lib/lab-permissions'
 import { labJobsQueryOptions, labQueryOptions } from '@/lib/queries'
 import { jobsRefetchInterval } from '@/lib/use-all-jobs'
 
-/** Runtime operation of a deployed lab: validation (the frozen test-suites
- * panel, pending its backend rework), custom-config templates, and the lab's
- * job history.
+/** Runtime operation of a deployed lab: custom-config templates and the lab's
+ * job history. Validation moved to its own Tests tab — it is authoring as much
+ * as operating, and it had outgrown a card.
  *
  * The lab's own verbs are NOT here — power and save live in the header's action
  * menu beside deploy/destroy, and impairment beside the links and interfaces it
@@ -23,18 +22,10 @@ export function OperationsTab({ name }: { name: string }) {
     refetchInterval: jobsRefetchInterval(true),
   })
   if (!lab) return null
-  const isDeployed = lab.status === 'deployed'
   const can = (perm: string) => lab.permissions.includes(perm)
 
   return (
     <div className="flex flex-col gap-6">
-      <TestSuites
-        name={lab.name}
-        enabled={isDeployed}
-        canValidate={can(PERM_LAB_VALIDATE)}
-        canEdit={can(PERM_LAB_EDIT)}
-      />
-
       <CustomConfig name={lab.name} canEdit={can(PERM_LAB_EDIT)} />
 
       <Card>

@@ -63,6 +63,9 @@ function CurrentLabGroup({ name, onDone }: { name: string; onDone: () => void })
       <CommandItem onSelect={() => go(() => navigate({ to: '/labs/$name/nodes', params: { name } }))}>
         Nodes
       </CommandItem>
+      <CommandItem onSelect={() => go(() => navigate({ to: '/labs/$name/tests', params: { name } }))}>
+        Tests
+      </CommandItem>
       <CommandItem onSelect={() => go(() => navigate({ to: '/labs/$name/operations', params: { name } }))}>
         Operations
       </CommandItem>

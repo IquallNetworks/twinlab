@@ -41,6 +41,7 @@ import {
   sshKeyListSchema,
   sshKeySchema,
   customConfigResponseSchema,
+  testCaseDryRunResultSchema,
   testSuitesResponseSchema,
   userInfoSchema,
   userListSchema,
@@ -51,6 +52,7 @@ import {
   type LifecycleAction,
   type NetemSetInput,
   type NodeAction,
+  type TestCaseDraft,
   type RuntimeActionInput,
   runtimeActionsReportSchema,
 } from '@/lib/schemas'
@@ -455,6 +457,17 @@ export const api = {
       `/labs/${encodeURIComponent(name)}/test-suites/${encodeURIComponent(suite)}/run`,
       jobSchema,
       { method: 'POST' },
+    ),
+  // Delta 31: run ONE unsaved case on ONE node — the builder's Try button.
+  // SYNCHRONOUS, unlike runTestSuite: a draft has no `wait`, so it is one
+  // exec, and staying sync keeps it usable while a job holds the per-lab
+  // mutex. Writes nothing. A command that RAN but would not parse is a
+  // success carrying `parse_error`, not an error.
+  dryRunTestCase: (name: string, node: string, run: TestCaseDraft) =>
+    request(
+      `/labs/${encodeURIComponent(name)}/test-suites/dry-run`,
+      testCaseDryRunResultSchema,
+      { method: 'POST', body: JSON.stringify({ node, run }) },
     ),
 
   // Custom-config templates. Read (lab:read) returns the shipped built-in library

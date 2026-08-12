@@ -8,7 +8,7 @@ Unordered unique collections (roles, permissions, scopes) are `set`s here; the
 wire is a JSON array either way. Ids are UUIDs.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final, Literal
 from uuid import UUID
@@ -287,6 +287,15 @@ class CatalogDevice:
     config_import: bool  # delta 22: dumped running configs of this device can
     #                      be imported (POST /import/*). Narrower than
     #                      deployability — linux has no config-dump concept.
+    # Delta 31: the two per-device capabilities a test CASE depends on. Both
+    # are derived server-side from the tables that decide, so they cannot
+    # drift from behaviour — and the two axes are independent: linux has no
+    # CLI but does have a TextFSM template set, FRR has a CLI but speaks JSON.
+    cli_mode: bool  # `TestCase.mode = "cli"` reaches a CLI here. False means
+    #                 the device's shell IS its interface, so a cli case 422s.
+    textfsm: bool  # `TestCase.parse = "textfsm"` resolves a platform here.
+    #                False means such a case errors — Twinlab never silently
+    #                falls back to raw output.
 
 
 @dataclass(frozen=True, slots=True)
@@ -1013,14 +1022,81 @@ class TestCase:
 
 
 @dataclass(frozen=True, slots=True)
-class ValidationTest:
-    """Run a case on each node; poll until it passes. `run` is ONE case for
-    every node or a DEVICE-KEYED dict (netlab device names: "vyos", "frr",
-    "linux", …) — a node whose device has no case reports "skip". `wait`
-    (0-600 s) polls until the expectation holds — the convergence knob."""
+class TestCaseDraft:
+    """A case being AUTHORED (delta 31): a `TestCase` whose `expect` is
+    optional. That is the only difference, and it is what `dry_run_test_case`
+    needs — a stored case must assert something, but a case you are still
+    writing need not, because the first question is what the command prints.
 
-    nodes: list[str]
+    So `parse` without `expect` is legal here and only here: asking to SEE the
+    parsed structure is precisely how a `compare` gets written. With an
+    `expect` present, the usual both-ways compare/parse coupling applies."""
+
+    command: str
+    expect: TestExpectation | None = None
+    parse: ParseMode | None = None
+    mode: CommandMode = "shell"
+    interactive: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class TestCaseDryRunResult:
+    """What one unsaved case did on one node (delta 31).
+
+    `parsed` is the piece no other response carries. A `compare` asserts over
+    PARSED data, and a suite run computes that structure, asserts against it
+    and discards it — so writing a compare has meant predicting the shape
+    TextFSM or `vtysh … json` produces. Here it comes back.
+
+    A parse failure is an ANSWER rather than an error: `parse_error` is set,
+    the raw `output` survives and the call succeeds, because seeing what the
+    parser choked on is how the case gets fixed. (In a saved run the same
+    failure is a TestResult with status "error", correctly — there it breaks
+    an assertion that then cannot be made.)
+
+    `status`/`detail`/`diff` are populated ONLY when the draft supplied an
+    `expect`. With no expectation there is no outcome, and reporting one would
+    answer a question nobody asked."""
+
+    node: str
+    device: str  # which CLI adapter and TextFSM platform applied
+    command: str  # the RENDERED and ADAPTED command — what actually ran
+    output: str  # captured stdout (bounded, like TestResult.output)
+    parsed: object | None  # the parse result when `parse` was declared and
+    #                        succeeded. Shape is the device's, not Twinlab's.
+    parse_error: str | None
+    elapsed_ms: int
+    status: TestStatus | None = None  # only "pass"/"fail" here — a dry run
+    #                                   cannot skip, and could-not-run raises.
+    detail: str = ""
+    diff: dict[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationTest:
+    """Run a case on each target node; poll until it passes. `run` is ONE case
+    for every node or a DEVICE-KEYED dict (netlab device names: "vyos", "frr",
+    "linux", …) — a node whose device has no case reports "skip". `wait`
+    (0-600 s) polls until the expectation holds — the convergence knob.
+
+    The TARGET is three selectors, unioned (delta 32), because a bare node list
+    is not edit-proof: add a router and every existing test keeps testing the
+    old set, silently.
+
+        ValidationTest(run=case, all_nodes=True)              the whole lab
+        ValidationTest(run=case, groups=["core"])             a group's members
+        ValidationTest(run=case, nodes=["r1"])                exactly these
+        ValidationTest(run=case, groups=["core"], nodes=["x"]) the group, plus x
+
+    At least one must select something. Groups are the definition's own,
+    resolved to node names with nesting flattened — see `LabFacts.groups` for
+    what a name resolves to. Order is first appearance, so a nodes-only test runs in
+    exactly the order it always did."""
+
     run: TestCase | dict[str, TestCase]
+    nodes: list[str] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)
+    all_nodes: bool = False
     wait: int = 0
     description: str = ""
 
@@ -1105,6 +1181,13 @@ class LabFacts:
     to avoid. Inspect a real lab's namespace with `facts()`."""
 
     nodes: dict[str, dict[str, object]]
+    # Delta 32: the definition's groups, each resolved to the NODE names it
+    # selects, with nesting flattened. Only the groups the definition declares
+    # — netlab's own internal bookkeeping groups are never targetable. Empty
+    # when the definition declares none. Here rather than a resource of
+    # its own because the two are asked for together: templates need the
+    # namespace, targets need the groups.
+    groups: dict[str, list[str]]
 
 
 # --------------------------------------------------------------------------- #

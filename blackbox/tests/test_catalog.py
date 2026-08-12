@@ -85,6 +85,26 @@ async def test_device_catalog_serves_supported_set(admin: TwinlabClient) -> None
     assert catalog.live
 
 
+async def test_device_catalog_reports_case_capabilities(admin: TwinlabClient) -> None:
+    """Delta 31: `cli_mode` and `textfsm` are what a suite builder greys its
+    mode/parse controls on. Both are derived server-side from the tables that
+    decide, so this pins the contract AND guards the drift — admitting or
+    withdrawing a platform has to move them with the tables.
+
+    The two axes are genuinely independent, which is the point of carrying
+    both: linux has no CLI of its own but does have a TextFSM template set,
+    and FRR has a CLI but answers in JSON."""
+    by_device = {device.device: device for device in (await admin.device_catalog()).devices}
+
+    assert {d for d, v in by_device.items() if v.cli_mode} == {"vyos", "frr", "routeros7", "bird"}
+    # Shell-only: their shell IS the interface, so `mode: "cli"` cannot resolve.
+    assert by_device["linux"].cli_mode is False
+    assert by_device["dnsmasq"].cli_mode is False
+
+    assert {d for d, v in by_device.items() if v.textfsm} == {"vyos", "routeros7", "linux"}
+    assert by_device["frr"].textfsm is False
+
+
 async def test_device_catalog_visible_without_admin_roles(
     make_user_client: UserClientFactory,
 ) -> None:

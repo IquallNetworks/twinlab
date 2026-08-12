@@ -13,6 +13,7 @@ from twinlab_client import (
     LayoutPosition,
     TemplateVariant,
     TestCase,
+    TestCaseDraft,
     TestExpectation,
     TestSuite,
     TwinlabApiError,
@@ -20,7 +21,14 @@ from twinlab_client import (
     ValidationTest,
 )
 
-from _config import LINUX_LAB_DEFINITION, LabFactory, UserClientFactory
+from _config import (
+    GROUPED_LAB_DEFINITION,
+    LINUX_LAB_DEFINITION,
+    LabFactory,
+    UserClientFactory,
+)
+
+_CONTAINS_X = TestExpectation(contains="x")
 
 _SUITES = {
     "smoke": TestSuite(
@@ -153,6 +161,40 @@ async def test_compare_without_parse_is_422(admin: TwinlabClient, make_lab: LabF
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await admin.put_test_suites(lab.name, unpaired)
     assert excinfo.value.status_code == 422
+
+
+async def test_dry_run_needs_a_deployed_lab(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    """Delta 31. The probe EXECUTES on a node, so it needs one — and the two
+    refusals are different facts: a bare record has nothing to run against,
+    an authored one has no containers yet."""
+    lab = await make_lab(None)
+    draft = TestCaseDraft(command="true")
+
+    with pytest.raises(TwinlabApiError) as bare:
+        _ = await admin.dry_run_test_case(lab.name, "n1", draft)
+    assert bare.value.status_code == 409
+    assert bare.value.code == "no_definition"
+
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+    with pytest.raises(TwinlabApiError) as undeployed:
+        _ = await admin.dry_run_test_case(lab.name, "n1", draft)
+    assert undeployed.value.status_code == 409
+    assert undeployed.value.code == "lab_not_running"
+
+
+async def test_draft_may_carry_parse_without_expect(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """The relaxation that makes the probe useful: a stored case must pair
+    `compare` with `parse` both ways, but a DRAFT declaring `parse` alone is
+    asking to see the structure — which is how a compare gets written. It
+    reaches the server (the 409 below is the lab's state, not the shape)."""
+    lab = await make_lab(None)
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.dry_run_test_case(
+            lab.name, "n1", TestCaseDraft(command="true", parse="json")
+        )
+    assert excinfo.value.code == "no_definition"
 
 
 async def test_template_invalid_is_422_with_problems(
@@ -437,3 +479,76 @@ async def test_links_table_from_authored_record(admin: TwinlabClient, make_lab: 
     assert all(endpoint.interface for endpoint in link.endpoints)
     assert link.oper_state == "unknown"
     assert all(e.state is None and e.impairment is None for e in link.endpoints)
+
+
+# --- Edit-proof test targeting (contract delta 32) ---
+
+
+async def test_facts_serve_resolved_groups(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    """The map a builder targets by. Two things are pinned here because both
+    were surprises: a NESTED group resolves to node names (netlab leaves
+    `core: [inner, n3]` unflattened, so Twinlab flattens), and netlab's own
+    internal groups never appear."""
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, GROUPED_LAB_DEFINITION)
+
+    facts = await admin.facts(lab.name)
+    assert facts.groups == {"inner": ["n1", "n2"], "core": ["n1", "n2", "n3"]}
+    # netlab injects these on a plain linux lab; they are bookkeeping.
+    assert "netlab_no_collect" not in facts.groups
+
+
+async def test_a_test_must_target_something(admin: TwinlabClient, make_lab: LabFactory) -> None:
+    lab = await make_lab(None)
+    empty = {
+        "bad": TestSuite(
+            tests={"t": ValidationTest(run=TestCase(command="true", expect=_CONTAINS_X))}
+        )
+    }
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.put_test_suites(lab.name, empty)
+    assert excinfo.value.status_code == 422
+
+
+async def test_group_and_all_node_targets_round_trip(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """All three selectors survive the PUT, including together — "the group,
+    plus these" is the composition the whole delta exists for."""
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, GROUPED_LAB_DEFINITION)
+    suites = {
+        "targeting": TestSuite(
+            tests={
+                "everywhere": ValidationTest(
+                    run=TestCase(command="true", expect=_CONTAINS_X), all_nodes=True
+                ),
+                "the_core": ValidationTest(
+                    run=TestCase(command="true", expect=_CONTAINS_X), groups=["core"]
+                ),
+                "core_plus": ValidationTest(
+                    run=TestCase(command="true", expect=_CONTAINS_X),
+                    groups=["inner"],
+                    nodes=["n3"],
+                ),
+            }
+        )
+    }
+    stored = (await admin.put_test_suites(lab.name, suites)).test_suites
+    tests = stored["targeting"].tests
+    assert tests["everywhere"].all_nodes is True
+    assert tests["everywhere"].nodes == []
+    assert tests["the_core"].groups == ["core"]
+    assert (tests["core_plus"].groups, tests["core_plus"].nodes) == (["inner"], ["n3"])
+
+    # A nodes-only test is untouched by any of this — the compatibility line.
+    plain = {
+        "legacy": TestSuite(
+            tests={
+                "t": ValidationTest(run=TestCase(command="true", expect=_CONTAINS_X), nodes=["n1"])
+            }
+        )
+    }
+    replayed = (await admin.put_test_suites(lab.name, plain)).test_suites
+    legacy = replayed["legacy"].tests["t"]
+    assert (legacy.nodes, legacy.groups, legacy.all_nodes) == (["n1"], [], False)

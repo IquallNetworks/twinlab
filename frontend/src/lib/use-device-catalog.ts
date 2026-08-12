@@ -31,6 +31,11 @@ function toBuilderCatalog(wire: DeviceCatalogWire): CatalogDevice[] {
       device.modules.includes(module),
     ),
     imagePresent: wire.live ? device.image_present : null,
+    // Delta 31: passed through, never recomputed — the server derives these
+    // from the tables that actually decide, which is the whole reason they
+    // are on the wire instead of in a second copy here.
+    cliMode: device.cli_mode,
+    textfsm: device.textfsm,
   }))
 }
 

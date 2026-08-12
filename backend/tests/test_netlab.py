@@ -5,6 +5,7 @@ from typing import cast
 import yaml
 
 from twinlab_backend.result import Err, Ok
+from twinlab_backend.services import netlab
 from twinlab_backend.services.device_catalog import IMAGE_PINS
 from twinlab_backend.services.netlab import (
     DEVICE_KMODS,
@@ -501,3 +502,45 @@ def test_create_materializes_node_files(tmp_path: Path) -> None:
     assert sources
     for source in sources:
         assert (tmp_path / "lab1" / source).is_file(), source
+
+
+# --- Group resolution for test targeting (delta 32) ---
+
+
+def test_group_extraction_flattens_nesting_and_drops_netlab_internals() -> None:
+    """Two facts netlab's own output forced, both verified against 26.07:
+    a nested group's parent still NAMES the child rather than its members, and
+    netlab injects bookkeeping groups of its own (`netlab_no_collect`) that
+    must never be offered as a test target."""
+    definition = """\
+provider: clab
+defaults.device: linux
+groups:
+  inner:
+    members: [n1, n2]
+  core:
+    members: [inner, n3]
+nodes: [n1, n2, n3]
+"""
+    expanded = {
+        "groups": {
+            "inner": {"members": ["n1", "n2"]},
+            "core": {"members": ["inner", "n3"]},
+            "netlab_no_collect": {"members": ["n1", "n2", "n3"]},
+        }
+    }
+    resolved = netlab._extract_node_groups(expanded, definition)  # pyright: ignore[reportPrivateUsage]
+    assert resolved == {"inner": ["n1", "n2"], "core": ["n1", "n2", "n3"]}
+
+
+def test_group_extraction_dedups_and_survives_a_cycle() -> None:
+    definition = "groups:\n  a:\n    members: [b]\n  b:\n    members: [a, n1]\n"
+    expanded = {"groups": {"a": {"members": ["b", "n1"]}, "b": {"members": ["a", "n1"]}}}
+    resolved = netlab._extract_node_groups(expanded, definition)  # pyright: ignore[reportPrivateUsage]
+    # No infinite recursion, and n1 appears once however many paths reach it.
+    assert resolved["a"] == ["n1"]
+    assert resolved["b"] == ["n1"]
+
+
+def test_group_extraction_is_empty_without_groups() -> None:
+    assert netlab._extract_node_groups({"nodes": {}}, "nodes: [n1]\n") == {}  # pyright: ignore[reportPrivateUsage]

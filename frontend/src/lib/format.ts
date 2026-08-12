@@ -34,14 +34,6 @@ export function linkOperBadgeVariant(state: 'up' | 'degraded' | 'down' | 'unknow
   return 'outline'
 }
 
-/** Test result status → badge style: pass reads as active, fail/error as
- * destructive, skip as muted. */
-export function testStatusBadgeVariant(status: string): BadgeVariant {
-  if (status === 'pass') return 'default'
-  if (status === 'fail' || status === 'error') return 'destructive'
-  return 'secondary'
-}
-
 const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const
 
 /** Binary byte sizes, the unit `free`/`docker system df` speak. Three
@@ -102,6 +94,14 @@ export function formatRelativeTime(epochMs: number, nowMs: number): string {
 
 /** Elapsed wall time between two instants ("0:42", "12:05", "1:03:20").
  * Client/server clock skew is clamped to zero. */
+/** "3h ago" from an ISO stamp — how a timestamp is read when the question is
+ * "is this current?". The absolute form stays available as a title, since
+ * "which run was this" needs the real stamp. */
+export function formatAgo(iso: string): string {
+  const at = new Date(iso).getTime()
+  return Number.isNaN(at) ? iso : `${formatRelativeTime(at, Date.now())} ago`
+}
+
 export function formatElapsed(fromIso: string, toMs: number): string {
   const from = new Date(fromIso).getTime()
   if (Number.isNaN(from)) return '—'

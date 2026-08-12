@@ -41,7 +41,7 @@
   },
   "reachability": {
     "stage": "runtime",
-    "description": "The control plane agreeing is not the data plane working: cross-fabric loopback pings, run on demand from the Operations tab.",
+    "description": "The control plane agreeing is not the data plane working: cross-fabric loopback pings, run on demand from the Tests tab.",
     "tests": {
       "loopback_ping": {
         "nodes": ["r1", "r3"],

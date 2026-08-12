@@ -132,19 +132,38 @@ class LabEvent:
 # client's default timeout.
 _LAB_OP_TIMEOUT_SECONDS = 600.0
 
-# clab-api holds a per-lab netem mutex and 409s ANY colliding caller — a netem
-# set racing a netem show loses, and so does a lifecycle call (deploy/destroy)
-# racing either (live-hit: a destroy failed "busy with netem operation" because
-# the Overview canvas's link-table refetch was mid-show). Two defenses:
+# clab-api holds a per-lab mutex and 409s ANY colliding caller with
+# "Lab '<name>' is busy with <op> operation." — one message family covering
+# every op it serializes, not just netem. Two defenses:
 # a process-wide lock serializes the backend's OWN netem calls (they are
 # sub-second, so one global lock is simpler than a per-lab registry and safe —
 # single-process assumption, same as the job sweeps), and lifecycle calls
-# retry briefly on the specific busy rejection for the shows a CONCURRENT
-# request may still fire between acquire windows.
+# retry briefly on the busy rejection, for the collisions a CONCURRENT request
+# may still cause between acquire windows.
+#
+# The marker matches the whole family on purpose. It named only netem once,
+# and missing the rest was a real failure rather than a theoretical one: a
+# destroy issued seconds after a whole-lab start came back "busy with start
+# operation", matched nothing, and so failed outright in 0.4s without a single
+# retry — a FAILED destroy on a lab that was perfectly destroyable, and which
+# destroyed in 5s on the next attempt (e2e journey 06, 2026-08-11). The two
+# hits are not the same shape: the netem one lost to a genuinely concurrent
+# read (the canvas link-table refetch), this one to a lock still held a
+# moment past the 200 clab-api had already returned us. Both clear on their
+# own; neither is a decision about the lab.
+#
+# A busy 409 means the call never STARTED, so retrying it is safe for every
+# verb including deploy — unlike the 5xx retry below, where the operation may
+# have partially run. The budget is unchanged and deliberately short: it was
+# sized for a sub-second netem show and is UNMEASURED against a lab lock, but
+# Twinlab's own per-lab job mutex already stops it racing itself, so a
+# rejection that outlives the window means something else is genuinely driving
+# this lab — and "busy" is then the honest answer rather than a wait. If the
+# start race recurs, this budget is the knob.
 _netem_lock = asyncio.Lock()
-_NETEM_BUSY_MARKER = "busy with netem"
-_NETEM_BUSY_RETRIES = 8
-_NETEM_BUSY_RETRY_SECONDS = 0.5
+_LAB_BUSY_MARKER = "is busy with"
+_LAB_BUSY_RETRIES = 8
+_LAB_BUSY_RETRY_SECONDS = 0.5
 
 
 class _LoginResponse(BaseModel):
@@ -398,28 +417,29 @@ class ClabApiClient:
     ) -> Result[httpx.Response, ClabApiError]:
         """`_authed` plus a bounded retry on clab-api's transient rejections.
 
-        Always retried: the netem-busy 409 (see `_netem_lock` above) — a netem
-        show is sub-second, so a short wait clears the mutex. With
-        `retry_server_errors`, plain 5xx too: under a concurrent read burst
-        clab-api's v0.5.0 lifecycle handlers intermittently 500 with no logged
-        cause (live-hit: a node stop 500'd in 126 ms amid the UI's query storm
-        and succeeded moments later by hand). Only the CHEAP idempotent verbs
+        Always retried: the lab-busy 409 (see `_LAB_BUSY_MARKER` above) — the
+        call never started, so a short wait for the other operation's mutex to
+        clear is safe for every verb. With `retry_server_errors`, plain 5xx
+        too: under a concurrent read burst clab-api's v0.5.0 lifecycle
+        handlers intermittently 500 with no logged cause (live-hit: a node stop
+        500'd in 126 ms amid the UI's query storm and succeeded moments later
+        by hand). Only the CHEAP idempotent verbs
         opt in — node/lab power, save, destroy; never deploy, where a 500 is
         usually a real rejection ("already deployed") and the call is
         heavyweight. The last response is returned once retries are spent, so
         the caller reports the real rejection."""
-        attempts = _NETEM_BUSY_RETRIES
+        attempts = _LAB_BUSY_RETRIES
         while True:
             sent = await self._authed(method, path, params=params, json=json, timeout=timeout)
             if isinstance(sent, Err):
                 return sent
             attempts -= 1
             status = sent.value.status_code
-            transient = (
-                status == HTTPStatus.CONFLICT and _NETEM_BUSY_MARKER in sent.value.text
-            ) or (retry_server_errors and status >= HTTPStatus.INTERNAL_SERVER_ERROR)
+            transient = (status == HTTPStatus.CONFLICT and _LAB_BUSY_MARKER in sent.value.text) or (
+                retry_server_errors and status >= HTTPStatus.INTERNAL_SERVER_ERROR
+            )
             if transient and attempts > 0:
-                await asyncio.sleep(_NETEM_BUSY_RETRY_SECONDS)
+                await asyncio.sleep(_LAB_BUSY_RETRY_SECONDS)
                 continue
             return sent
 

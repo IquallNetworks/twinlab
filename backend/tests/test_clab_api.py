@@ -47,7 +47,7 @@ async def test_destroy_not_found_carries_status() -> None:
 async def test_destroy_retries_through_netem_busy(monkeypatch: pytest.MonkeyPatch) -> None:
     """clab-api 409s a destroy while a netem show holds its per-lab mutex —
     transient by nature, so the lifecycle call retries past it."""
-    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(clab_api, "_LAB_BUSY_RETRY_SECONDS", 0.0)
     calls = {"destroy": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -65,8 +65,55 @@ async def test_destroy_retries_through_netem_busy(monkeypatch: pytest.MonkeyPatc
     assert calls["destroy"] == 3
 
 
+async def test_destroy_retries_through_a_busy_START_not_just_netem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression: clab-api's busy 409 is one message family — "Lab '<x>'
+    is busy with <op> operation." — and the marker used to name only netem, so
+    a destroy landing just after a whole-lab start was rejected outright and
+    surfaced as a FAILED destroy on a perfectly destroyable lab (e2e journey
+    06, 2026-08-11). A busy 409 means the call never started, whatever the op
+    holding the lock."""
+    monkeypatch.setattr(clab_api, "_LAB_BUSY_RETRY_SECONDS", 0.0)
+    calls = {"destroy": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"token": "t"})
+        calls["destroy"] += 1
+        if calls["destroy"] < 3:
+            return httpx.Response(
+                409, text='{"error":"Lab \'tmp1\' is busy with start operation."}'
+            )
+        return httpx.Response(200, text="destroyed tmp1")
+
+    result = await _client(handler).destroy("tmp1")
+    assert isinstance(result, Ok), result
+    assert calls["destroy"] == 3
+
+
+async def test_a_conflict_that_is_not_a_busy_lock_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Widening the marker must not turn every 409 into a retry: a conflict
+    that states a real, settled condition is the answer, not a wait."""
+    monkeypatch.setattr(clab_api, "_LAB_BUSY_RETRY_SECONDS", 0.0)
+    calls = {"deploy": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"token": "t"})
+        calls["deploy"] += 1
+        return httpx.Response(409, text='{"error":"lab tmp1 already exists"}')
+
+    result = await _client(handler).destroy("tmp1")
+    assert isinstance(result, Err)
+    assert result.error.status_code == 409
+    assert calls["deploy"] == 1
+
+
 async def test_destroy_netem_busy_retries_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(clab_api, "_LAB_BUSY_RETRY_SECONDS", 0.0)
     calls = {"destroy": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -79,13 +126,13 @@ async def test_destroy_netem_busy_retries_are_bounded(monkeypatch: pytest.Monkey
     assert isinstance(result, Err)
     assert result.error.status_code == 409
     assert "busy with netem" in result.error.message
-    assert calls["destroy"] == 8  # mirrors _NETEM_BUSY_RETRIES
+    assert calls["destroy"] == 8  # mirrors _LAB_BUSY_RETRIES
 
 
 async def test_node_action_retries_through_transient_500(monkeypatch: pytest.MonkeyPatch) -> None:
     """clab-api's lifecycle handlers intermittently 500 under a concurrent
     read burst; the cheap idempotent verbs retry past it."""
-    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(clab_api, "_LAB_BUSY_RETRY_SECONDS", 0.0)
     calls = {"stop": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -104,7 +151,7 @@ async def test_node_action_retries_through_transient_500(monkeypatch: pytest.Mon
 async def test_deploy_does_not_retry_500(monkeypatch: pytest.MonkeyPatch) -> None:
     """A deploy 500 is usually a real rejection (e.g. "already deployed") and
     the call is heavyweight — no blind retry there."""
-    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(clab_api, "_LAB_BUSY_RETRY_SECONDS", 0.0)
     calls = {"deploy": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -119,7 +166,7 @@ async def test_deploy_does_not_retry_500(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 async def test_other_conflicts_do_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(clab_api, "_NETEM_BUSY_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(clab_api, "_LAB_BUSY_RETRY_SECONDS", 0.0)
     calls = {"destroy": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:

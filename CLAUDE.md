@@ -748,10 +748,17 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `/var/run/netns` bind is **rshared** (2026-08-06, found by the e2e suite): containerlab's node
   STOP parks the node's interfaces into a netns it creates there, and with the default-private
   propagation the nsfs mounts don't cross the container boundary — parking then fails ("unknown FS
-  magic", tmpfs) or strands plain files that poison every later stop. It also holds a per-lab netem
+  magic", tmpfs) or strands plain files that poison every later stop. It also holds a per-lab
   mutex and 409s/500s colliding or bursty callers — the backend serializes its OWN netem calls,
   retries the busy rejection on lifecycle verbs and transient 5xx on the cheap idempotent ones
-  (never deploy), and retries the destroy pre-check inspect (`services/clab_api.py`).
+  (never deploy), and retries the destroy pre-check inspect (`services/clab_api.py`). The busy
+  409 is ONE message family — `Lab '<x>' is busy with <op> operation.` — and the retry marker
+  matches all of it, NOT just netem: it named netem alone until 2026-08-11, when a destroy
+  issued seconds after a whole-lab start came back `busy with start operation`, matched
+  nothing, and failed outright in 0.4s on a lab that destroyed in 5s on the next attempt
+  (found by e2e journey 06). A busy 409 means the call never STARTED, so retrying it is safe
+  for every verb including deploy — unlike the 5xx retry, where the operation may have
+  partially run.
 - **`postgres`** — backs the RBAC store (users, roles, permissions, sessions) and the durable lab
   records (`labs`: definition + status + owner) via SQLAlchemy async + Alembic; migrations run in the
   backend entrypoint.

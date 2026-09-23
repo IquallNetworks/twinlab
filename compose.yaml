@@ -132,6 +132,37 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # MCP server (docs/mcp-server.md): the public API as Model Context Protocol
+  # tools for agent hosts, served through the frontend's nginx at
+  # <base path>/mcp. Every request carries the caller's own Twinlab API key,
+  # and every tool acts with it through the public API, so this service holds
+  # no secrets and no database. No host port, like the backend.
+  mcp:
+    build:
+      context: ./mcp
+      additional_contexts:
+        # twinlab-client is a path dependency outside ./mcp.
+        client: ./client
+        # The user guide, served as MCP resources; the same arrangement as the
+        # frontend's.
+        docs: ./docs
+    environment:
+      TWINLAB_API_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
   # Config-push runner: netlab + ansible-core + community.docker + the docker
   # CLI. `netlab initial` drives Ansible over the docker connection, exec-ing
   # into the lab nodes (deployed by clab-api on the host daemon) by container

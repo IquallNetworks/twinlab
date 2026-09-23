@@ -45,6 +45,11 @@ Selecting them without the variable aborts the run rather than skipping; deselec
 (Dex's static client allows exactly that callback) and delete Twinlab accounts holding Dex's
 three users' emails before and after each test, so an interrupted run does not poison the next.
 
+The `mcp`-marked tests (delta 34) drive the MCP server at `TWINLAB_URL/mcp`, so the stack needs
+its `mcp` service up; they need no configuration of their own. One of them also carries the
+`deploy` marker: a whole lab lifecycle through MCP alone. Deselect them with `-m "not mcp"` on a
+stack without the service.
+
 ## Conventions
 
 - Every created resource uses a unique generated name (no fixed fixtures to collide on); cleanup is
@@ -59,6 +64,8 @@ three users' emails before and after each test, so an interrupted run does not p
   A third: the OIDC flow slices (`_oidc.py`) play the browser with raw httpx2, following redirects
   through Dex's own login form, because the flow's contract IS a browser navigation and the
   headless client deliberately has no method for it.
+  A fourth: the MCP slice (`test_mcp.py`) speaks MCP through the MCP SDK's own client, because
+  there MCP is the contract under test; the client is used only to set up users, labs and keys.
 - Lab-deploying tests are expensive (real containerlab deploys of a tiny two-linux-node lab); they
   live in `test_labs_deploy.py` behind the `deploy` marker — deselect with `-m "not deploy"` for
   the cheap contract run. Everything else (including lab lifecycle, authoring, and grants) works on
@@ -92,6 +99,7 @@ three users' emails before and after each test, so an interrupted run does not p
 | `test_imports.py`      | (+`deploy`) config import: wiring rules, factory output, fidelity diff |
 | `test_labs_deploy.py`  | (`deploy`) real deploys as jobs: lifecycle, submit-time mutex, netem, batch actions, power, terminal, events |
 | `test_ssh_jump.py`     | (`deploy`) real `ssh` probes through the jump host: permitopen scoping, revocation, fail-safe |
+| `test_mcp.py`          | (`mcp`, one also `deploy`) the MCP server: bearer 401s, tool set + hints, guide resources, acting as the key's owner, refusals as tool errors, a lifecycle through MCP alone |
 
 The backend implements the full v1.0 contract (twenty-nine deltas — delta 12 made the four long
 operations async jobs, which the deploy slice consumes via submit + `wait_job`; delta 13 added the

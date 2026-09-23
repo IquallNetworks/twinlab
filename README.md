@@ -13,7 +13,8 @@ environment.
 ```
   frontend (React) ─┐
                     ├─ /api/v1 ─► backend ─┬─► netlab create ─► containerlab topology
-  twinlab-client ───┘                      │
+  twinlab-client ───┤                      │
+  mcp (agents) ─────┘                      │
                                            ├─► clab-api      ─► lab containers (host daemon)
                                            ├─► hostprep      ─► host bridges + kernel modules
                                            └─► netlab-runner ─► netlab initial ─► node config
@@ -289,7 +290,7 @@ The stack itself is not distributed — Twinlab is deployed from this repository
 
 ## Repository layout
 
-The compose stack (project `twinlab`) is seven services:
+The compose stack (project `twinlab`) is eight services:
 
 | Service | What it is |
 | --- | --- |
@@ -297,6 +298,7 @@ The compose stack (project `twinlab`) is seven services:
 | [`backend/`](backend/) | FastAPI (uv, Python 3.14). Owns the lab lifecycle, jobs, RBAC, validation, config import and the template library; runs `netlab create`, deploys through clab-api, delegates config push to the runner. |
 | [`netlab-runner/`](netlab-runner/) | Config-push sidecar: `netlab initial` over Ansible's `docker` connection, plus host-side `ip netns exec` scripts for plain-container nodes. Holds the Docker socket; no host network. |
 | [`hostprep/`](hostprep/) | The one component allowed to touch host network devices: creates the Linux bridges multi-access links need and loads kernel modules. A dumb, stateless executor behind a token — all policy stays in the backend. |
+| [`mcp/`](mcp/) | The MCP server, for agent hosts: the public API as Model Context Protocol tools and the operator guide as resources, at `/mcp`. A sidecar over `twinlab-client` that acts with each caller's own API key, so it can do exactly what that key's owner can. |
 | [`jump/`](jump/) | Stock OpenSSH sshd. One forwarding-only account; per-key access resolved live by `AuthorizedKeysCommand` against the backend. |
 | `clab-api` | [srl-labs/clab-api-server](https://github.com/srl-labs/clab-api-server) (Apache-2.0). Host-coupled — host network and PID, Docker socket and PAM databases mounted — and deploys lab nodes as sibling containers. |
 | `postgres` | The RBAC store and the durable lab records, via SQLAlchemy async + Alembic. Migrations run in the backend entrypoint. |
@@ -323,7 +325,8 @@ each of the six supported platforms.
 
 The rest of [`docs/`](docs/) is design records, written for people changing the code:
 `twinlab_client_shape.py` is the reviewed API contract, and `rbac-v2.md`, `config-import.md`,
-`fact-namespace.md`, `frontend-rework.md`, `host-resources.md`, `operator-guide-plan.md` and
+`fact-namespace.md`, `frontend-rework.md`, `host-resources.md`, `mcp-server.md`,
+`operator-guide-plan.md` and
 `nos-sweep/` cover the rest. [`ROADMAP.md`](ROADMAP.md) records what is shipped, deferred and why.
 
 ## Development
@@ -332,7 +335,7 @@ Quality gates, run inside each project directory:
 
 | Project | Gates |
 | --- | --- |
-| `backend/`, `client/`, `netlab-runner/`, `hostprep/` | `uv run ruff format .` · `uv run ruff check .` · `uv run basedpyright` (strict) · `uv run pytest` |
+| `backend/`, `client/`, `netlab-runner/`, `hostprep/`, `mcp/` | `uv run ruff format .` · `uv run ruff check .` · `uv run basedpyright` (strict) · `uv run pytest` |
 | `frontend/` | `pnpm typecheck` · `pnpm build` · `pnpm check:build-doc` |
 | `blackbox/` | `uv run pytest` against a live stack (see its README) |
 | `e2e/` | `pnpm typecheck` · `pnpm test` (resets and drives its own stack) |

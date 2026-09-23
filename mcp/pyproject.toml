@@ -1,0 +1,48 @@
+[project]
+name = "twinlab-mcp"
+version = "0.9.0"
+description = "Twinlab MCP server: the public API as Model Context Protocol tools"
+requires-python = ">=3.14"
+dependencies = [
+    "mcp>=2.2.0",
+    "twinlab-client",
+    "uvicorn>=0.53.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "basedpyright",
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.uv.sources]
+twinlab-client = { path = "../client" }
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "twinlab_mcp"
+module-root = "src"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+reportMissingTypeStubs = false
+# pytest puts tests/ itself on sys.path (no package), so the helper module
+# imports bare; mirror that for the checker.
+extraPaths = ["tests"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_classes = ["*Tests"]

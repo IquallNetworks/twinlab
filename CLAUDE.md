@@ -181,6 +181,34 @@ themselves and the overlay maps it to host-gateway inside the backend, so both s
 issuer URL. Just before it, the whole tree moved from **httpx to httpx2**, the
 Pydantic-maintained continuation (BSD-3, a pure rename of httpx 0.28.1, which has had no release
 since December 2024) that Authlib 1.8 expects.
+— and delta 34 the MCP SERVER, implemented 2026-09-23, design record `docs/mcp-server.md`:
+agent hosts consume the Model Context Protocol, not REST, so `mcp/` (uv, Python 3.14, package
+`twinlab_mcp`, SDK `mcp` 2.2.0, MIT, on httpx2) serves the public API as 29 curated tools plus
+the user guide as resources. It is a SIDECAR OVER `twinlab-client`, never a mount in the
+backend: each call acts with the CALLER'S OWN API key through the public API, so it cannot
+exceed the REST contract, the backend and `docs/twinlab_client_shape.py` are untouched, and it
+holds no secrets and no database. It is numbered a delta anyway because it is a new served
+surface. An ASGI guard does bearer auth with one `GET /auth/me` per request (401 before the MCP
+layer; `/health` is the only open path), deliberately NOT the SDK's OAuth verifier, which would
+advertise an authorization server Twinlab does not run. Transport is stateless streamable HTTP
+with plain JSON responses at nginx `location = <base>/mcp` (Vite proxies it in dev via
+`VITE_MCP_PROXY_TARGET`); the SDK's DNS-rebinding Host check is OFF because it pins Host to
+localhost and the key is the trust. Tools: read (whoami, labs, jobs, `wait_job` bounded at 120s
+and returning a still-running job rather than failing, links, interfaces, facts, usage, logs,
+netem, suites, catalog, host, network templates) and act (create/define/deploy/configure/destroy,
+suites put/run/dry-run, power, netem, save), each with STATIC ToolAnnotations (a redeploy or
+stop makes the whole tool destructive). Identity and access administration, the terminal, SSE
+and layout are EXCLUDED; config import, custom config and batch actions are DEFERRED. Inputs are
+typed with the CLIENT'S OWN dataclasses (TestSuite, Duration, TestExpectation), so the suite
+schema IS the tool schema. Outputs are JSON objects (structuredContent + text mirror, lists under
+a key, no per-tool output schema since the SDK cannot derive one from the slotted `JobDetail`);
+`get_lab` omits `deployed_definition` unless drifted. A backend refusal is an `isError` result
+whose text is the SDK's `Error executing tool <name>: ` then `{status, code, message, extras}` —
+so `netlab_invalid`'s stderr reaches the agent. Guide pages are `twinlab://guide/<file>.md`
+(the extension kept so relative links resolve), read once at startup through a symlink the
+`docs` build context fills, like the frontend's; the client arrives through a `client` context.
+Unit tests drive the real app with the SDK's client in-process over the real `twinlab-client`,
+the backend faked with MockTransport; the blackbox `mcp` marker drives a live stack.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, versioned 0.9.0 like the whole tree, publication pending), **`blackbox/`**
@@ -203,7 +231,7 @@ is what gates follow-on work). The blackbox suite is the contract's enforcement 
 changes are verified against it, and contract changes go through review; the e2e suite is the
 browser layer's.
 
-The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of seven services:
+The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`) of eight services:
 
 - **`frontend/`** — Vite + React + TypeScript (pnpm). **Served as a static production build
   since 2026-08-11**: the compose default is the Dockerfile's `prod` target — `pnpm build`
@@ -914,11 +942,16 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   (found by e2e journey 06). A busy 409 means the call never STARTED, so retrying it is safe
   for every verb including deploy — unlike the 5xx retry, where the operation may have
   partially run.
+- **`mcp/`** — the MCP server (delta 34, above; `docs/mcp-server.md`): not FastAPI but the SDK's
+  own Starlette app behind a bearer guard, over `twinlab-client` with each caller's own API key.
+  No host port — reached only through the frontend's nginx at `<base path>/mcp` — and no
+  secrets: `TWINLAB_API_URL` (required, no default) is its one setting. Its image needs two
+  additional build contexts, `client` (the path dependency) and `docs` (the guide).
 - **`postgres`** — backs the RBAC store (users, roles, permissions, sessions) and the durable lab
   records (`labs`: definition + status + owner) via SQLAlchemy async + Alembic; migrations run in the
   backend entrypoint.
 
-Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner + hostprep quality gates: `ruff
+Also present: `LICENSE` (Apache 2.0). Backend + netlab-runner + hostprep + mcp quality gates: `ruff
 format` + `ruff check`, basedpyright (strict), pytest. The e2e suite's gates: `pnpm typecheck` +
 `pnpm test` from `e2e/` (resets and drives the twinlab-e2e stack; one-time host setup in its
 README — the lab-files dir and the three pullable node images).

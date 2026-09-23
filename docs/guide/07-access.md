@@ -184,6 +184,25 @@ owns stops working immediately.
 
 Use a key for scripts and CI. Use your session for the browser.
 
+### Connecting an agent (MCP)
+
+Twinlab serves the Model Context Protocol at `/mcp` on the same address as the
+UI, for example `https://twinlab.example.com/mcp`. Point an MCP client at that
+URL over streamable HTTP and send an API key as a bearer token:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+The agent can then list, read, deploy, operate and destroy labs, and read this
+guide. It acts as you, with exactly your permissions: a lab you cannot read is
+invisible to it, and an action you cannot take comes back to it as a refusal.
+It cannot manage users, grants or keys.
+
+Give an agent its own key, so you can revoke it without disturbing your
+scripts. Never give one key to an agent that several people use: it would act
+as you for all of them.
+
 ## SSH to lab nodes
 
 Lab nodes are not on your network. A **jump host** stands in front of them.

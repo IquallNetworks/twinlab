@@ -4,6 +4,7 @@ version = "0.9.0"
 description = "Black-box test suite for the Twinlab API — pins the v1.0 contract against a live stack."
 requires-python = ">=3.13"
 dependencies = [
+    "mcp>=2.2.0",
     "twinlab-client",
 ]
 
@@ -46,4 +47,5 @@ python_classes = ["*Tests"]
 markers = [
     "deploy: deploys real labs through containerlab (slow; needs the node image on the host)",
     "oidc: signs in through the test OIDC provider (needs oidc-test/compose.yaml on the stack and TWINLAB_DEX_ISSUER)",
+    "mcp: drives the MCP server (delta 34) at TWINLAB_URL/mcp through the MCP SDK's own client",
 ]

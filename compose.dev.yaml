@@ -6,8 +6,8 @@
 # Both modes build to the same image tag, so keep --build when switching
 # between them — a plain `up -d` recreates from whichever mode built last.
 #
-# The dev server owns the /api/v1 proxy in this mode (vite.config.ts) and
-# serves the operator guide through the src/content/guide symlink, which
+# The dev server owns the /api/v1 and /mcp proxies in this mode (vite.config.ts)
+# and serves the operator guide through the src/content/guide symlink, which
 # resolves against the ./docs mount below.
 services:
   frontend:
@@ -15,6 +15,7 @@ services:
       target: dev
     environment:
       VITE_PROXY_TARGET: http://backend:8000
+      VITE_MCP_PROXY_TARGET: http://mcp:8000
       # Vite listens on FRONTEND_PORT inside the container, so host and
       # container sides stay the same port (hence the ports override).
       # DEPLOYMENT_URL's host is allow-listed by the dev server, which

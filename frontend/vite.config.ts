@@ -9,6 +9,11 @@ import { defineConfig } from 'vite'
 // (VITE_PROXY_TARGET=http://backend:8000, reaching the backend over service DNS).
 const proxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://localhost:8000'
 
+// The MCP server's origin, for the /mcp proxy. compose.dev.yaml sets it; a dev
+// server run outside compose has no MCP server to reach, so unset means no
+// /mcp route at all rather than a guessed address.
+const mcpProxyTarget = process.env.VITE_MCP_PROXY_TARGET
+
 // Port the dev server listens on. 5173 is Vite's conventional default and every
 // caller is fine with it; override via FRONTEND_PORT to serve elsewhere. `|| `
 // (not `??`) so an empty-string env var also falls back.
@@ -61,6 +66,9 @@ export default defineConfig({
       // `ws: true` so the WebSocket upgrade for the node terminal
       // (/api/v1/labs/.../terminal) is proxied too, not just HTTP requests.
       '/api/v1': { target: proxyTarget, changeOrigin: true, ws: true },
+      // The MCP server (docs/mcp-server.md), the dev sibling of nginx.conf's
+      // /mcp location. Unset outside compose: the UI never calls it.
+      ...(mcpProxyTarget ? { '/mcp': { target: mcpProxyTarget, changeOrigin: true } } : {}),
     },
   },
 })

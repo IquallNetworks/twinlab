@@ -80,11 +80,16 @@ default:
 | `JUMP_TOKEN` | `openssl rand -hex 32`, shared by the SSH jump host and the backend |
 | `HOSTPREP_TOKEN` | `openssl rand -hex 32`, shared by the backend and the host-preparation sidecar |
 | `POSTGRES_PASSWORD` | any value |
-| `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` | Twinlab's first administrator |
+| `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` / `BOOTSTRAP_ADMIN_EMAIL` | Twinlab's first administrator. Every user has an email |
+| `OIDC_SECRET_KEY` | `openssl rand -base64 32 \| tr '+/' '-_'`, the key that encrypts sign-in providers' client secrets |
+| `FRONTEND_BASE_PATH` | the path the UI is served under. **Empty** serves it at the origin root |
 
-The stack refuses to start without `JUMP_TOKEN` and `HOSTPREP_TOKEN`. That is
-deliberate — neither has a default, so no deployment can ship a secret that is
-published in this repository.
+The stack refuses to start without `JUMP_TOKEN`, `HOSTPREP_TOKEN` and
+`OIDC_SECRET_KEY`. That is deliberate: none has a default, so no deployment can
+ship a secret that is published in this repository. It also refuses to start
+without `BOOTSTRAP_ADMIN_EMAIL` or without `FRONTEND_BASE_PATH`. An empty base path is a real
+value ("the root"). An unset one is a mistake, because the backend builds the
+URLs it sends browsers to from it.
 
 Three more are worth reading before you start, because moving them later is
 disruptive:
@@ -106,6 +111,12 @@ disruptive:
   frontend image, so changing it is an `up -d --build`. The proxy passes URIs
   through unchanged and must forward WebSocket upgrades (`Upgrade` +
   `Connection` headers).
+- **`PUBLIC_ORIGIN`** (unset by default) is the origin browsers reach Twinlab at:
+  scheme, host and port, no path, for example `https://twinlab.example.com`.
+  Signing in through an external identity provider needs it, because providers
+  redirect back to `${PUBLIC_ORIGIN}${FRONTEND_BASE_PATH}/api/v1/auth/oidc/<provider>/callback`.
+  Leave it unset if you only use Twinlab's own passwords. See
+  [Access](07-access.md#signing-in-through-an-identity-provider).
 
 ## Node images
 
@@ -254,6 +265,14 @@ docker compose up -d --build
 
 The backend runs `alembic upgrade head` before it serves anything, so database
 migrations are part of starting up and need no separate step.
+
+**Check `.env` against `.env.example` first.** A release can add a required
+variable, and the stack refuses to start until it is set. The provider sign-in
+release added three: `BOOTSTRAP_ADMIN_EMAIL`, `OIDC_SECRET_KEY` and
+`FRONTEND_BASE_PATH` (empty keeps the UI at the root). Its migration gives every
+existing account a display name equal to its username and a placeholder email,
+`<username>@users.invalid`. The Users page flags those placeholders until an
+administrator sets real addresses.
 
 **Deployed labs survive.** Lab nodes are not part of the compose project. They
 are sibling containers on the host daemon, so stopping or rebuilding the stack

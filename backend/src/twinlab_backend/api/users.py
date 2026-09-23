@@ -5,10 +5,11 @@ access is granted per lab via the lab-grants API.
 """
 
 import uuid
-from typing import NoReturn
+from datetime import datetime
+from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 from sqlalchemy import select
 
 from twinlab_backend.api_errors import ApiError
@@ -17,7 +18,8 @@ from twinlab_backend.auth import user_management
 from twinlab_backend.auth.dependencies import require_global
 from twinlab_backend.auth.sessions import revoke_all_for_user
 from twinlab_backend.auth.user_management import UserError, create_user, list_users, set_roles
-from twinlab_backend.db.models import RoleBinding, User
+from twinlab_backend.config import is_email_address
+from twinlab_backend.db.models import RoleBinding, User, UserIdentity
 from twinlab_backend.deps import SessionDep
 from twinlab_backend.result import Err
 
@@ -28,10 +30,30 @@ router = APIRouter(
 )
 
 
+def _email(value: str) -> str:
+    if not is_email_address(value):
+        raise ValueError("not an email address")
+    return value
+
+
+# Contract delta 33. The email check is structural only (config.is_email_address);
+# 320 is RFC 5321's ceiling and the column width.
+EmailAddress = Annotated[str, Field(min_length=3, max_length=320), AfterValidator(_email)]
+DisplayName = Annotated[str, Field(min_length=1, max_length=128)]
+
+
 class CreateUserRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=8)
+    email: EmailAddress
+    display_name: DisplayName
+    # Omitted (or null) = the server generates one and returns it ONCE.
+    password: str | None = Field(default=None, min_length=8)
     roles: list[str] = Field(default_factory=list)
+
+
+class SetProfileRequest(BaseModel):
+    email: EmailAddress
+    display_name: DisplayName
 
 
 class SetRolesRequest(BaseModel):
@@ -46,11 +68,29 @@ class SetActiveRequest(BaseModel):
     is_active: bool
 
 
+class LinkedIdentityOut(BaseModel):
+    id: uuid.UUID
+    provider: str  # the provider's name
+    subject: str
+    email_at_link: str
+    created_at: datetime
+    last_login_at: datetime | None
+
+
 class UserSummary(BaseModel):
     id: uuid.UUID
     username: str
+    email: str
+    display_name: str
     is_active: bool
     roles: list[str]  # global roles
+    identities: list[LinkedIdentityOut]
+
+
+class UserCreatedOut(BaseModel):
+    user: UserSummary
+    # Set only when the request omitted the password — the only time it is shown.
+    generated_password: str | None
 
 
 async def _global_roles_by_user(db: SessionDep) -> dict[uuid.UUID, list[str]]:
@@ -70,31 +110,78 @@ async def _global_roles_by_user(db: SessionDep) -> dict[uuid.UUID, list[str]]:
     return {uid: sorted(set(names)) for uid, names in by_user.items()}
 
 
-def _summary(user: User, roles: list[str]) -> UserSummary:
-    return UserSummary(id=user.id, username=user.username, is_active=user.is_active, roles=roles)
-
-
-# username_taken/last_admin -> 409; user_not_found -> 404; unknown_roles -> 422.
-def _raise(error: UserError) -> NoReturn:
-    status = {"username_taken": 409, "last_admin": 409, "user_not_found": 404}.get(
-        error.reason, 422
+def _identity_out(row: UserIdentity) -> LinkedIdentityOut:
+    return LinkedIdentityOut(
+        id=row.id,
+        provider=row.provider.name,
+        subject=row.subject,
+        email_at_link=row.email_at_link,
+        created_at=row.created_at,
+        last_login_at=row.last_login_at,
     )
-    raise ApiError(status, error.reason, error.detail)
+
+
+def _summary(user: User, roles: list[str], identities: list[UserIdentity]) -> UserSummary:
+    return UserSummary(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        display_name=user.display_name,
+        is_active=user.is_active,
+        roles=roles,
+        identities=[_identity_out(row) for row in identities],
+    )
+
+
+async def summary_of(db: SessionDep, user: User) -> UserSummary:
+    """One user's summary, read fresh (roles and identities)."""
+    roles = (await _global_roles_by_user(db)).get(user.id, [])
+    identities = (await user_management.identities_by_user(db)).get(user.id, [])
+    return _summary(user, roles, identities)
+
+
+# Conflicts -> 409; missing user/identity -> 404; unknown_roles -> 422.
+_STATUS = {
+    "username_taken": 409,
+    "email_taken": 409,
+    "last_admin": 409,
+    "user_not_found": 404,
+    "identity_not_found": 404,
+    "unknown_roles": 422,
+}
+
+
+def _raise(error: UserError) -> NoReturn:
+    raise ApiError(_STATUS[error.reason], error.reason, error.detail)
 
 
 @router.post("", status_code=201)
-async def create(body: CreateUserRequest, db: SessionDep) -> UserSummary:
-    result = await create_user(db, body.username, body.password, body.roles)
+async def create(body: CreateUserRequest, db: SessionDep) -> UserCreatedOut:
+    result = await create_user(
+        db,
+        username=body.username,
+        email=body.email,
+        display_name=body.display_name,
+        password=body.password,
+        role_names=body.roles,
+        commit=True,
+    )
     if isinstance(result, Err):
         _raise(result.error)
-    roles = (await _global_roles_by_user(db)).get(result.value.id, [])
-    return _summary(result.value, roles)
+    return UserCreatedOut(
+        user=await summary_of(db, result.value.user),
+        generated_password=result.value.generated_password,
+    )
 
 
 @router.get("")
 async def list_all(db: SessionDep) -> list[UserSummary]:
     roles_by_user = await _global_roles_by_user(db)
-    return [_summary(user, roles_by_user.get(user.id, [])) for user in await list_users(db)]
+    identities = await user_management.identities_by_user(db)
+    return [
+        _summary(user, roles_by_user.get(user.id, []), identities.get(user.id, []))
+        for user in await list_users(db)
+    ]
 
 
 @router.get("/{user_id}")
@@ -102,8 +189,28 @@ async def get_one(user_id: uuid.UUID, db: SessionDep) -> UserSummary:
     user = await user_management.get_user(db, user_id)
     if user is None:
         _raise(UserError("user_not_found"))
-    roles = (await _global_roles_by_user(db)).get(user.id, [])
-    return _summary(user, roles)
+    return await summary_of(db, user)
+
+
+@router.put("/{user_id}/profile")
+async def update_profile(
+    user_id: uuid.UUID, body: SetProfileRequest, db: SessionDep
+) -> UserSummary:
+    # Any user, the caller included — how an admin replaces their own
+    # backfilled `<username>@users.invalid` (delta 33).
+    result = await user_management.set_profile(
+        db, user_id, email=body.email, display_name=body.display_name
+    )
+    if isinstance(result, Err):
+        _raise(result.error)
+    return await summary_of(db, result.value)
+
+
+@router.delete("/{user_id}/identities/{identity_id}", status_code=204)
+async def unlink_identity(user_id: uuid.UUID, identity_id: uuid.UUID, db: SessionDep) -> None:
+    result = await user_management.unlink_identity(db, user_id, identity_id)
+    if isinstance(result, Err):
+        _raise(result.error)
 
 
 @router.put("/{user_id}/roles")
@@ -111,8 +218,7 @@ async def update_roles(user_id: uuid.UUID, body: SetRolesRequest, db: SessionDep
     result = await set_roles(db, user_id, body.roles)
     if isinstance(result, Err):
         _raise(result.error)
-    roles = (await _global_roles_by_user(db)).get(result.value.id, [])
-    return _summary(result.value, roles)
+    return await summary_of(db, result.value)
 
 
 @router.put("/{user_id}/password", status_code=204)
@@ -135,8 +241,7 @@ async def set_active(user_id: uuid.UUID, body: SetActiveRequest, db: SessionDep)
         _raise(result.error)
     if not body.is_active:
         await revoke_all_for_user(db, user_id)
-    roles = (await _global_roles_by_user(db)).get(result.value.id, [])
-    return _summary(result.value, roles)
+    return await summary_of(db, result.value)
 
 
 @router.delete("/{user_id}", status_code=204)

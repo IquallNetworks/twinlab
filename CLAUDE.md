@@ -150,6 +150,37 @@ with a cycle guard, and netlab INJECTS bookkeeping groups of its own
 comes from the definition while MEMBERSHIP comes from the expanded topology.
 The resolved map rides `GET /labs/{name}/facts` rather than a resource of its
 own, because a builder needs both halves at once.
+— and delta 33 SIGN-IN THROUGH OIDC PROVIDERS, implemented 2026-09-23 (after the v1.0 release
+train was parked), design record `docs/oidc.md`. Admins (`user:manage`, no new permission)
+configure any number of providers at `/oidc-providers`; each has three switches, all off by
+default: CREATE accounts, TIE a sign-in to the account holding the same VERIFIED email, and
+`trust_email` (an ABSENT `email_verified` counts, for Entra-style issuers; an explicit false
+never does). Resolution is link → tie → create (`auth/oidc/resolution.py`, pure): the durable
+identity is (provider, `sub`) in `user_identities`, email is used ONCE to find the account.
+The backend runs authorization code + PKCE on two BROWSER NAVIGATIONS
+(`/auth/oidc/{name}/login|callback`) and ends it with the ORDINARY session cookie. Provider
+tokens are discarded, so API keys/SSH/terminal/events never learn OIDC exists. The state is
+bound to the browser by a cookie, pending attempts live server-side (hashed state, consumed
+once), and a failure redirects to `/login?oidc_error=<code>` rendered from the page's OWN text
+while the detail goes to the `twinlab.oidc` log. Libraries: Authlib does the code exchange and
+joserfc (its typed JOSE successor) the ID token, asymmetric algorithms only; Authlib is untyped,
+so `backend/typings/authlib/` stubs its small surface. The same delta made `users.email`
+REQUIRED and unique case-insensitively (migration 0023 backfills `<username>@users.invalid`,
+which no provider can verify) and added a required `display_name`. `POST /users` takes an
+optional password and returns a GENERATED one once (`UserCreated`). Only an admin edits an
+email, their own included: self-service email change would let a user capture a colleague's
+first tie. Client secrets are Fernet-encrypted under `OIDC_SECRET_KEY` (compose-required,
+optional in code). Provider icons are admin uploads served INLINE as `data:` URIs, which is
+what makes SVG safe without a sanitizer, and no brand logos ship. `FRONTEND_BASE_PATH` became a
+REQUIRED deployment setting (compose `?`: empty = root) shared with the backend, which builds
+the callback from it and the optional `PUBLIC_ORIGIN` (unset = OIDC off). The TEST provider is
+`oidc-test/compose.yaml`, an overlay adding Dex to any stack; the e2e stack always layers it
+(DEX_PORT 5456), and the blackbox `oidc` marker needs it plus `TWINLAB_DEX_ISSUER`. Its issuer
+host is `dex.localhost`, because browsers and the host resolve `*.localhost` to loopback
+themselves and the overlay maps it to host-gateway inside the backend, so both sides see ONE
+issuer URL. Just before it, the whole tree moved from **httpx to httpx2**, the
+Pydantic-maintained continuation (BSD-3, a pure rename of httpx 0.28.1, which has had no release
+since December 2024) that Authlib 1.8 expects.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, versioned 0.9.0 like the whole tree, publication pending), **`blackbox/`**

@@ -20,6 +20,7 @@ from _config import (
     LabFactory,
     SuiteConfig,
     UserClientFactory,
+    create_bb_user,
 )
 
 
@@ -97,7 +98,7 @@ async def make_user_client(
     made: list[tuple[UserSummary, TwinlabClient]] = []
 
     async def factory(roles: set[str] | None) -> tuple[UserSummary, TwinlabClient]:
-        summary = await admin.create_user(unique("user"), DEFAULT_PASSWORD, roles)
+        summary = await create_bb_user(admin, unique("user"), roles=roles)
         client = TwinlabClient(config.base_url)
         _ = await client.login(summary.username, DEFAULT_PASSWORD)
         made.append((summary, client))

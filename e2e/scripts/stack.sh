@@ -14,6 +14,9 @@
 #                         and id sequences survive — so the gated run stays on
 #                         reset.
 #
+# The test OIDC provider (oidc-test/compose.yaml: Dex, on DEX_PORT from
+# stack.env) is always layered in — the sign-in specs drive it.
+#
 # `dev` layers compose.dev.yaml in: the frontend becomes the Vite dev server
 # over bind-mounted source (HMR), so frontend edits need NO rebuild between
 # runs. Both modes share one image tag — up/reset always pass --build, so
@@ -40,6 +43,7 @@ compose() {
   docker compose -p twinlab-e2e \
     --env-file "${repo}/.env" --env-file "${repo}/e2e/stack.env" \
     -f "${repo}/compose.yaml" "${overlay[@]}" -f "${repo}/e2e/compose.e2e.yaml" \
+    -f "${repo}/oidc-test/compose.yaml" \
     "$@"
 }
 

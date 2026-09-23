@@ -12,6 +12,8 @@ export interface StackEnv {
   adminUsername: string
   adminPassword: string
   labFilesDir: string
+  // The test OIDC provider layered onto the stack (oidc-test/compose.yaml).
+  dexIssuer: string
 }
 
 // stack.env is the single source of truth for the e2e stack AND the suite —
@@ -39,5 +41,8 @@ export function stackEnv(): StackEnv {
     adminUsername: need('BOOTSTRAP_ADMIN_USERNAME'),
     adminPassword: need('BOOTSTRAP_ADMIN_PASSWORD'),
     labFilesDir: need('LAB_FILES_DIR'),
+    // dex.localhost: browsers resolve *.localhost to loopback on their own,
+    // and the overlay maps it to the host gateway inside the backend.
+    dexIssuer: `http://dex.localhost:${need('DEX_PORT')}/dex`,
   }
 }

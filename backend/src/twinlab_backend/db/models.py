@@ -18,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Table,
     Text,
@@ -56,10 +57,19 @@ group_members = Table(
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (Index("uq_users_email_lower", text("lower(email)"), unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    # The password-login name and the RBAC principal name.
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    email: Mapped[str | None] = mapped_column(String(320), default=None)
+    # Required and unique CASE-INSENSITIVELY (the functional index below;
+    # contract delta 33): an email is what OIDC tying matches on, and "Ana@x"
+    # and "ana@x" are one mailbox in practice. Stored as entered.
+    email: Mapped[str] = mapped_column(String(320))
+    # What the UI shows; `username` stays the machine-facing name.
+    display_name: Mapped[str] = mapped_column(String(128))
+    # Always set, even for a user who signs in only through a provider: they get
+    # a random one nobody sees (delta 33), so there is no password-less state.
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -416,3 +426,90 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User] = relationship(lazy="selectin")
+
+
+class OidcProvider(Base):
+    """An admin-configured OIDC provider (contract delta 33, docs/oidc.md).
+
+    `name` and `issuer` are immutable once created: the name is part of the
+    callback URL registered at the provider, and identities are keyed by the
+    provider row, so re-pointing it at another issuer would map one issuer's
+    subjects onto another's people."""
+
+    __tablename__ = "oidc_providers"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    name: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(64))
+    issuer: Mapped[str] = mapped_column(String(512), unique=True)
+    client_id: Mapped[str] = mapped_column(String(255))
+    # The Fernet token of the client secret (OIDC_SECRET_KEY) — retrievable,
+    # since it is sent to the token endpoint, so encrypted rather than hashed.
+    # NULL = a public client (PKCE alone).
+    client_secret_encrypted: Mapped[str | None] = mapped_column(Text(), default=None)
+    scopes: Mapped[list[str]] = mapped_column(JSONB())
+    allow_create_users: Mapped[bool] = mapped_column(Boolean())
+    allow_email_tying: Mapped[bool] = mapped_column(Boolean())
+    trust_email: Mapped[bool] = mapped_column(Boolean())
+    # Joined by a user this provider CREATES, never re-applied on later sign-ins.
+    default_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), default=None
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean())
+    # The button icon: raw bytes + their sniffed media type, both or neither.
+    icon: Mapped[bytes | None] = mapped_column(LargeBinary(), default=None)
+    icon_type: Mapped[str | None] = mapped_column(String(32), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    default_group: Mapped[Group | None] = relationship(lazy="selectin")
+
+
+class UserIdentity(Base):
+    """A provider identity linked to a user (delta 33). (provider, subject) is
+    OIDC's stable identity — the link, not the email, is what a later sign-in
+    resolves through. At most one per (user, provider)."""
+
+    __tablename__ = "user_identities"
+    __table_args__ = (
+        UniqueConstraint("provider_id", "subject", name="uq_identity_provider_subject"),
+        UniqueConstraint("user_id", "provider_id", name="uq_identity_user_provider"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("oidc_providers.id", ondelete="CASCADE"), index=True
+    )
+    # OIDC caps nothing, but 255 is the spec's own recommended ceiling for `sub`.
+    subject: Mapped[str] = mapped_column(String(255))
+    # The claim's email when the link was made — audit only; the claim drifts.
+    email_at_link: Mapped[str] = mapped_column(String(320))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    provider: Mapped[OidcProvider] = relationship(lazy="selectin")
+
+
+class OidcLoginAttempt(Base):
+    """One sign-in in flight (delta 33): what the callback needs to finish it.
+    Server-side rather than a signed cookie, so Twinlab keeps ONE session
+    mechanism; the state is stored only as its sha256, like session tokens.
+    Consumed by the callback whatever the outcome; expired rows are swept when
+    a new sign-in starts."""
+
+    __tablename__ = "oidc_login_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    provider_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("oidc_providers.id", ondelete="CASCADE")
+    )
+    nonce: Mapped[str] = mapped_column(String(128))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    next_path: Mapped[str] = mapped_column(Text())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

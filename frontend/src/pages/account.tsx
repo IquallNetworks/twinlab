@@ -45,7 +45,13 @@ import { ApiError, api } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { toastError } from '@/lib/error-toast'
 import { formatDateTime } from '@/lib/format'
-import { apiKeysQueryOptions, sshAccessQueryOptions, sshKeysQueryOptions } from '@/lib/queries'
+import { isPlaceholderEmail } from '@/lib/oidc'
+import {
+  apiKeysQueryOptions,
+  meQueryOptions,
+  sshAccessQueryOptions,
+  sshKeysQueryOptions,
+} from '@/lib/queries'
 import { JUMP_HOST_ALIAS, jumpCoordinates, sshConfigBlock } from '@/lib/ssh'
 import { useDocumentTitle } from '@/lib/use-document-title'
 
@@ -118,6 +124,83 @@ function DeleteKeyAction({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+const displayNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'Display name is required')
+  .max(128, 'At most 128 characters')
+
+/** The caller's own profile. The display name edits in place; the email is
+ * READ-ONLY here on purpose — with provider sign-in tying accounts by email, a
+ * user who could set their own address to a colleague's would receive that
+ * colleague's first provider sign-in. An administrator changes it. */
+function ProfileCard() {
+  const queryClient = useQueryClient()
+  const { data: me } = useQuery(meQueryOptions)
+  const [draft, setDraft] = useState<string | null>(null)
+  const value = draft ?? me?.display_name ?? ''
+  const parsed = displayNameSchema.safeParse(value)
+  const dirty = me !== undefined && value.trim() !== me.display_name
+
+  const save = useMutation({
+    mutationFn: (displayName: string) => api.updateOwnProfile(displayName),
+    onSuccess: (info) => {
+      queryClient.setQueryData(meQueryOptions.queryKey, info)
+      setDraft(null)
+      toast.success('Display name updated')
+    },
+    onError: (err) => toastError(err, 'Could not update your display name'),
+  })
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Profile</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (parsed.success && dirty) save.mutate(parsed.data)
+          }}
+        >
+          <Label htmlFor="own-display-name">Display name</Label>
+          <div className="flex gap-2">
+            <Input
+              id="own-display-name"
+              className="max-w-sm"
+              value={value}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <Button type="submit" disabled={!parsed.success || !dirty || save.isPending}>
+              {save.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+          {!parsed.success && (
+            <FieldError errors={parsed.error.issues.map((issue) => issue.message)} />
+          )}
+        </form>
+        <div className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Email</span>
+          <span>{me?.email}</span>
+          <span className="text-xs text-muted-foreground">
+            {me !== undefined && isPlaceholderEmail(me.email)
+              ? me.permissions.includes('user:manage')
+                ? 'A placeholder from the upgrade. Set your real address from your row under Users → Profile.'
+                : 'A placeholder from the upgrade. Ask an administrator to set your real address.'
+              : 'Only an administrator can change it: sign-in providers link accounts by email.'}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Username</span>
+          <span className="font-mono">{me?.username}</span>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -713,6 +796,7 @@ export function AccountPage() {
   return (
     <div className="flex flex-col gap-6">
       <h1 className="font-heading text-2xl font-semibold">Account</h1>
+      <ProfileCard />
       <PasswordCard />
       <ApiKeysCard />
       <SshKeysCard />

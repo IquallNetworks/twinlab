@@ -1,5 +1,6 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Copy } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -42,7 +43,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
+import { copyText } from '@/lib/clipboard'
 import { toastError } from '@/lib/error-toast'
+import { formatDateTime } from '@/lib/format'
+import { isEmailAddress, isPlaceholderEmail } from '@/lib/oidc'
 import { meQueryOptions, rolesQueryOptions, usersQueryOptions } from '@/lib/queries'
 import { globalRoles } from '@/lib/roles'
 import type { UserSummary } from '@/lib/schemas'
@@ -87,30 +91,99 @@ function toggle(list: string[], role: string, checked: boolean): string[] {
   return [...set]
 }
 
+// Mirrors the server's own rules (delta 33): a structural email, a display
+// name of 1–128 characters, and a password that is EITHER empty (the server
+// generates one) or at least 8 characters.
+const emailField = z
+  .string()
+  .max(320, 'At most 320 characters')
+  .refine(isEmailAddress, 'Enter an email address, like ana@example.com')
+const displayNameField = z
+  .string()
+  .trim()
+  .min(1, 'Display name is required')
+  .max(128, 'At most 128 characters')
+
 const createUserSchema = z.object({
-  username: z.string().min(1, 'Username is required'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  username: z.string().min(1, 'Username is required').max(64, 'At most 64 characters'),
+  email: emailField,
+  display_name: displayNameField,
+  password: z
+    .string()
+    .refine((value) => value === '' || value.length >= 8, 'Password must be at least 8 characters'),
   roles: z.array(z.string()),
 })
 
+/** A server-generated password, shown exactly ONCE — it is not stored in a
+ * readable form anywhere, so closing the dialog is the last chance to copy it. */
+function GeneratedPassword({ username, password }: { username: string; password: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <pre className="bg-muted flex-1 rounded-md p-3 font-mono text-sm break-all">{password}</pre>
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Copy password"
+          aria-label="Copy password"
+          onClick={() =>
+            void copyText(password).then((ok) =>
+              ok ? toast.success('Copied password') : toast.error('Copy failed'),
+            )
+          }
+        >
+          <Copy className="size-4" />
+        </Button>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        Give this to {username} now. It is shown only once; after that it can only be reset.
+      </p>
+    </div>
+  )
+}
+
 function CreateUserDialog() {
   const [open, setOpen] = useState(false)
+  // Set when the server generated the password: the dialog then shows it
+  // instead of the form, until closed.
+  const [generated, setGenerated] = useState<{ username: string; password: string } | null>(null)
   const queryClient = useQueryClient()
   const { data: roleCatalog } = useQuery(rolesQueryOptions)
   const globalRoleNames = globalRoles(roleCatalog ?? []).map((r) => r.name)
 
   const create = useMutation({
-    mutationFn: (value: z.infer<typeof createUserSchema>) => api.createUser(value),
-    onSuccess: async (user) => {
+    mutationFn: (value: z.infer<typeof createUserSchema>) =>
+      api.createUser({
+        username: value.username,
+        email: value.email,
+        display_name: value.display_name.trim(),
+        // Empty = omitted: the server generates one and returns it once.
+        ...(value.password !== '' ? { password: value.password } : {}),
+        roles: value.roles,
+      }),
+    onSuccess: async ({ user, generated_password }) => {
       await queryClient.invalidateQueries({ queryKey: usersQueryOptions.queryKey })
       toast.success(`Created user ${user.username}`)
-      setOpen(false)
+      // The form is spent either way: a reopened dialog must start empty, or a
+      // left-over password would silently replace the generated one.
+      form.reset()
+      if (generated_password !== null) {
+        setGenerated({ username: user.username, password: generated_password })
+      } else {
+        setOpen(false)
+      }
     },
     onError: (err) => toastError(err, 'Could not create user'),
   })
 
   const form = useForm({
-    defaultValues: { username: '', password: '', roles: [] as string[] },
+    defaultValues: {
+      username: '',
+      email: '',
+      display_name: '',
+      password: '',
+      roles: [] as string[],
+    },
     validators: { onSubmit: createUserSchema },
     onSubmit: async ({ value }) => {
       await create.mutateAsync(value)
@@ -122,13 +195,30 @@ function CreateUserDialog() {
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (!next) form.reset()
+        if (!next) {
+          form.reset()
+          setGenerated(null)
+        }
       }}
     >
       <DialogTrigger asChild>
         <Button>New user</Button>
       </DialogTrigger>
       <DialogContent>
+        {generated !== null ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Created {generated.username}</DialogTitle>
+              <DialogDescription>The server generated this password.</DialogDescription>
+            </DialogHeader>
+            <GeneratedPassword username={generated.username} password={generated.password} />
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button">Done</Button>
+              </DialogClose>
+            </DialogFooter>
+          </>
+        ) : (
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -157,6 +247,38 @@ function CreateUserDialog() {
               )}
             </form.Field>
 
+            <form.Field name="display_name">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={field.name}>Display name</Label>
+                  <Input
+                    id={field.name}
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+
+            <form.Field name="email">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={field.name}>Email</Label>
+                  <Input
+                    id={field.name}
+                    inputMode="email"
+                    autoComplete="off"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+
             <form.Field name="password">
               {(field) => (
                 <div className="flex flex-col gap-2">
@@ -164,6 +286,7 @@ function CreateUserDialog() {
                   <PasswordInput
                     id={field.name}
                     autoComplete="new-password"
+                    placeholder="leave empty to generate"
                     value={field.state.value}
                     onBlur={field.handleBlur}
                     onChange={(e) => field.handleChange(e.target.value)}
@@ -203,6 +326,166 @@ function CreateUserDialog() {
                 </Button>
               )}
             </form.Subscribe>
+          </DialogFooter>
+        </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const profileSchema = z.object({ email: emailField, display_name: displayNameField })
+
+/** One place that shows AND edits a user's profile: the email and display name
+ * seeded from the record, and the provider identities linked to the account.
+ * Any user — the caller included, which is how an admin replaces their own
+ * migration placeholder. Unlinking sends the next sign-in through that provider
+ * back through the tie/create rules: how a tie to the wrong account is repaired. */
+function ProfileDialog({ user }: { user: UserSummary }) {
+  const [open, setOpen] = useState(false)
+  const queryClient = useQueryClient()
+
+  const save = useMutation({
+    mutationFn: (value: z.infer<typeof profileSchema>) =>
+      api.updateUserProfile(user.id, {
+        email: value.email,
+        display_name: value.display_name.trim(),
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: usersQueryOptions.queryKey })
+      // The caller may have edited their own profile, which `me` carries.
+      await queryClient.invalidateQueries({ queryKey: meQueryOptions.queryKey })
+      toast.success(`Updated profile of ${user.username}`)
+      setOpen(false)
+    },
+    onError: (err) => toastError(err, 'Could not update profile'),
+  })
+
+  const unlink = useMutation({
+    mutationFn: (identityId: string) => api.unlinkIdentity(user.id, identityId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: usersQueryOptions.queryKey })
+      toast.success('Identity unlinked')
+    },
+    onError: (err) => toastError(err, 'Could not unlink identity'),
+  })
+
+  const form = useForm({
+    defaultValues: { email: user.email, display_name: user.display_name },
+    validators: { onSubmit: profileSchema },
+    onSubmit: ({ value }) => save.mutate(value),
+  })
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) form.reset({ email: user.email, display_name: user.display_name })
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          Profile
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            void form.handleSubmit()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Profile of {user.username}</DialogTitle>
+            <DialogDescription>
+              The email is what a provider sign-in ties to, so only an administrator changes it.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4 py-4">
+            <form.Field name="display_name">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`profile-${user.id}-name`}>Display name</Label>
+                  <Input
+                    id={`profile-${user.id}-name`}
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+            <form.Field name="email">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`profile-${user.id}-email`}>Email</Label>
+                  <Input
+                    id={`profile-${user.id}-email`}
+                    inputMode="email"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  {isPlaceholderEmail(field.state.value) && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      A placeholder from the upgrade. Replace it with a real address — until then
+                      no provider sign-in can be tied to this account.
+                    </p>
+                  )}
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+
+            <div className="flex flex-col gap-2">
+              <Label>Linked sign-in providers</Label>
+              {user.identities.length === 0 ? (
+                <p className="text-sm text-muted-foreground">None — password sign-in only.</p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {user.identities.map((identity) => (
+                    <li
+                      key={identity.id}
+                      className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium">{identity.provider}</div>
+                        <div className="truncate font-mono text-xs text-muted-foreground">
+                          {identity.email_at_link} · last sign-in{' '}
+                          {identity.last_login_at !== null
+                            ? formatDateTime(identity.last_login_at)
+                            : 'never'}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={unlink.isPending}
+                        onClick={() => unlink.mutate(identity.id)}
+                      >
+                        Unlink
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={save.isPending}>
+              {save.isPending ? 'Saving…' : 'Save'}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -566,7 +849,8 @@ export function UsersPage() {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>Username</TableHead>
+              <TableHead>User</TableHead>
+              <TableHead>Email</TableHead>
               <TableHead>Roles</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -576,21 +860,45 @@ export function UsersPage() {
             {isPending ? (
               Array.from({ length: 3 }).map((_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={4}>
+                  <TableCell colSpan={5}>
                     <Skeleton className="h-6 w-full" />
                   </TableCell>
                 </TableRow>
               ))
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
                   <span className="font-mono text-xs tracking-wide uppercase">no users</span>
                 </TableCell>
               </TableRow>
             ) : (
               users.map((user) => (
                 <TableRow key={user.id}>
-                  <TableCell className="font-mono text-sm font-medium">{user.username}</TableCell>
+                  <TableCell>
+                    <div className="font-medium">{user.display_name}</div>
+                    <div className="font-mono text-xs text-muted-foreground">{user.username}</div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-sm">{user.email}</span>
+                      <div className="flex flex-wrap gap-1">
+                        {isPlaceholderEmail(user.email) && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500/60 text-amber-600 dark:text-amber-400"
+                            title="A placeholder from the upgrade — set a real address in Profile"
+                          >
+                            placeholder
+                          </Badge>
+                        )}
+                        {user.identities.map((identity) => (
+                          <Badge key={identity.id} variant="secondary" title="Linked provider">
+                            {identity.provider}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {user.roles.length === 0 ? (
@@ -615,6 +923,7 @@ export function UsersPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
+                      <ProfileDialog user={user} />
                       <EditRolesDialog user={user} />
                       <ResetPasswordDialog user={user} isSelf={isSelf(user)} />
                       <SetActiveButton

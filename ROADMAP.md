@@ -1779,6 +1779,30 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
     above `pass` — a decision about what a badge means, parked for its own
     discussion.
 
+### Sign-in through OIDC providers (contract delta 33) · **done 2026-09-23** (opened and implemented the same day)
+
+Opened after the release train was parked. Design record `docs/oidc.md`; the shapes are drafted
+in the contract as `PROPOSED (delta 33)`.
+
+- **Providers.** Admins (`user:manage`) configure any number of OIDC providers. Each may create
+  accounts and/or tie a sign-in to an existing account by VERIFIED email; a `trust_email` switch
+  lets an absent `email_verified` count, for Entra-style issuers.
+- **Sessions.** The backend runs the authorization-code + PKCE flow and ends it with the ordinary
+  Twinlab session, discarding the provider's tokens. Sign out stays local, and password login
+  stays.
+- **Groups.** There is no claim-to-group mapping; a per-provider default group is joined at
+  creation only.
+- **Configuration.** Client secrets are Fernet-encrypted under `OIDC_SECRET_KEY`. Providers carry
+  admin-uploaded icons, and no brand logos are shipped. The callback URL is `PUBLIC_ORIGIN` +
+  `FRONTEND_BASE_PATH`, and the base path becomes REQUIRED for every deployment.
+- **Users.** `users.email` becomes required and unique (backfilled `<username>@users.invalid`),
+  a required `display_name` is added, `POST /users` can generate a password it returns once, and
+  `BOOTSTRAP_ADMIN_EMAIL` becomes required.
+- **Dependencies approved:** Authlib (BSD-3), `cryptography` as a direct dependency (Apache-2.0
+  OR BSD-3) and Dex (Apache-2.0, test provider).
+
+Review round 1 (2026-09-23) resolved all five open questions; implemented the same day, preceded by the tree-wide move from httpx to httpx2 that Authlib 1.8 expects.
+
 ### i18n · **deferred**
 
 Internationalization is deferred project-wide, not just for the frontend rework

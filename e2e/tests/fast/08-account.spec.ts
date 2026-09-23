@@ -43,7 +43,7 @@ test('API keys: create, one-time reveal, revoke', async ({ page }) => {
   await expect(page.getByText('No API keys.')).toBeVisible()
 
   await page.getByRole('button', { name: 'New API key' }).click()
-  await page.getByLabel('Name').fill('e2e-ci')
+  await page.getByLabel('Name', { exact: true }).fill('e2e-ci')
   await page.getByRole('button', { name: 'Create' }).click()
   await expect(
     page.getByText('This key is shown only once — store it now. It is kept hashed server-side.'),

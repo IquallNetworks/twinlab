@@ -1,9 +1,12 @@
 import { useForm } from '@tanstack/react-form'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
+import { Copy } from 'lucide-react'
+import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { FieldError } from '@/components/field-error'
+import { ProviderButton } from '@/components/oidc/provider-button'
 import { PasswordInput } from '@/components/password-input'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
@@ -12,8 +15,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Wordmark } from '@/components/wordmark'
 import { api } from '@/lib/api'
+import { API_BASE } from '@/lib/base-path'
+import { copyText } from '@/lib/clipboard'
 import { toastError } from '@/lib/error-toast'
-import { meQueryOptions } from '@/lib/queries'
+import { oidcErrorMessage, providerLoginUrl } from '@/lib/oidc'
+import { loginProvidersQueryOptions, meQueryOptions } from '@/lib/queries'
 import { useDocumentTitle } from '@/lib/use-document-title'
 
 const loginSchema = z.object({
@@ -21,7 +27,62 @@ const loginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 })
 
-export function LoginPage() {
+/** A failed provider sign-in, as the callback reported it. The text is the
+ * page's own for the code (lib/oidc.ts) — never provider-supplied. Copyable,
+ * like every failure in the UI: the code is what an admin needs to look up. */
+function OidcError({ code }: { code: string }) {
+  const message = oidcErrorMessage(code)
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm text-destructive"
+    >
+      <p className="flex-1">
+        {message} <span className="font-mono text-xs opacity-80">({code})</span>
+      </p>
+      <button
+        type="button"
+        title="Copy error"
+        aria-label="Copy error"
+        className="shrink-0 opacity-70 hover:opacity-100"
+        onClick={() =>
+          void copyText(`${message}\n${code}`).then((ok) =>
+            ok ? toast.success('Copied') : toast.error('Copy failed'),
+          )
+        }
+      >
+        <Copy className="size-4" />
+      </button>
+    </div>
+  )
+}
+
+/** One button per enabled provider, below the password form and outside it.
+ * Nothing renders while there are none (or the list cannot be read): password
+ * sign-in must never wait on, or be blocked by, provider sign-in. */
+function ProviderSignIn() {
+  const { data: providers } = useQuery(loginProvidersQueryOptions)
+  if (providers === undefined || providers.length === 0) return null
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3 font-mono text-[0.65rem] tracking-wide text-muted-foreground uppercase">
+        <span className="h-px flex-1 bg-border" />
+        or
+        <span className="h-px flex-1 bg-border" />
+      </div>
+      {providers.map((provider) => (
+        <ProviderButton
+          key={provider.name}
+          displayName={provider.display_name}
+          icon={provider.icon}
+          href={providerLoginUrl(API_BASE, provider.name, '/')}
+        />
+      ))}
+    </div>
+  )
+}
+
+export function LoginPage({ oidcError }: { oidcError?: string }) {
   useDocumentTitle('Sign in')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -60,7 +121,8 @@ export function LoginPage() {
             <CardTitle className="font-heading">Sign in</CardTitle>
             <CardDescription>Use your Twinlab account credentials.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-col gap-4">
+            {oidcError !== undefined && <OidcError code={oidcError} />}
             <form
               className="flex flex-col gap-4"
               onSubmit={(e) => {
@@ -111,6 +173,7 @@ export function LoginPage() {
                 )}
               </form.Subscribe>
             </form>
+            <ProviderSignIn />
           </CardContent>
         </Card>
 

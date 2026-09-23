@@ -22,7 +22,8 @@ async function viewerPage(browser: Browser): Promise<Page> {
 test('the viewer dashboard hides every admin affordance', async ({ browser }) => {
   const page = await viewerPage(browser)
 
-  await expect(page.getByRole('main').getByText(VIEWER.username, { exact: true })).toBeVisible()
+  // People are greeted by display name, not username (delta 33).
+  await expect(page.getByRole('main').getByText(VIEWER.displayName, { exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: 'New lab' })).toHaveCount(0)
   await expect(page.getByText('Administration')).toHaveCount(0)
   await expect(page.getByText('Nothing has been shared with you yet —')).toBeVisible()

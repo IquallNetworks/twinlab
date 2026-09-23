@@ -26,6 +26,7 @@ from twinlab_client import _wire
 from twinlab_client._terminal import TerminalSession
 from twinlab_client.errors import TwinlabProtocolError, error_from_response
 from twinlab_client.models import (
+    UNCHANGED,
     ApiKey,
     ApiKeyCreated,
     ConfigDiffReport,
@@ -54,6 +55,7 @@ from twinlab_client.models import (
     LayoutGroupStyle,
     LayoutPosition,
     Liveness,
+    LoginProvider,
     NetemAction,
     NetemImpairment,
     NetworkImport,
@@ -64,6 +66,8 @@ from twinlab_client.models import (
     NodeLogsResponse,
     NodePowerAction,
     NodeTemplate,
+    OidcIconType,
+    OidcProvider,
     PowerAction,
     Principals,
     Readiness,
@@ -78,6 +82,8 @@ from twinlab_client.models import (
     TestCaseDryRunResult,
     TestSuite,
     TestSuitesResponse,
+    Unchanged,
+    UserCreated,
     UserInfo,
     UserSummary,
     WiringEntry,
@@ -148,8 +154,16 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         json_body: object | None = None,
         params: dict[str, str | int | bool] | None = None,
         long: bool = False,
+        content: tuple[bytes, str] | None = None,
     ) -> httpx2.Response:
-        if long:
+        """`content` = a raw (body, media type) pair, for the one endpoint that
+        takes bytes rather than JSON (a provider icon)."""
+        if content is not None:
+            body, media_type = content
+            response = await self._http.request(
+                method, path, content=body, headers={"Content-Type": media_type}
+            )
+        elif long:
             response = await self._http.request(
                 method, path, json=json_body, params=params, timeout=self._action_timeout
             )
@@ -167,8 +181,11 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         json_body: object | None = None,
         params: dict[str, str | int | bool] | None = None,
         long: bool = False,
+        content: tuple[bytes, str] | None = None,
     ) -> object:
-        response = await self._send(method, path, json_body=json_body, params=params, long=long)
+        response = await self._send(
+            method, path, json_body=json_body, params=params, long=long, content=content
+        )
         try:
             return response.json()
         except ValueError as exc:
@@ -237,6 +254,27 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
             json_body={"current_password": current, "new_password": new},
         )
 
+    async def update_own_profile(self, display_name: str) -> UserInfo:
+        """PUT /auth/profile — the caller's own display name (1 to 128 chars).
+        Deliberately not the email: with OIDC email tying, a user who could set
+        their own address to a colleague's would receive that colleague's first
+        provider sign-in. Only an admin edits an email (`update_user_profile`)."""
+        payload = await self._send_json(
+            "PUT", "/auth/profile", json_body={"display_name": display_name}
+        )
+        return _wire.parse_user_info(payload)
+
+    # OIDC sign-in (delta 33) is BROWSER-ONLY and has no method here: a person
+    # has to be at the provider's login form. An OIDC user automates by
+    # signing in through the browser once and creating an API key.
+
+    async def login_providers(self) -> list[LoginProvider]:
+        """GET /auth/oidc/providers — UNAUTHENTICATED; the enabled providers,
+        for a login page. Empty when none are configured or the deployment's
+        PUBLIC_ORIGIN is unset."""
+        payload = await self._send_json("GET", "/auth/oidc/providers")
+        return [_wire.parse_login_provider(v) for v in _wire.as_list(payload, "LoginProvider[]")]
+
     async def create_api_key(self, name: str) -> ApiKeyCreated:
         """POST /auth/api-keys — 201. The secret is returned only here.
         409 name_taken (per user)."""
@@ -301,15 +339,49 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # ------------------------------------------------------------------ #
 
     async def create_user(
-        self, username: str, password: str, roles: set[str] | None = None
-    ) -> UserSummary:
+        self,
+        username: str,
+        email: str,
+        display_name: str,
+        *,
+        password: str | None = None,
+        roles: set[str] | None = None,
+    ) -> UserCreated:
         """POST /users — 201. `roles` = GLOBAL roles; omitted/empty = the
-        baseline "user" role (authenticated, no access). 409 username_taken;
-        422 unknown_roles; password min 8."""
-        body: dict[str, object] = {"username": username, "password": password}
+        baseline "user" role (authenticated, no access). `password` omitted =
+        the server generates one and returns it ONCE on
+        `UserCreated.generated_password`. 409 username_taken / email_taken
+        (emails are unique case-insensitively); 422 unknown_roles; password
+        min 8."""
+        body: dict[str, object] = {
+            "username": username,
+            "email": email,
+            "display_name": display_name,
+        }
+        if password is not None:
+            body["password"] = password
         if roles is not None:
             body["roles"] = sorted(roles)
-        return _wire.parse_user_summary(await self._send_json("POST", "/users", json_body=body))
+        return _wire.parse_user_created(await self._send_json("POST", "/users", json_body=body))
+
+    async def update_user_profile(
+        self, user_id: UUID, *, email: str, display_name: str
+    ) -> UserSummary:
+        """PUT /users/{user_id}/profile — both fields, for ANY user including the
+        caller. 404 user_not_found; 409 email_taken. The user's linked
+        identities are untouched."""
+        payload = await self._send_json(
+            "PUT",
+            f"/users/{user_id}/profile",
+            json_body={"email": email, "display_name": display_name},
+        )
+        return _wire.parse_user_summary(payload)
+
+    async def unlink_identity(self, user_id: UUID, identity_id: UUID) -> None:
+        """DELETE /users/{user_id}/identities/{identity_id} — 204. 404
+        identity_not_found (also for another user's identity). The next sign-in
+        through that provider goes through its tie/create rules again."""
+        _ = await self._send("DELETE", f"/users/{user_id}/identities/{identity_id}")
 
     async def list_users(self) -> list[UserSummary]:
         """GET /users. No pagination anywhere (explicit v1.0 decision)."""
@@ -348,6 +420,113 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         bindings the user RECEIVED; keeps rows where they were the actor
         (owned labs -> owner NULL). Refuses deleting the last admin (409)."""
         _ = await self._send("DELETE", f"/users/{user_id}")
+
+    # ------------------------------------------------------------------ #
+    # OIDC providers (global user:manage)
+    # ------------------------------------------------------------------ #
+
+    async def list_oidc_providers(self) -> list[OidcProvider]:
+        """GET /oidc-providers — all of them, enabled or not."""
+        payload = await self._send_json("GET", "/oidc-providers")
+        return [_wire.parse_oidc_provider(v) for v in _wire.as_list(payload, "OidcProvider[]")]
+
+    async def get_oidc_provider(self, name: str) -> OidcProvider:
+        """GET /oidc-providers/{name} — 404 provider_not_found."""
+        return _wire.parse_oidc_provider(await self._send_json("GET", f"/oidc-providers/{name}"))
+
+    async def create_oidc_provider(
+        self,
+        name: str,
+        display_name: str,
+        issuer: str,
+        client_id: str,
+        *,
+        client_secret: str | None,
+        scopes: list[str] | None = None,
+        allow_create_users: bool = False,
+        allow_email_tying: bool = False,
+        trust_email: bool = False,
+        default_group_id: UUID | None = None,
+        enabled: bool = True,
+    ) -> OidcProvider:
+        """POST /oidc-providers — 201. `client_secret` None = a public client
+        (PKCE alone); it is a required keyword so a confidential client is never
+        created without its secret by omission. `scopes` None = the server's
+        default (openid, email, profile); the three switches default OFF, the
+        safe state. The server fetches the issuer's discovery document first:
+        422 oidc_discovery_failed. 409 provider_name_taken / issuer_taken /
+        oidc_secret_key_unset; 422 group_not_found."""
+        body: dict[str, object] = {
+            "name": name,
+            "display_name": display_name,
+            "issuer": issuer,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "allow_create_users": allow_create_users,
+            "allow_email_tying": allow_email_tying,
+            "trust_email": trust_email,
+            "default_group_id": str(default_group_id) if default_group_id is not None else None,
+            "enabled": enabled,
+        }
+        if scopes is not None:
+            body["scopes"] = scopes
+        payload = await self._send_json("POST", "/oidc-providers", json_body=body)
+        return _wire.parse_oidc_provider(payload)
+
+    async def update_oidc_provider(
+        self,
+        name: str,
+        *,
+        display_name: str,
+        issuer: str,
+        client_id: str,
+        scopes: list[str],
+        allow_create_users: bool,
+        allow_email_tying: bool,
+        trust_email: bool,
+        default_group_id: UUID | None,
+        enabled: bool,
+        client_secret: str | None | Unchanged = UNCHANGED,
+    ) -> OidcProvider:
+        """PUT /oidc-providers/{name} — full replace, except: `issuer` must equal
+        the stored one (422 issuer_immutable), and `client_secret` is
+        write-only — UNCHANGED keeps it, a string replaces it, None removes it.
+        The icon has its own methods."""
+        body: dict[str, object] = {
+            "display_name": display_name,
+            "issuer": issuer,
+            "client_id": client_id,
+            "scopes": scopes,
+            "allow_create_users": allow_create_users,
+            "allow_email_tying": allow_email_tying,
+            "trust_email": trust_email,
+            "default_group_id": str(default_group_id) if default_group_id is not None else None,
+            "enabled": enabled,
+        }
+        if not isinstance(client_secret, Unchanged):
+            body["client_secret"] = client_secret
+        payload = await self._send_json("PUT", f"/oidc-providers/{name}", json_body=body)
+        return _wire.parse_oidc_provider(payload)
+
+    async def delete_oidc_provider(self, name: str) -> None:
+        """DELETE /oidc-providers/{name} — 204. Drops the provider's links and
+        keeps its users (see `OidcProvider.linked_users`)."""
+        _ = await self._send("DELETE", f"/oidc-providers/{name}")
+
+    async def set_oidc_provider_icon(
+        self, name: str, content: bytes, content_type: OidcIconType
+    ) -> OidcProvider:
+        """PUT /oidc-providers/{name}/icon — the raw image, at most 32 KiB. 422
+        invalid_icon when the bytes are not the declared type."""
+        payload = await self._send_json(
+            "PUT", f"/oidc-providers/{name}/icon", content=(content, content_type)
+        )
+        return _wire.parse_oidc_provider(payload)
+
+    async def clear_oidc_provider_icon(self, name: str) -> OidcProvider:
+        """DELETE /oidc-providers/{name}/icon — back to the monogram; idempotent."""
+        payload = await self._send_json("DELETE", f"/oidc-providers/{name}/icon")
+        return _wire.parse_oidc_provider(payload)
 
     # ------------------------------------------------------------------ #
     # Groups (global group:manage)

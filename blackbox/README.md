@@ -31,6 +31,20 @@ must aim a deactivation at the bootstrap admin itself — against a backend miss
 "failing" test would lock the stack out. The guard is implemented, so setting it against a current
 stack is safe; unset, the test reports as skipped.
 
+The `oidc`-marked tests (contract delta 33) sign in through a real OIDC provider, so the stack
+needs the TEST provider layered on — Dex, from `oidc-test/compose.yaml` — and the suite needs its
+issuer:
+
+```sh
+docker compose -f compose.yaml -f oidc-test/compose.yaml up -d --wait
+export TWINLAB_DEX_ISSUER=http://dex.localhost:5556/dex
+```
+
+Selecting them without the variable aborts the run rather than skipping; deselect with
+`-m "not oidc"` on a stack without Dex. They register the provider under the fixed name `dex`
+(Dex's static client allows exactly that callback) and delete Twinlab accounts holding Dex's
+three users' emails before and after each test, so an interrupted run does not poison the next.
+
 ## Conventions
 
 - Every created resource uses a unique generated name (no fixed fixtures to collide on); cleanup is
@@ -42,6 +56,9 @@ stack is safe; unset, the test reports as skipped.
   A second, same-spirit exception: the SSH-jump slices shell out to the host's OpenSSH client
   (`ssh-keygen`, `ssh`) because the feature's contract IS a standard ssh connection — the host
   needs OpenSSH installed.
+  A third: the OIDC flow slices (`_oidc.py`) play the browser with raw httpx2, following redirects
+  through Dex's own login form, because the flow's contract IS a browser navigation and the
+  headless client deliberately has no method for it.
 - Lab-deploying tests are expensive (real containerlab deploys of a tiny two-linux-node lab); they
   live in `test_labs_deploy.py` behind the `deploy` marker — deselect with `-m "not deploy"` for
   the cheap contract run. Everything else (including lab lifecycle, authoring, and grants) works on

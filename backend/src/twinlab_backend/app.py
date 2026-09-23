@@ -29,6 +29,8 @@ from twinlab_backend.api.internal import router as internal_router
 from twinlab_backend.api.jobs import fleet_router as fleet_jobs_router
 from twinlab_backend.api.jobs import router as jobs_router
 from twinlab_backend.api.labs import router as labs_router
+from twinlab_backend.api.oidc import admin_router as oidc_admin_router
+from twinlab_backend.api.oidc import router as oidc_router
 from twinlab_backend.api.roles import router as roles_router
 from twinlab_backend.api.ssh_access import router as ssh_access_router
 from twinlab_backend.api.templates import router as templates_router
@@ -36,6 +38,7 @@ from twinlab_backend.api.terminal import router as terminal_router
 from twinlab_backend.api.users import router as users_router
 from twinlab_backend.api_errors import register_error_handlers
 from twinlab_backend.auth.bootstrap import ensure_admin, seed_rbac
+from twinlab_backend.auth.oidc.metadata import OidcCache
 from twinlab_backend.config import load_settings
 from twinlab_backend.db.base import create_engine, make_session_factory
 from twinlab_backend.result import Err, Ok
@@ -96,6 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             session,
             settings.bootstrap_admin_username,
             settings.bootstrap_admin_password.get_secret_value(),
+            settings.bootstrap_admin_email,
         )
         # Any `running` job is an orphan — its in-process task died with the
         # previous process (single-process assumption: bare uvicorn, 1 worker).
@@ -123,6 +127,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     async with httpx2.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         app.state.settings = settings
+        # Discovery documents and signing keys of OIDC providers (delta 33).
+        app.state.oidc_cache = OidcCache(client=client)
         app.state.builtin_library = builtin_library
         app.state.network_templates = network_templates
         app.state.session_factory = session_factory
@@ -174,6 +180,8 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
     app.include_router(health_router, prefix=_API_PREFIX)
     app.include_router(auth_router, prefix=_API_PREFIX)
+    app.include_router(oidc_router, prefix=_API_PREFIX)
+    app.include_router(oidc_admin_router, prefix=_API_PREFIX)
     app.include_router(labs_router, prefix=_API_PREFIX)
     app.include_router(jobs_router, prefix=_API_PREFIX)
     app.include_router(fleet_jobs_router, prefix=_API_PREFIX)

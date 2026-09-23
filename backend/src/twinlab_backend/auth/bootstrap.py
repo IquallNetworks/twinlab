@@ -35,14 +35,20 @@ async def seed_rbac(session: AsyncSession) -> None:
     await session.commit()
 
 
-async def ensure_admin(session: AsyncSession, username: str, password: str) -> None:
+async def ensure_admin(session: AsyncSession, username: str, password: str, email: str) -> None:
     """Create the bootstrap admin (with a global `admin` binding), but only when there
-    are no users yet."""
+    are no users yet. Its display name is its username: it is the break-glass
+    account, and a second required variable for it would buy nothing."""
     user_count = await session.scalar(select(func.count()).select_from(User))
     if user_count:
         return
 
-    admin = User(username=username, password_hash=hash_password(password))
+    admin = User(
+        username=username,
+        email=email,
+        display_name=username,
+        password_hash=hash_password(password),
+    )
     session.add(admin)
     await session.flush()  # assign admin.id before the binding references it
     session.add(

@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from twinlab_backend.auth.oidc.metadata import OidcCache
 from twinlab_backend.config import Settings
 from twinlab_backend.services.clab_api import ClabApiClient
 from twinlab_backend.services.custom_config import BuiltinLibrary
@@ -24,6 +25,10 @@ from twinlab_backend.services.runner_client import RunnerClient
 
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def get_oidc_cache(request: Request) -> OidcCache:
+    return request.app.state.oidc_cache
 
 
 def get_hostprep_client(request: Request) -> HostPrepClient | None:
@@ -93,6 +98,7 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+OidcCacheDep = Annotated[OidcCache, Depends(get_oidc_cache)]
 BuiltinLibraryDep = Annotated[BuiltinLibrary, Depends(get_builtin_library)]
 NetworkTemplatesDep = Annotated[NetworkTemplateLibrary, Depends(get_network_templates)]
 ClabClientDep = Annotated[ClabApiClient, Depends(get_clab_client)]

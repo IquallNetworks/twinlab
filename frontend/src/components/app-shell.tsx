@@ -63,6 +63,7 @@ export function AppShell() {
             <NavLink to="/jobs">Jobs</NavLink>
             {canManageUsers && <NavLink to="/users">Users</NavLink>}
             {canManageGroups && <NavLink to="/groups">Groups</NavLink>}
+            {canManageUsers && <NavLink to="/sign-in-providers">Providers</NavLink>}
             {/* Self-service credentials — no permission gate. */}
             <NavLink to="/account">Account</NavLink>
             {/* The operator guide, served by this deployment. */}
@@ -71,7 +72,9 @@ export function AppShell() {
           <div className="ml-auto flex items-center gap-1 text-sm">
             <CommandPalette className={HEADER_GHOST} />
             <ThemeToggle className={HEADER_GHOST} />
-            <span className="px-2 font-mono text-xs text-(--id-header-muted)">{me?.username}</span>
+            <span className="px-2 text-xs text-(--id-header-muted)" title={me?.username}>
+              {me?.display_name}
+            </span>
             <Button
               variant="ghost"
               size="sm"

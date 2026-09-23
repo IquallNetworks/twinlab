@@ -43,6 +43,10 @@ import {
   customConfigResponseSchema,
   testCaseDryRunResultSchema,
   testSuitesResponseSchema,
+  loginProviderListSchema,
+  oidcProviderListSchema,
+  oidcProviderSchema,
+  userCreatedSchema,
   userInfoSchema,
   userListSchema,
   userSummarySchema,
@@ -146,8 +150,40 @@ async function requestVoid(path: string, init?: RequestInit): Promise<void> {
 
 export interface CreateUserInput {
   username: string
-  password: string
+  email: string
+  display_name: string
+  // Omitted = the server generates one and returns it ONCE on the result.
+  password?: string
   roles: string[]
+}
+
+export interface UserProfileInput {
+  email: string
+  display_name: string
+}
+
+/** Everything a provider replace states. `client_secret` is write-only:
+ * OMITTED keeps the stored secret, a string replaces it, null removes it (a
+ * public client). `issuer` must equal the stored one — it rides the body so a
+ * replace stays a complete statement of the record. */
+export interface OidcProviderReplaceInput {
+  display_name: string
+  issuer: string
+  client_id: string
+  scopes: string[]
+  allow_create_users: boolean
+  allow_email_tying: boolean
+  trust_email: boolean
+  default_group_id: string | null
+  enabled: boolean
+  client_secret?: string | null
+}
+
+export interface OidcProviderCreateInput extends Omit<OidcProviderReplaceInput, 'client_secret'> {
+  name: string
+  // REQUIRED, possibly null: a confidential client is never created without
+  // its secret by omission.
+  client_secret: string | null
 }
 
 export interface CreateGrantInput {
@@ -184,9 +220,57 @@ export const api = {
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 
+  // Only the caller's display name: self-service email change would let a user
+  // capture a colleague's first provider sign-in through email tying.
+  updateOwnProfile: (displayName: string) =>
+    request('/auth/profile', userInfoSchema, {
+      method: 'PUT',
+      body: JSON.stringify({ display_name: displayName }),
+    }),
+
   listUsers: () => request('/users', userListSchema),
   createUser: (input: CreateUserInput) =>
-    request('/users', userSummarySchema, { method: 'POST', body: JSON.stringify(input) }),
+    request('/users', userCreatedSchema, { method: 'POST', body: JSON.stringify(input) }),
+  // Admin edit of ANY user's email + display name, the caller's own included.
+  updateUserProfile: (userId: string, input: UserProfileInput) =>
+    request(`/users/${userId}/profile`, userSummarySchema, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  // The next sign-in through that provider goes through tie/create again.
+  unlinkIdentity: (userId: string, identityId: string) =>
+    requestVoid(`/users/${userId}/identities/${identityId}`, { method: 'DELETE' }),
+
+  // OIDC (delta 33). The login page's buttons — UNAUTHENTICATED; empty while
+  // the deployment has no PUBLIC_ORIGIN. The flow itself is a browser
+  // navigation (lib/oidc.ts `providerLoginUrl`), never a fetch.
+  loginProviders: () => request('/auth/oidc/providers', loginProviderListSchema),
+  listOidcProviders: () => request('/oidc-providers', oidcProviderListSchema),
+  getOidcProvider: (name: string) =>
+    request(`/oidc-providers/${encodeURIComponent(name)}`, oidcProviderSchema),
+  createOidcProvider: (input: OidcProviderCreateInput) =>
+    request('/oidc-providers', oidcProviderSchema, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  replaceOidcProvider: (name: string, input: OidcProviderReplaceInput) =>
+    request(`/oidc-providers/${encodeURIComponent(name)}`, oidcProviderSchema, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  deleteOidcProvider: (name: string) =>
+    requestVoid(`/oidc-providers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  // The raw image as the body, its own media type as Content-Type.
+  setOidcProviderIcon: (name: string, file: Blob, contentType: string) =>
+    request(`/oidc-providers/${encodeURIComponent(name)}/icon`, oidcProviderSchema, {
+      method: 'PUT',
+      body: file,
+      headers: { 'Content-Type': contentType },
+    }),
+  clearOidcProviderIcon: (name: string) =>
+    request(`/oidc-providers/${encodeURIComponent(name)}/icon`, oidcProviderSchema, {
+      method: 'DELETE',
+    }),
   setRoles: (userId: string, roles: string[]) =>
     request(`/users/${userId}/roles`, userSummarySchema, {
       method: 'PUT',

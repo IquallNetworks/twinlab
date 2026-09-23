@@ -30,6 +30,29 @@ GroupFactory = Callable[[], Awaitable[GroupSummary]]
 DEFAULT_PASSWORD: Final = f"bb-{secrets.token_urlsafe(12)}"
 ALTERNATE_PASSWORD: Final = f"bb-{secrets.token_urlsafe(12)}"  # for password-change tests
 
+# Every user carries an email (unique, case-insensitively) and a display name
+# (delta 33). Suite users get an address under the reserved `.test` TLD derived
+# from their unique name, so they never collide and never reach anyone.
+BB_EMAIL_DOMAIN: Final = "bb.test"
+
+
+async def create_bb_user(
+    admin: TwinlabClient,
+    username: str,
+    *,
+    password: str = DEFAULT_PASSWORD,
+    roles: set[str] | None = None,
+) -> UserSummary:
+    created = await admin.create_user(
+        username,
+        f"{username}@{BB_EMAIL_DOMAIN}",
+        f"Blackbox {username}",
+        password=password,
+        roles=roles,
+    )
+    return created.user
+
+
 # The seven lab-scoped permissions; a lab owner holds exactly this set implicitly.
 LAB_SCOPED_PERMISSIONS: Final[frozenset[str]] = frozenset(
     {

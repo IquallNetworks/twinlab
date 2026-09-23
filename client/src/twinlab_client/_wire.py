@@ -76,8 +76,10 @@ from twinlab_client.models import (
     LabUsage,
     LayoutGroupStyle,
     LayoutPosition,
+    LinkedIdentity,
     LinkEndpoint,
     Liveness,
+    LoginProvider,
     NetemAction,
     NetemImpairment,
     NetworkImport,
@@ -91,6 +93,7 @@ from twinlab_client.models import (
     NodeLogsResponse,
     NodeTemplate,
     NodeUsage,
+    OidcProvider,
     PowerAction,
     Principal,
     Principals,
@@ -114,6 +117,7 @@ from twinlab_client.models import (
     TestStatus,
     TestSuite,
     TestSuitesResponse,
+    UserCreated,
     UserInfo,
     UserSummary,
     ValidationTest,
@@ -312,8 +316,23 @@ def parse_user_info(value: object) -> UserInfo:
     obj = as_object(value, where)
     return UserInfo(
         username=_get_str(obj, "username", where),
+        email=_get_str(obj, "email", where),
+        display_name=_get_str(obj, "display_name", where),
         roles=_get_str_set(obj, "roles", where),
         permissions=_get_str_set(obj, "permissions", where),
+    )
+
+
+def parse_linked_identity(value: object) -> LinkedIdentity:
+    where = "LinkedIdentity"
+    obj = as_object(value, where)
+    return LinkedIdentity(
+        id=_get_uuid(obj, "id", where),
+        provider=_get_str(obj, "provider", where),
+        subject=_get_str(obj, "subject", where),
+        email_at_link=_get_str(obj, "email_at_link", where),
+        created_at=_get_datetime(obj, "created_at", where),
+        last_login_at=_get_opt_datetime(obj, "last_login_at", where),
     )
 
 
@@ -323,8 +342,56 @@ def parse_user_summary(value: object) -> UserSummary:
     return UserSummary(
         id=_get_uuid(obj, "id", where),
         username=_get_str(obj, "username", where),
+        email=_get_str(obj, "email", where),
+        display_name=_get_str(obj, "display_name", where),
         is_active=_get_bool(obj, "is_active", where),
         roles=_get_str_set(obj, "roles", where),
+        identities=[
+            parse_linked_identity(v) for v in as_list(_req(obj, "identities", where), where)
+        ],
+    )
+
+
+def parse_user_created(value: object) -> UserCreated:
+    where = "UserCreated"
+    obj = as_object(value, where)
+    return UserCreated(
+        user=parse_user_summary(_req(obj, "user", where)),
+        generated_password=_get_opt_str(obj, "generated_password", where),
+    )
+
+
+def parse_login_provider(value: object) -> LoginProvider:
+    where = "LoginProvider"
+    obj = as_object(value, where)
+    return LoginProvider(
+        name=_get_str(obj, "name", where),
+        display_name=_get_str(obj, "display_name", where),
+        icon=_get_opt_str(obj, "icon", where),
+    )
+
+
+def parse_oidc_provider(value: object) -> OidcProvider:
+    where = "OidcProvider"
+    obj = as_object(value, where)
+    return OidcProvider(
+        name=_get_str(obj, "name", where),
+        display_name=_get_str(obj, "display_name", where),
+        issuer=_get_str(obj, "issuer", where),
+        client_id=_get_str(obj, "client_id", where),
+        has_client_secret=_get_bool(obj, "has_client_secret", where),
+        client_secret_readable=_get_bool(obj, "client_secret_readable", where),
+        scopes=_get_str_list(obj, "scopes", where),
+        allow_create_users=_get_bool(obj, "allow_create_users", where),
+        allow_email_tying=_get_bool(obj, "allow_email_tying", where),
+        trust_email=_get_bool(obj, "trust_email", where),
+        default_group=parse_opt_principal(_req(obj, "default_group", where)),
+        enabled=_get_bool(obj, "enabled", where),
+        icon=_get_opt_str(obj, "icon", where),
+        callback_url=_get_opt_str(obj, "callback_url", where),
+        linked_users=_get_int(obj, "linked_users", where),
+        created_at=_get_datetime(obj, "created_at", where),
+        updated_at=_get_datetime(obj, "updated_at", where),
     )
 
 

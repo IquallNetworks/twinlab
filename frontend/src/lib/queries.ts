@@ -16,6 +16,21 @@ export const usersQueryOptions = queryOptions({
   queryFn: () => api.listUsers(),
 })
 
+// The login page's provider buttons (delta 33) — fetched before sign-in, so
+// never retried into a spinner: no providers is a legitimate answer.
+export const loginProvidersQueryOptions = queryOptions({
+  queryKey: ['login-providers'],
+  queryFn: () => api.loginProviders(),
+  retry: false,
+  staleTime: 60_000,
+})
+
+// Provider admin (user:manage). Its own root, so SSE lab bursts never churn it.
+export const oidcProvidersQueryOptions = queryOptions({
+  queryKey: ['oidc-providers'],
+  queryFn: () => api.listOidcProviders(),
+})
+
 // The role catalog rarely changes within a session; cache it a while.
 export const rolesQueryOptions = queryOptions({
   queryKey: ['roles'],

@@ -25,6 +25,7 @@ import { OverviewTab } from '@/pages/lab/overview-tab'
 import { LabImportPage } from '@/pages/lab-import'
 import { LabsPage } from '@/pages/labs'
 import { LoginPage } from '@/pages/login'
+import { SignInProvidersPage } from '@/pages/sign-in-providers'
 import { UsersPage } from '@/pages/users'
 import { BASE_PATH } from '@/lib/base-path'
 
@@ -39,7 +40,13 @@ const rootRoute = createRootRouteWithContext<RouterContext>()()
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
-  component: LoginPage,
+  component: function LoginRouteComponent() {
+    const { oidc_error } = loginRoute.useSearch()
+    return <LoginPage oidcError={oidc_error} />
+  },
+  // ?oidc_error=<code>: where a failed provider sign-in lands (delta 33).
+  validateSearch: (search: Record<string, unknown>): { oidc_error?: string } =>
+    typeof search['oidc_error'] === 'string' ? { oidc_error: search['oidc_error'] } : {},
 })
 
 // Pathless layout route: everything under it requires an authenticated session.
@@ -198,6 +205,14 @@ const groupsRoute = createRoute({
   component: GroupsPage,
 })
 
+// OIDC providers (delta 33), user:manage — the nav hides it otherwise and
+// the API refuses; the page itself renders the 403 as its error state.
+const signInProvidersRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/sign-in-providers',
+  component: SignInProvidersPage,
+})
+
 const accountRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/account',
@@ -245,6 +260,7 @@ const routeTree = rootRoute.addChildren([
     jobsRoute,
     usersRoute,
     groupsRoute,
+    signInProvidersRoute,
     accountRoute,
   ]),
 ])

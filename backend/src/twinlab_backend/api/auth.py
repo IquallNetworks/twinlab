@@ -83,19 +83,29 @@ class UserInfo(BaseModel):
     they depend on the lab."""
 
     username: str
+    email: str
+    display_name: str
     roles: list[str]
     permissions: list[str]
+
+
+class SetOwnProfileRequest(BaseModel):
+    # The display name ONLY (delta 33): self-service email change would let a
+    # user capture a colleague's first OIDC sign-in through email tying.
+    display_name: str = Field(min_length=1, max_length=128)
 
 
 async def _user_info(db: AsyncSession, user: User) -> UserInfo:
     return UserInfo(
         username=user.username,
+        email=user.email,
+        display_name=user.display_name,
         roles=await global_role_names(db, user),
         permissions=sorted(await global_permissions(db, user)),
     )
 
 
-def _set_session_cookie(response: Response, settings: Settings, token: str) -> None:
+def set_session_cookie(response: Response, settings: Settings, token: str) -> None:
     response.set_cookie(
         key=settings.session_cookie_name,
         value=token,
@@ -120,7 +130,7 @@ async def login(
         raise ApiError(401, "invalid_credentials", "invalid credentials")
     user = result.value
     token = await create_session(db, user.id, timedelta(hours=settings.session_ttl_hours))
-    _set_session_cookie(response, settings, token)
+    set_session_cookie(response, settings, token)
     return await _user_info(db, user)
 
 
@@ -140,6 +150,14 @@ async def logout(
 @router.get("/me")
 async def me(user: CurrentUserDep, db: SessionDep) -> UserInfo:
     return await _user_info(db, user)
+
+
+@router.put("/profile")
+async def update_profile(
+    body: SetOwnProfileRequest, user: CurrentUserDep, db: SessionDep
+) -> UserInfo:
+    updated = await user_management.set_display_name(db, user, body.display_name)
+    return await _user_info(db, updated)
 
 
 @router.put("/password", status_code=204)

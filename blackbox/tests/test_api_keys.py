@@ -6,7 +6,7 @@ import httpx2
 import pytest
 from twinlab_client import TwinlabApiError, TwinlabClient
 
-from _config import DEFAULT_PASSWORD, SuiteConfig, UserClientFactory
+from _config import DEFAULT_PASSWORD, SuiteConfig, UserClientFactory, create_bb_user
 
 
 async def test_api_key_lifecycle(config: SuiteConfig, make_user_client: UserClientFactory) -> None:
@@ -76,7 +76,7 @@ async def test_deleting_the_user_kills_their_keys(
 ) -> None:
     # Not via make_user_client: the user is deleted mid-test, so the factory's
     # teardown would double-delete.
-    summary = await admin.create_user(unique("user"), DEFAULT_PASSWORD)
+    summary = await create_bb_user(admin, unique("user"))
     async with TwinlabClient(config.base_url) as owner:
         _ = await owner.login(summary.username, DEFAULT_PASSWORD)
         created = await owner.create_api_key("ci")

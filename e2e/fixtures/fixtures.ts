@@ -22,8 +22,16 @@ export const E2E_NET_NODES = [...E2E_NET_ROUTERS, ...E2E_NET_HOSTS] as const
 export const E2E_NET_LINKS = ['core-a', 'core-b', 'core-c', 'services', 'sink'] as const
 
 // The limited second account the role-gating spec signs in as; created via
-// the Users UI in 02-users-groups. Password ≥8 chars (the UI's zod floor).
-export const VIEWER = { username: 'e2e-viewer', password: 'e2e-viewer-password' } as const
+// the Users UI in 02-users-groups. Password ≥8 chars (the UI's zod floor);
+// every user has an email and a display name (delta 33), and the display name
+// deliberately differs from the username so a check can tell which one a
+// surface shows.
+export const VIEWER = {
+  username: 'e2e-viewer',
+  password: 'e2e-viewer-password',
+  email: 'e2e-viewer@e2e.test',
+  displayName: 'E2E Viewer',
+} as const
 
 // The fast tier's canonical lab: created in 03, built in 04/05, published as
 // a template in 06, granted to the viewer in 09.

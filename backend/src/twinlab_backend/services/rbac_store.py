@@ -175,9 +175,12 @@ async def set_principal_global_roles(
     principal_id: uuid.UUID,
     role_names: list[str],
     granted_by: uuid.UUID | None,
+    commit: bool,
 ) -> None:
     """Replace a principal's global bindings with exactly `role_names`. Caller has
-    validated the roles are global-bindable and the principal exists."""
+    validated the roles are global-bindable and the principal exists. `commit`
+    False leaves the transaction open for a caller writing more rows
+    atomically with these (creating a user through an OIDC sign-in)."""
     await session.execute(
         delete(RoleBinding).where(
             RoleBinding.principal_type == principal_type,
@@ -195,7 +198,8 @@ async def set_principal_global_roles(
                 granted_by=granted_by,
             )
         )
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def global_role_names_for(

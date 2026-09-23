@@ -1,11 +1,14 @@
 """Runtime configuration, loaded from the environment as a typed result.
 
-Every field is required: there is no sensible universal default for a database
-URL or the clab-api credentials, so a missing (or empty) value is a load-time
-error, not a silent fallback. Loading returns a `Result` rather than raising;
-the app fails startup on an `Err`.
+Required fields have no sensible universal default (a database URL, the
+clab-api credentials), so a missing (or empty) value is a load-time error, not
+a silent fallback. One variable is required yet may be EMPTY:
+FRONTEND_BASE_PATH, where '' is the explicit "served at the origin root".
+Loading returns a `Result` rather than raising; the app fails startup on an
+`Err`.
 """
 
+from base64 import urlsafe_b64decode
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -29,6 +32,14 @@ _ENV_KEYS = {
     "netlab_runner_url": "NETLAB_RUNNER_URL",
     "bootstrap_admin_username": "BOOTSTRAP_ADMIN_USERNAME",
     "bootstrap_admin_password": "BOOTSTRAP_ADMIN_PASSWORD",
+    "bootstrap_admin_email": "BOOTSTRAP_ADMIN_EMAIL",
+}
+
+# Required to be PRESENT, but the empty string is a legitimate value (contract
+# delta 33): the frontend's base path, where '' means the origin root. Kept
+# apart from the required set above, whose rule is "present and non-empty".
+_PRESENT_ENV_KEYS = {
+    "frontend_base_path": "FRONTEND_BASE_PATH",
 }
 
 # Optional settings: read from the environment when present, else the model
@@ -43,7 +54,27 @@ _OPTIONAL_ENV_KEYS = {
     "hostprep_url": "HOSTPREP_URL",
     "hostprep_token": "HOSTPREP_TOKEN",
     "lab_files_dir": "LAB_FILES_DIR",
+    "public_origin": "PUBLIC_ORIGIN",
+    "oidc_secret_key": "OIDC_SECRET_KEY",
 }
+
+# A Fernet key is 32 random bytes, URL-safe base64 encoded (44 characters).
+_FERNET_KEY_BYTES = 32
+
+
+def is_email_address(value: str) -> bool:
+    """The structural email check Twinlab applies everywhere (delta 33): one
+    @, a non-empty local part and domain, no whitespace. Deliberately no
+    DNS/deliverability check — a provider verifies an address better than a
+    lookup can, and a lookup would be a network call at validation time."""
+    local, at, domain = value.partition("@")
+    return (
+        bool(at)
+        and bool(local)
+        and bool(domain)
+        and "@" not in domain
+        and not any(char.isspace() for char in value)
+    )
 
 
 class Settings(BaseModel):
@@ -63,6 +94,15 @@ class Settings(BaseModel):
     # Admin created on first startup when the users table is empty.
     bootstrap_admin_username: str
     bootstrap_admin_password: SecretStr
+    # Every user carries an email (delta 33), the bootstrap admin included.
+    bootstrap_admin_email: str
+
+    # The path the frontend is served under ('' = the origin root, else like
+    # "/twinlab"). REQUIRED to be set — compose spells it `${FRONTEND_BASE_PATH?}`
+    # and passes the same value to the frontend build — because the backend
+    # builds browser-facing URLs (the OIDC callback, post-login redirects) from
+    # it, and a guessed base path would send a browser to the wrong place.
+    frontend_base_path: str
 
     # Login session cookie. `secure` defaults True (only sent over HTTPS); set it
     # false for local HTTP dev. 8h TTL is a starting policy, tune per deployment.
@@ -106,11 +146,70 @@ class Settings(BaseModel):
     hostprep_url: str = ""
     hostprep_token: SecretStr | None = None
 
+    # The origin the browser reaches Twinlab at ("https://tools.example.com",
+    # no path — the base path is `frontend_base_path`). Optional: "" turns OIDC
+    # sign-in off, since a callback URL cannot be built without it, and a
+    # deployment that does not use OIDC should not have to invent one.
+    public_origin: str = ""
+
+    # Fernet key encrypting OIDC client secrets at rest (delta 33). Optional in
+    # code — the JUMP_TOKEN/HOSTPREP_TOKEN pattern: the backend runs without
+    # it, and only saving a provider WITH a secret is refused — while compose
+    # requires it so a deployed stack cannot ship without one.
+    oidc_secret_key: SecretStr | None = None
+
     @model_validator(mode="after")
     def _hostprep_pair(self) -> Settings:
         if bool(self.hostprep_url) != (self.hostprep_token is not None):
             raise ValueError("HOSTPREP_URL and HOSTPREP_TOKEN must be set together")
         return self
+
+    @field_validator("bootstrap_admin_email")
+    @classmethod
+    def _bootstrap_email_is_an_address(cls, value: str) -> str:
+        if not is_email_address(value):
+            raise ValueError("BOOTSTRAP_ADMIN_EMAIL must be an email address")
+        return value
+
+    @field_validator("frontend_base_path")
+    @classmethod
+    def _base_path_shape(cls, value: str) -> str:
+        # The frontend build's own rule (vite.config.ts), mirrored so both
+        # halves of the stack agree on what a base path is.
+        if value and (not value.startswith("/") or value.endswith("/") or "//" in value):
+            raise ValueError(
+                'FRONTEND_BASE_PATH must be empty or like "/twinlab" '
+                "(leading slash, no trailing slash)"
+            )
+        return value
+
+    @field_validator("public_origin")
+    @classmethod
+    def _public_origin_shape(cls, value: str) -> str:
+        if not value:
+            return value
+        scheme, sep, rest = value.partition("://")
+        if scheme not in ("http", "https") or not sep or not rest or "/" in rest:
+            raise ValueError(
+                'PUBLIC_ORIGIN must be an origin like "https://tools.example.com" '
+                "(scheme and host, optional port, no path)"
+            )
+        return value
+
+    @field_validator("oidc_secret_key")
+    @classmethod
+    def _oidc_key_is_fernet(cls, value: SecretStr | None) -> SecretStr | None:
+        # Validated at load so a malformed key fails startup, not the first
+        # provider save or sign-in.
+        if value is None:
+            return value
+        try:
+            raw = urlsafe_b64decode(value.get_secret_value().encode())
+        except ValueError:  # binascii.Error is a ValueError
+            raise ValueError("OIDC_SECRET_KEY must be URL-safe base64") from None
+        if len(raw) != _FERNET_KEY_BYTES:
+            raise ValueError("OIDC_SECRET_KEY must decode to 32 bytes (a Fernet key)")
+        return value
 
     @field_validator("lab_files_dir")
     @classmethod
@@ -138,11 +237,14 @@ class ConfigError:
 
 
 def load_settings(env: Mapping[str, str]) -> Result[Settings, ConfigError]:
-    missing = sorted(var for var in _ENV_KEYS.values() if not env.get(var))
+    missing = sorted(
+        [var for var in _ENV_KEYS.values() if not env.get(var)]
+        + [var for var in _PRESENT_ENV_KEYS.values() if var not in env]
+    )
     if missing:
         return Err(ConfigError(f"missing required environment variables: {', '.join(missing)}"))
 
-    values = {field: env[var] for field, var in _ENV_KEYS.items()}
+    values = {field: env[var] for field, var in (_ENV_KEYS | _PRESENT_ENV_KEYS).items()}
     for field, var in _OPTIONAL_ENV_KEYS.items():
         if env.get(var):
             values[field] = env[var]

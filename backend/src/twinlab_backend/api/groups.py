@@ -137,5 +137,6 @@ async def set_roles(
         principal_id=group_id,
         role_names=body.roles,
         granted_by=None,
+        commit=True,
     )
     return await _summary(db, group_id)

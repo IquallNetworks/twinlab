@@ -159,7 +159,7 @@ export function DashboardPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex items-baseline gap-3">
           <h1 className="font-heading text-2xl font-semibold">Dashboard</h1>
-          {me && <span className="font-mono text-xs text-muted-foreground">{me.username}</span>}
+          {me && <span className="text-xs text-muted-foreground">{me.display_name}</span>}
         </div>
         {canCreate && (
           <Button asChild>

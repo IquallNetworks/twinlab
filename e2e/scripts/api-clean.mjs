@@ -101,6 +101,16 @@ for (const { lab, id } of destroys) {
   console.log(`api-clean: removed lab ${lab}`)
 }
 
+// OIDC providers before users: deleting one drops its identity links, and a
+// leftover provider keeps its button on the login page (delta 33).
+const providers = await send('GET', '/oidc-providers')
+if (providers.status !== 200) fail('listing oidc providers failed', providers)
+for (const provider of providers.payload) {
+  const res = await send('DELETE', `/oidc-providers/${provider.name}`)
+  if (res.status !== 204) fail(`deleting oidc provider ${provider.name} failed`, res)
+  console.log(`api-clean: deleted oidc provider ${provider.name}`)
+}
+
 const users = await send('GET', '/users')
 if (users.status !== 200) fail('listing users failed', users)
 for (const user of users.payload) {

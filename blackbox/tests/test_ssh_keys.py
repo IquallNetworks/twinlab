@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from twinlab_client import TwinlabApiError, TwinlabClient
 
-from _config import DEFAULT_PASSWORD, SuiteConfig, UserClientFactory
+from _config import DEFAULT_PASSWORD, SuiteConfig, UserClientFactory, create_bb_user
 from _ssh import generate_keypair, keygen_fingerprint
 
 
@@ -99,7 +99,7 @@ async def test_deleting_the_user_releases_their_keys(
 ) -> None:
     # Not via make_user_client for the first user: deleted mid-test, so the
     # factory's teardown would double-delete.
-    summary = await admin.create_user(unique("user"), DEFAULT_PASSWORD)
+    summary = await create_bb_user(admin, unique("user"))
     _, public = generate_keypair(tmp_path)
     async with TwinlabClient(config.base_url) as first:
         _ = await first.login(summary.username, DEFAULT_PASSWORD)

@@ -45,4 +45,5 @@ testpaths = ["tests"]
 python_classes = ["*Tests"]
 markers = [
     "deploy: deploys real labs through containerlab (slow; needs the node image on the host)",
+    "oidc: signs in through the test OIDC provider (needs oidc-test/compose.yaml on the stack and TWINLAB_DEX_ISSUER)",
 ]

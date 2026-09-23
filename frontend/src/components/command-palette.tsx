@@ -6,6 +6,7 @@ import {
   KeyRound,
   LayoutDashboard,
   ListTodo,
+  LogIn,
   LogOut,
   Monitor,
   Moon,
@@ -152,6 +153,15 @@ export function CommandPalette({ className }: { className?: string }) {
               <CommandItem onSelect={() => go(() => navigate({ to: '/groups' }))}>
                 <UsersRound />
                 Groups
+              </CommandItem>
+            )}
+            {canManageUsers && (
+              <CommandItem
+                keywords={['oidc', 'sso', 'providers', 'login']}
+                onSelect={() => go(() => navigate({ to: '/sign-in-providers' }))}
+              >
+                <LogIn />
+                Sign-in providers
               </CommandItem>
             )}
             <CommandItem onSelect={() => go(() => navigate({ to: '/account' }))}>

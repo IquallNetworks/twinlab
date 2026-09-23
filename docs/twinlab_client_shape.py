@@ -473,6 +473,44 @@ Deltas from today's wire, applied below (= the backend rework checklist):
     within one interval), and server-side capture of clab-api container
     events per job (considered, parked: it is an SSE fan-out refactor, and
     the step log is what answers the complaint).
+(Deltas 30–32 are recorded inline at their shapes and methods, marked
+PROPOSED (delta 30/31/32).)
+33. Sign-in through OIDC providers, and users gain an email and a display
+    name (APPROVED and implemented 2026-09-23; design record docs/oidc.md,
+    whose review log records how its questions were settled). Admins (``user:manage``) configure any
+    number of OIDC providers (``/oidc-providers``). Each provider has two
+    switches, both off by default: CREATE an account for an unknown person,
+    and TIE a sign-in to the existing account holding the same email. Both
+    require ``email_verified`` to be exactly true. A third switch,
+    ``trust_email``, also off by default, lets an ABSENT claim count as
+    verified, for issuers such as Entra ID that never send it; an explicit
+    false is still refused. Client secrets are encrypted at rest (Fernet,
+    ``OIDC_SECRET_KEY``). Each provider may carry an admin-uploaded icon,
+    served inline as a ``data:`` URI, and Twinlab ships no brand logos. The durable identity is
+    (provider, ``sub``); email is used once, to find the account to link.
+    The backend runs the authorization-code + PKCE flow itself, on browser
+    navigations (``/auth/oidc/{name}/login`` and ``.../callback``), and ends
+    it by issuing the ORDINARY Twinlab session cookie. Provider tokens are
+    discarded, so nothing downstream (API keys, SSH keys, /events, the
+    terminal) learns OIDC exists. Sign out stays local: the provider's own
+    session is left alone. There is NO group mapping from claims; a
+    provider's optional default group is joined at account creation only.
+    Password login stays. The callback URL is ``PUBLIC_ORIGIN`` (optional;
+    unset = OIDC off) + ``FRONTEND_BASE_PATH``, which becomes a REQUIRED
+    deployment setting shared by the frontend and backend (empty = the
+    origin root). On the user side, ``email`` becomes REQUIRED and
+    unique case-insensitively and ``display_name`` is new and required;
+    ``POST /users`` takes an optional password, generates one when it is
+    omitted and returns it ONCE (``UserCreated``, the api-key pattern). A
+    provider-created user gets a random password nobody sees. Only an admin
+    edits an email, their own included: self-service email change would let
+    a user capture a colleague's first provider sign-in through tying.
+    Existing users are backfilled (``<username>@users.invalid``, which no
+    provider can verify), and ``BOOTSTRAP_ADMIN_EMAIL`` becomes required. The Python client
+    gets the admin and profile methods but no OIDC login, because the flow
+    needs a browser and a person; automation keeps using API keys. (wire
+    today: no OIDC surface; ``users.email`` is an unused optional column
+    and there is no display name.)
 
 Conventions:
 
@@ -481,7 +519,11 @@ Conventions:
 - Auth: opaque HttpOnly session cookie from ``login`` (the client carries a
   cookie jar), OR an API key passed at construction — the desired client shape;
   server-side API-key support is PROPOSED (not served yet, see the Auth
-  section). Everything except login/health needs one of the two.
+  section). Everything except login/health needs one of the two. PROPOSED
+  (delta 33): a session may also be minted by signing in through an OIDC
+  provider in a browser. It is the same cookie, so there is no third
+  credential. The unauthenticated routes gain ``GET /auth/oidc/providers``
+  and the two OIDC browser navigations.
 - Lab-guarded routes: **404** when the caller can't read the lab (existence
   hidden), **403** when readable but lacking the specific permission.
 - Names (lab/node/suite): ``^[A-Za-z0-9][A-Za-z0-9_.-]*$``, max 64.
@@ -506,6 +548,7 @@ from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 from uuid import UUID
 
@@ -555,8 +598,27 @@ class UserInfo:
     per-lab permissions ride on each lab payload."""
 
     username: str
+    # PROPOSED (delta 33): both required on every user from now on.
+    email: str
+    display_name: str
     roles: set[str]
     permissions: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedIdentity:
+    """PROPOSED (delta 33): one provider identity linked to a user.
+
+    The link, not the email, is what a later sign-in resolves through:
+    (provider, `subject`) is OIDC's stable, per-issuer-unique identity.
+    At most one per (user, provider)."""
+
+    id: UUID
+    provider: str  # OidcProvider.name
+    subject: str  # the provider's `sub` claim, opaque
+    email_at_link: str  # the claim's email when the link was made (audit only)
+    created_at: datetime
+    last_login_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -565,8 +627,95 @@ class UserSummary:
 
     id: UUID
     username: str
+    # PROPOSED (delta 33): `email` is required and unique case-insensitively
+    # (stored as entered); `display_name` is what the UI shows, while
+    # `username` stays the password-login name and the RBAC principal name.
+    email: str
+    display_name: str
     is_active: bool
     roles: set[str]
+    identities: list[LinkedIdentity]  # PROPOSED (delta 33)
+
+
+@dataclass(frozen=True, slots=True)
+class UserCreated:
+    """PROPOSED (delta 33): `POST /users` response.
+
+    `generated_password` is set only when the request OMITTED the password.
+    It is the only time the server-generated password is returned, the same
+    pattern as `ApiKeyCreated`. When the caller supplied a password it is None,
+    because they already know it."""
+
+    user: UserSummary
+    generated_password: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LoginProvider:
+    """PROPOSED (delta 33): one entry on the login page. `GET
+    /auth/oidc/providers` is UNAUTHENTICATED (the page needs it before sign-in),
+    so it carries only what a button needs: enabled providers, nothing else."""
+
+    name: str  # the slug in /auth/oidc/{name}/login
+    display_name: str  # the button reads "Sign in with {display_name}"
+    # The admin-uploaded icon as a `data:` URI (svg/png/webp, <=32 KiB), or
+    # None; a client then renders a monogram of display_name's first letter.
+    # Inline, never a URL of its own: an SVG served from Twinlab's origin
+    # could run script if opened directly, and a data: URI rendered through
+    # <img> cannot.
+    icon: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class OidcProvider:
+    """PROPOSED (delta 33): an admin-configured OIDC provider (`/oidc-providers`,
+    `user:manage`). Design record: docs/oidc.md.
+
+    `name` and `issuer` are IMMUTABLE. The name is part of the callback URL
+    registered at the provider, and the links are keyed by the provider, so
+    re-pointing a provider at another issuer would map one issuer's subjects
+    onto another's people. The client secret is WRITE-ONLY: a read says only
+    whether one is set."""
+
+    name: str  # ^[a-z0-9][a-z0-9-]{0,31}$, unique
+    display_name: str
+    issuer: str  # unique across providers; must equal the discovery doc's
+    client_id: str
+    has_client_secret: bool  # False = a public client (PKCE alone)
+    # False when a stored secret no longer decrypts (OIDC_SECRET_KEY changed or
+    # lost). Sign-in through the provider then fails with oidc_unavailable;
+    # the fix is re-entering the secret. Always True when there is no secret.
+    client_secret_readable: bool
+    scopes: list[str]  # "openid" always present
+    allow_create_users: bool  # an unknown person with a verified email gets an account
+    allow_email_tying: bool  # a verified email signs into the account holding it
+    # An ABSENT email_verified counts as verified (an explicit false never
+    # does). Safe only for an issuer whose tenant controls every address it
+    # can put in `email`. Built for Entra ID, which never sends the claim.
+    trust_email: bool
+    default_group: Principal | None  # joined at CREATION only; None if deleted
+    enabled: bool  # False hides it from the login page and refuses sign-in
+    icon: str | None  # as on LoginProvider: a data: URI, set via its own route
+    # The exact redirect URI to register at the provider:
+    # {PUBLIC_ORIGIN}{FRONTEND_BASE_PATH}/api/v1/auth/oidc/{name}/callback.
+    # None while PUBLIC_ORIGIN is unset, which also means OIDC sign-in is off
+    # for the whole deployment.
+    callback_url: str | None
+    linked_users: int  # users linked through it: what a delete would unlink
+    created_at: datetime
+    updated_at: datetime
+
+
+class Unchanged(Enum):
+    """PROPOSED (delta 33): the "leave it as stored" value of a WRITE-ONLY
+    field on a replace (today only `OidcProvider`'s client secret), which
+    None cannot express because None already means "remove it". On the wire
+    it is the field OMITTED."""
+
+    UNCHANGED = "unchanged"
+
+
+UNCHANGED = Unchanged.UNCHANGED
 
 
 @dataclass(frozen=True, slots=True)
@@ -2268,6 +2417,33 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         user's OTHER sessions, keeps this one."""
         raise NotImplementedError
 
+    async def update_own_profile(self, display_name: str) -> UserInfo:
+        """PROPOSED (delta 33) PUT /auth/profile — the caller's own display
+        name (1–128 chars). DELIBERATELY not the email: with email tying, a
+        user who could set their own address to a colleague's would receive
+        that colleague's first provider sign-in. Only an admin edits an email,
+        their own included (`update_user_profile`)."""
+        raise NotImplementedError
+
+    # OIDC sign-in — PROPOSED (delta 33, design record docs/oidc.md). The
+    # flow itself is BROWSER-ONLY and has no client method: `GET
+    # /auth/oidc/{name}/login?next=<relative path>` 302s to the provider, and
+    # `GET /auth/oidc/{name}/callback` finishes with a 302 to `next` carrying
+    # the ordinary session cookie. On failure it 302s to
+    # `/login?oidc_error=<code>`, with codes oidc_unavailable /
+    # oidc_state_invalid / oidc_provider_error / oidc_token_invalid /
+    # oidc_email_missing / oidc_email_unverified / oidc_email_in_use /
+    # oidc_no_account / oidc_identity_conflict / account_disabled. A person has to be at the
+    # provider's login form, so a headless client cannot drive it. An OIDC
+    # user automates by creating an API key after signing in in the browser.
+
+    async def login_providers(self) -> list[LoginProvider]:
+        """PROPOSED (delta 33) GET /auth/oidc/providers — UNAUTHENTICATED;
+        the ENABLED providers, for the login page. Empty when none are
+        configured or when PUBLIC_URL is unset (sign-in through a provider is
+        then off)."""
+        raise NotImplementedError
+
     # API keys — PROPOSED (no backend support yet): self-service long-lived
     # credentials for automation (CI, the black-box suite), sent as
     # `Authorization: Bearer <key>`. A key acts as its creating user with that
@@ -2332,11 +2508,44 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # PROPOSED endpoints below (approved) are marked in their docstrings.
 
     async def create_user(
-        self, username: str, password: str, roles: set[str] | None = None
-    ) -> UserSummary:
+        self,
+        username: str,
+        email: str,
+        display_name: str,
+        *,
+        password: str | None = None,
+        roles: set[str] | None = None,
+    ) -> UserCreated:
         """POST /users — 201. `roles` = GLOBAL roles; omitted/empty = the
         baseline "user" role (authenticated, no access). 409 username_taken;
-        422 unknown_roles; password min 8."""
+        422 unknown_roles; password min 8.
+
+        PROPOSED (delta 33): `email` and `display_name` are required. The email
+        is checked structurally only (one @, non-empty parts, no whitespace)
+        and must be unused case-insensitively, else 409 email_taken.
+        `password` became optional: when omitted, the server generates one (24
+        URL-safe chars) and returns it ONCE on `UserCreated.generated_password`.
+        (wire today: returns `UserSummary`; password required; no email or
+        display name.)"""
+        raise NotImplementedError
+
+    async def update_user_profile(
+        self, user_id: UUID, *, email: str, display_name: str
+    ) -> UserSummary:
+        """PROPOSED (delta 33) PUT /users/{user_id}/profile — full replace of
+        both fields, for ANY user including the caller, so an admin replaces
+        their own backfilled `<username>@users.invalid` here. 404
+        user_not_found; 409 email_taken. Changing an email
+        does NOT touch the user's linked identities: the link, not the email,
+        is what their provider sign-in resolves through."""
+        raise NotImplementedError
+
+    async def unlink_identity(self, user_id: UUID, identity_id: UUID) -> None:
+        """PROPOSED (delta 33) DELETE /users/{user_id}/identities/{identity_id}
+        — 204. 404 identity_not_found (also for an identity of ANOTHER user).
+        The next sign-in through that provider goes through the tie/create
+        rules again, which is how an admin repairs a tie that went to the wrong
+        account."""
         raise NotImplementedError
 
     async def list_users(self) -> list[UserSummary]:
@@ -2407,6 +2616,113 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def set_group_roles(self, group_id: UUID, roles: set[str]) -> GroupSummary:
         """PUT /groups/{group_id}/roles — full replace of GLOBAL roles (lab
         grants go through create_grant). 422 non-global-bindable role."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # OIDC providers (global user:manage) — PROPOSED (delta 33)
+    # ------------------------------------------------------------------ #
+    # Gated by user:manage, not a new permission, because a provider decides
+    # who gets an account, which is user management by another route
+    # (review item 5 in docs/oidc.md). CREATE fetches
+    # {issuer}/.well-known/openid-configuration SYNCHRONOUSLY and requires its
+    # `issuer` to equal the configured one, so a mistyped issuer is a 422 in
+    # front of the admin who typed it, not a failed sign-in for the first user.
+    # Update does not refetch it: the issuer is immutable, and a provider whose
+    # discovery endpoint is down must still be editable, above all disableable.
+
+    async def list_oidc_providers(self) -> list[OidcProvider]:
+        """PROPOSED GET /oidc-providers — all of them, enabled or not."""
+        raise NotImplementedError
+
+    async def get_oidc_provider(self, name: str) -> OidcProvider:
+        """PROPOSED GET /oidc-providers/{name} — 404 provider_not_found."""
+        raise NotImplementedError
+
+    async def create_oidc_provider(
+        self,
+        name: str,
+        display_name: str,
+        issuer: str,
+        client_id: str,
+        *,
+        client_secret: str | None,
+        # Why this default: `email` feeds tying and creation, `profile` the
+        # display name and derived username — what the resolution rules read.
+        scopes: list[str] | None = None,  # None = ["openid", "email", "profile"]
+        allow_create_users: bool = False,  # safe default: sign-in for linked users only
+        allow_email_tying: bool = False,  # same
+        trust_email: bool = False,  # same: vouching for an issuer is a deliberate act
+        default_group_id: UUID | None = None,
+        enabled: bool = True,
+    ) -> OidcProvider:
+        """PROPOSED POST /oidc-providers — 201. `client_secret` None = a public
+        client (PKCE alone); it is required as a keyword so a confidential
+        client is never created without its secret by omission. 409
+        provider_name_taken / issuer_taken; 409 oidc_secret_key_unset (a
+        secret was given but the deployment has no OIDC_SECRET_KEY to encrypt
+        it with); 422 oidc_discovery_failed (with the fetch or mismatch reason
+        in extras), 422 validation_error (bad name slug, scopes without
+        "openid"), 422 group_not_found. The icon is set separately
+        (`set_oidc_provider_icon`)."""
+        raise NotImplementedError
+
+    async def update_oidc_provider(
+        self,
+        name: str,
+        *,
+        display_name: str,
+        issuer: str,
+        client_id: str,
+        scopes: list[str],
+        allow_create_users: bool,
+        allow_email_tying: bool,
+        trust_email: bool,
+        default_group_id: UUID | None,
+        enabled: bool,
+        client_secret: str | None | Unchanged = UNCHANGED,
+    ) -> OidcProvider:
+        """PROPOSED PUT /oidc-providers/{name} — full replace, EXCEPT:
+
+        - `issuer` must equal the stored one (422 issuer_immutable). It rides
+          the body so a replace stays a complete statement of the record and
+          a client cannot mistake which issuer it is editing.
+        - `client_secret` is write-only: UNCHANGED (the field omitted on the
+          wire) keeps the stored secret, a string replaces it, and None
+          removes it (the provider becomes a public client). A new secret
+          without OIDC_SECRET_KEY is 409 oidc_secret_key_unset.
+        - The icon is not part of the replace. It has its own route, so
+          editing the form never needs to resend the image.
+
+        `name` is immutable by construction: it is the path. Disabling
+        (`enabled=False`) keeps the provider's links; deleting drops them."""
+        raise NotImplementedError
+
+    async def delete_oidc_provider(self, name: str) -> None:
+        """PROPOSED DELETE /oidc-providers/{name} — 204. Deletes the
+        provider's LINKS and keeps its users. A user created through it then
+        holds only a random password nobody knows, and cannot sign in until an
+        admin resets the password (`OidcProvider.linked_users` is the count to
+        warn with). Deliberately NOT blocked on that: removing a compromised
+        provider must be possible."""
+        raise NotImplementedError
+
+    async def set_oidc_provider_icon(
+        self,
+        name: str,
+        content: bytes,
+        content_type: Literal["image/svg+xml", "image/png", "image/webp"],
+    ) -> OidcProvider:
+        """PROPOSED PUT /oidc-providers/{name}/icon — the raw image as the
+        body, `content_type` as its Content-Type; replaces any current icon.
+        At most 32 KiB, which is plenty for a button glyph. 422 invalid_icon
+        when the bytes are not the declared type (PNG/WebP by magic bytes; SVG
+        must parse as XML with an <svg> root) or exceed the size. 404
+        provider_not_found."""
+        raise NotImplementedError
+
+    async def clear_oidc_provider_icon(self, name: str) -> OidcProvider:
+        """PROPOSED DELETE /oidc-providers/{name}/icon — back to the
+        monogram. Idempotent: clearing an absent icon is still a 200."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #

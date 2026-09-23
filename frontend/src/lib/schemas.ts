@@ -4,21 +4,84 @@ import { z } from 'zod'
 // api.auth, api.users). Parsing with zod gives us runtime validation at the
 // network boundary and the inferred TypeScript types in one place.
 
+// Delta 33: every user carries an email (unique, case-insensitively) and a
+// display name. `username` stays the machine-facing name (password sign-in,
+// RBAC principal); `display_name` is what a person is shown as.
 export const userInfoSchema = z.object({
   username: z.string(),
+  email: z.string(),
+  display_name: z.string(),
   roles: z.array(z.string()),
   permissions: z.array(z.string()),
 })
 export type UserInfo = z.infer<typeof userInfoSchema>
 
+// A provider identity linked to a user (delta 33). The link — not the email —
+// is what a later sign-in through that provider resolves through.
+export const linkedIdentitySchema = z.object({
+  id: z.string(),
+  provider: z.string(), // the provider's name
+  subject: z.string(),
+  email_at_link: z.string(),
+  created_at: z.string(),
+  last_login_at: z.string().nullable(),
+})
+export type LinkedIdentity = z.infer<typeof linkedIdentitySchema>
+
 export const userSummarySchema = z.object({
   id: z.string(),
   username: z.string(),
+  email: z.string(),
+  display_name: z.string(),
   is_active: z.boolean(),
   roles: z.array(z.string()), // global roles
+  identities: z.array(linkedIdentitySchema),
 })
 export type UserSummary = z.infer<typeof userSummarySchema>
 export const userListSchema = z.array(userSummarySchema)
+
+// POST /users. `generated_password` is set only when the request omitted the
+// password — the one time the server-made password is ever shown.
+export const userCreatedSchema = z.object({
+  user: userSummarySchema,
+  generated_password: z.string().nullable(),
+})
+export type UserCreated = z.infer<typeof userCreatedSchema>
+
+// --- OIDC providers (delta 33) ---
+
+// One login-page button. Served UNAUTHENTICATED, so it carries only this.
+export const loginProviderSchema = z.object({
+  name: z.string(),
+  display_name: z.string(),
+  icon: z.string().nullable(), // a data: URI, or null for the monogram
+})
+export type LoginProvider = z.infer<typeof loginProviderSchema>
+export const loginProviderListSchema = z.array(loginProviderSchema)
+
+export const oidcProviderSchema = z.object({
+  name: z.string(),
+  display_name: z.string(),
+  issuer: z.string(),
+  client_id: z.string(),
+  has_client_secret: z.boolean(),
+  // False when a stored secret no longer decrypts (OIDC_SECRET_KEY changed).
+  client_secret_readable: z.boolean(),
+  scopes: z.array(z.string()),
+  allow_create_users: z.boolean(),
+  allow_email_tying: z.boolean(),
+  trust_email: z.boolean(),
+  default_group: z.object({ id: z.string(), name: z.string() }).nullable(),
+  enabled: z.boolean(),
+  icon: z.string().nullable(),
+  // null while the deployment has no PUBLIC_ORIGIN (provider sign-in is off).
+  callback_url: z.string().nullable(),
+  linked_users: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+})
+export type OidcProvider = z.infer<typeof oidcProviderSchema>
+export const oidcProviderListSchema = z.array(oidcProviderSchema)
 
 // --- RBAC: roles catalog, groups, and per-lab grants. ---
 

@@ -8,13 +8,19 @@ from collections.abc import AsyncIterator, Callable
 import pytest
 from twinlab_client import TwinlabApiError, TwinlabClient, UserSummary
 
-from _config import ALTERNATE_PASSWORD, DEFAULT_PASSWORD, SuiteConfig, UserClientFactory
+from _config import (
+    ALTERNATE_PASSWORD,
+    DEFAULT_PASSWORD,
+    SuiteConfig,
+    UserClientFactory,
+    create_bb_user,
+)
 
 
 @pytest.fixture
 async def user(admin: TwinlabClient, unique: Callable[[str], str]) -> AsyncIterator[UserSummary]:
     """A freshly created user, best-effort deleted afterwards."""
-    created = await admin.create_user(unique("user"), DEFAULT_PASSWORD)
+    created = await create_bb_user(admin, unique("user"))
     yield created
     with contextlib.suppress(TwinlabApiError):
         await admin.delete_user(created.id)
@@ -41,13 +47,13 @@ async def test_created_user_can_login(
 
 async def test_duplicate_username_is_409(admin: TwinlabClient, user: UserSummary) -> None:
     with pytest.raises(TwinlabApiError) as excinfo:
-        _ = await admin.create_user(user.username, DEFAULT_PASSWORD)
+        _ = await create_bb_user(admin, user.username)
     assert excinfo.value.status_code == 409
 
 
 async def test_short_password_is_422(admin: TwinlabClient, unique: Callable[[str], str]) -> None:
     with pytest.raises(TwinlabApiError) as excinfo:
-        _ = await admin.create_user(unique("user"), "short")
+        _ = await create_bb_user(admin, unique("user"), password="short")
     assert excinfo.value.status_code == 422
 
 
@@ -88,7 +94,7 @@ async def test_get_unknown_user_is_404(admin: TwinlabClient) -> None:
 async def test_delete_user(
     admin: TwinlabClient, config: SuiteConfig, unique: Callable[[str], str]
 ) -> None:
-    created = await admin.create_user(unique("user"), DEFAULT_PASSWORD)
+    created = await create_bb_user(admin, unique("user"))
     await admin.delete_user(created.id)
     assert created.id not in {entry.id for entry in await admin.list_users()}
     async with TwinlabClient(config.base_url) as fresh:
@@ -143,7 +149,7 @@ async def test_non_last_admin_can_be_removed(
     # The complement of the last-admin guard, probed safely on a THROWAWAY
     # admin: with the bootstrap admin still active, a second admin is not the
     # last one and may be deactivated/deleted.
-    temp = await admin.create_user(unique("admin"), DEFAULT_PASSWORD, {"admin"})
+    temp = await create_bb_user(admin, unique("admin"), roles={"admin"})
     try:
         deactivated = await admin.set_user_active(temp.id, False)
         assert deactivated.is_active is False

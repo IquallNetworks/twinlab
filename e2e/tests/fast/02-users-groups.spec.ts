@@ -13,20 +13,30 @@ test('create the limited user through the Users page', async ({ page, browser })
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText('New user')).toBeVisible()
 
-  // The zod floor surfaces before anything is sent.
+  // The zod floors surface before anything is sent: the server's structural
+  // email rule, and the password floor (an EMPTY password is allowed — the
+  // server generates one — but a short one is not).
   await dialog.getByLabel('Username').fill(VIEWER.username)
+  await dialog.getByLabel('Display name').fill(VIEWER.displayName)
+  await dialog.getByLabel('Email').fill('not-an-address')
   await dialog.getByLabel('Password', { exact: true }).fill('short')
   await dialog.getByRole('button', { name: 'Create' }).click()
+  await expect(dialog.getByText('Enter an email address, like ana@example.com')).toBeVisible()
   await expect(dialog.getByText('Password must be at least 8 characters')).toBeVisible()
+
+  await dialog.getByLabel('Email').fill(VIEWER.email)
 
   await dialog.getByLabel('Password', { exact: true }).fill(VIEWER.password)
   await dialog.getByRole('checkbox', { name: 'user', exact: true }).check()
   await dialog.getByRole('button', { name: 'Create' }).click()
   await expectToast(page, `Created user ${VIEWER.username}`)
 
-  // The table now carries both accounts with their role and status badges.
+  // The table now carries both accounts with their role and status badges,
+  // the person shown by display name and email.
   await expect(page.getByText('2 accounts', { exact: true })).toBeVisible()
   const viewerRow = page.getByRole('row').filter({ hasText: VIEWER.username })
+  await expect(viewerRow.getByText(VIEWER.displayName)).toBeVisible()
+  await expect(viewerRow.getByText(VIEWER.email)).toBeVisible()
   await expect(viewerRow.getByText('user', { exact: true })).toBeVisible()
   await expect(viewerRow.getByText('active', { exact: true })).toBeVisible()
   const adminRow = page.getByRole('row').filter({ hasText: /^admin/ })
@@ -79,15 +89,33 @@ test('create the limited user through the Users page', async ({ page, browser })
   await expectToast(page, `Activated ${VIEWER.username}`)
   await expect(viewerRow.getByText('active', { exact: true })).toBeVisible()
 
-  // Delete, on a throwaway account nothing later in the suite needs.
+  // Delete, on a throwaway account nothing later in the suite needs — created
+  // with the password left EMPTY, so the server generates one and the dialog
+  // shows it exactly once.
   await page.getByRole('button', { name: 'New user' }).click()
   await dialog.getByLabel('Username').fill('e2e-temp')
-  await dialog.getByLabel('Password', { exact: true }).fill('e2e-temp-password')
+  await dialog.getByLabel('Display name').fill('E2E Temp')
+  await dialog.getByLabel('Email').fill('e2e-temp@e2e.test')
   await dialog.getByRole('button', { name: 'Create' }).click()
   await expectToast(page, 'Created user e2e-temp')
+  await expect(dialog.getByText('Created e2e-temp')).toBeVisible()
+  await expect(dialog.getByText('It is shown only once')).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Copy password' })).toBeVisible()
+  await page.keyboard.press('Escape')
   await expect(page.getByText('3 accounts', { exact: true })).toBeVisible()
 
+  // The profile edits in place; an email already in use is refused.
   const tempRow = page.getByRole('row').filter({ hasText: 'e2e-temp' })
+  await tempRow.getByRole('button', { name: 'Profile' }).click()
+  await expect(dialog.getByText('Profile of e2e-temp')).toBeVisible()
+  await dialog.getByLabel('Email').fill(VIEWER.email.toUpperCase())
+  await dialog.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText(`an account already uses ${VIEWER.email.toUpperCase()}`)).toBeVisible()
+  await dialog.getByLabel('Email').fill('e2e-temp-renamed@e2e.test')
+  await dialog.getByRole('button', { name: 'Save' }).click()
+  await expectToast(page, 'Updated profile of e2e-temp')
+  await expect(tempRow.getByText('e2e-temp-renamed@e2e.test')).toBeVisible()
+
   await tempRow.getByRole('button', { name: 'Delete' }).click()
   await expect(confirm.getByText('Delete e2e-temp?')).toBeVisible()
   await confirm.getByRole('button', { name: 'Delete' }).click()

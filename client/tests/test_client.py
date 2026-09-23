@@ -94,6 +94,16 @@ _LAB_DETAIL = {
 }
 
 
+def _info_wire(username: str, roles: list[str], permissions: list[str]) -> dict[str, object]:
+    return {
+        "username": username,
+        "email": f"{username}@example.com",
+        "display_name": username.title(),
+        "roles": roles,
+        "permissions": permissions,
+    }
+
+
 def _json_body(request: httpx2.Request) -> dict[str, object]:
     return cast("dict[str, object]", json.loads(request.content.decode()))
 
@@ -106,13 +116,11 @@ async def test_login_sets_cookie_and_parses(make_client: ClientFactory) -> None:
             assert _json_body(request) == {"username": "admin", "password": "pw12345678"}
             return httpx2.Response(
                 200,
-                json={"username": "admin", "roles": ["admin"], "permissions": ["user:manage"]},
+                json=_info_wire("admin", ["admin"], ["user:manage"]),
                 headers={"Set-Cookie": "twinlab_session=tok123; Path=/; HttpOnly"},
             )
         seen_cookie_header.append(request.headers.get("Cookie"))
-        return httpx2.Response(
-            200, json={"username": "admin", "roles": ["admin"], "permissions": ["user:manage"]}
-        )
+        return httpx2.Response(200, json=_info_wire("admin", ["admin"], ["user:manage"]))
 
     async with make_client(handler) as client:
         info = await client.login("admin", "pw12345678")
@@ -125,7 +133,7 @@ async def test_login_sets_cookie_and_parses(make_client: ClientFactory) -> None:
 async def test_api_key_sends_bearer_header() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["Authorization"] == "Bearer tl_secret"
-        return httpx2.Response(200, json={"username": "ci", "roles": [], "permissions": []})
+        return httpx2.Response(200, json=_info_wire("ci", [], []))
 
     async with TwinlabClient(
         "http://testserver", api_key="tl_secret", transport=httpx2.MockTransport(handler)

@@ -8,6 +8,7 @@ Unordered unique collections (roles, permissions, scopes) are `set`s here; the
 wire is a JSON array either way. Ids are UUIDs.
 """
 
+import enum
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final, Literal
@@ -122,18 +123,57 @@ class UserInfo:
     per-lab permissions ride on each lab payload."""
 
     username: str
+    email: str
+    display_name: str
     roles: set[str]
     permissions: set[str]
 
 
 @dataclass(frozen=True, slots=True)
+class LinkedIdentity:
+    """One OIDC provider identity linked to a user (delta 33). The link, not the
+    email, is what a later provider sign-in resolves through."""
+
+    id: UUID
+    provider: str  # the provider's name
+    subject: str  # the provider's `sub` claim, opaque
+    email_at_link: str  # the claim's email when the link was made (audit only)
+    created_at: datetime
+    last_login_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class UserSummary:
-    """One user (`/users`). `roles` = global roles."""
+    """One user (`/users`). `roles` = global roles. `username` is the
+    password-login and RBAC principal name; `display_name` is what a UI shows.
+    `email` is unique case-insensitively."""
 
     id: UUID
     username: str
+    email: str
+    display_name: str
     is_active: bool
     roles: set[str]
+    identities: list[LinkedIdentity]
+
+
+@dataclass(frozen=True, slots=True)
+class UserCreated:
+    """`POST /users` response. `generated_password` is set only when the request
+    omitted the password — the only time the server-generated password is
+    returned."""
+
+    user: UserSummary
+    generated_password: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LoginProvider:
+    """One entry of the (unauthenticated) login page's provider list."""
+
+    name: str
+    display_name: str
+    icon: str | None  # a data: URI, or None (render a monogram)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +268,48 @@ class SshAccess:
 class Principal:
     id: UUID
     name: str
+
+
+OidcIconType = Literal["image/svg+xml", "image/png", "image/webp"]
+
+
+@dataclass(frozen=True, slots=True)
+class OidcProvider:
+    """An admin-configured OIDC provider (`/oidc-providers`, user:manage).
+
+    `name` and `issuer` are immutable. The client secret is WRITE-ONLY: a read
+    says only whether one is set (`has_client_secret`) and whether it still
+    decrypts under the deployment's key (`client_secret_readable`)."""
+
+    name: str
+    display_name: str
+    issuer: str
+    client_id: str
+    has_client_secret: bool
+    client_secret_readable: bool
+    scopes: list[str]
+    allow_create_users: bool
+    allow_email_tying: bool
+    trust_email: bool  # an ABSENT email_verified counts as verified
+    default_group: Principal | None  # joined at account creation only
+    enabled: bool
+    icon: str | None  # a data: URI
+    # The redirect URI to register at the provider; None while the deployment's
+    # PUBLIC_ORIGIN is unset (provider sign-in is then off).
+    callback_url: str | None
+    linked_users: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class Unchanged(enum.Enum):
+    """The "leave it as stored" value of a write-only field on a replace (the
+    client secret) — None cannot say it, since None means remove."""
+
+    UNCHANGED = "unchanged"
+
+
+UNCHANGED = Unchanged.UNCHANGED
 
 
 @dataclass(frozen=True, slots=True)

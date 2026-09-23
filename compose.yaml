@@ -44,6 +44,20 @@ services:
       NETLAB_RUNNER_URL: http://netlab-runner:8000
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?set BOOTSTRAP_ADMIN_EMAIL in .env (every user has an email)}
+      # The path the UI is served under — the SAME variable the frontend build
+      # takes below, so the two halves cannot disagree. REQUIRED to be set
+      # (`?`, not `:?`): empty is the explicit "served at the origin root".
+      # The backend builds browser-facing URLs from it (the OIDC callback,
+      # post-sign-in redirects).
+      FRONTEND_BASE_PATH: ${FRONTEND_BASE_PATH?set FRONTEND_BASE_PATH in .env (empty for the origin root)}
+      # The origin browsers reach this stack at (e.g. https://tools.example.com,
+      # no path). Optional: unset turns OIDC sign-in off, since the provider
+      # callback URL is built from it.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
+      # Fernet key encrypting OIDC client secrets at rest. Required so a
+      # deployed stack cannot ship without one (the JUMP_TOKEN rationale).
+      OIDC_SECRET_KEY: ${OIDC_SECRET_KEY:?set OIDC_SECRET_KEY in .env (openssl rand -base64 32 | tr '+/' '-_')}
       # Local dev is HTTP, so the session cookie can't be Secure-only by
       # default here. Behind HTTPS, set SESSION_COOKIE_SECURE=true in .env.
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
@@ -100,9 +114,10 @@ services:
       # bind-mounted source and hot reload.
       target: prod
       args:
-        # '' (the default) serves the UI at the origin root; '/twinlab'-shaped
-        # serves it under that subpath for a fronting proxy (see .env.example).
-        BASE_PATH: ${FRONTEND_BASE_PATH:-}
+        # '' serves the UI at the origin root; '/twinlab'-shaped serves it under
+        # that subpath for a fronting proxy (see .env.example). REQUIRED to be
+        # set — the backend reads the same variable (above).
+        BASE_PATH: ${FRONTEND_BASE_PATH?set FRONTEND_BASE_PATH in .env (empty for the origin root)}
       additional_contexts:
         # The operator guide is compiled into the bundle from docs/guide/;
         # src/content/guide is a symlink pointing OUTSIDE the build context,

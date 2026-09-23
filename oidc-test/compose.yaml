@@ -1,0 +1,70 @@
+# A TEST OIDC provider (contract delta 33): Dex (Apache-2.0), for the blackbox
+# and e2e suites and for trying provider sign-in by hand. Never part of a
+# deployment — layer it onto a stack explicitly:
+#
+#   docker compose -f compose.yaml -f oidc-test/compose.yaml up -d --wait
+#
+# The one setup detail that matters: the issuer must be ONE URL that both the
+# browser and the backend container can resolve, because an ID token's `iss`
+# is compared exactly. `dex.localhost` is that name — browsers and the host's
+# resolver map *.localhost to loopback on their own (RFC 6761), and the
+# backend gets it mapped to the host gateway below, where Dex's port is
+# published.
+#
+# Everything here is test-only: the client secret, the users and their
+# password ("password", Dex's own example hash) are deliberately public.
+
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    configs:
+      - source: dex
+        target: /etc/dex/config.yaml
+    ports:
+      - "${DEX_PORT:-5556}:5556"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:5556/dex/.well-known/openid-configuration"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    extra_hosts:
+      - "dex.localhost:host-gateway"
+
+configs:
+  dex:
+    # Rendered by compose, so each stack gets its own issuer port and callback.
+    # `$$` is a literal `$` (the bcrypt hash).
+    content: |
+      issuer: http://dex.localhost:${DEX_PORT:-5556}/dex
+      storage:
+        type: memory
+      web:
+        http: 0.0.0.0:5556
+      oauth2:
+        skipApprovalScreen: true
+      enablePasswordDB: true
+      staticClients:
+        - id: twinlab
+          name: Twinlab
+          secret: twinlab-test-secret
+          # Twinlab's callback is per PROVIDER NAME, so the suites register
+          # the provider as "dex".
+          redirectURIs:
+            - http://localhost:${FRONTEND_PORT:-5173}${FRONTEND_BASE_PATH:-}/api/v1/auth/oidc/dex/callback
+      staticPasswords:
+        - email: alice@example.com
+          hash: "$$2a$$10$$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+          username: alice
+          userID: 0f9d0f10-8e2a-4b1a-9c1a-000000000001
+        - email: bob@example.com
+          hash: "$$2a$$10$$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+          username: bob
+          userID: 0f9d0f10-8e2a-4b1a-9c1a-000000000002
+        - email: carol@example.com
+          hash: "$$2a$$10$$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+          username: carol
+          userID: 0f9d0f10-8e2a-4b1a-9c1a-000000000003

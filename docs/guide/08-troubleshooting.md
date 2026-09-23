@@ -219,7 +219,7 @@ In rough order of usefulness:
 1. **The job's step log** — how far the operation got, in its own words.
 2. **The error's extras** — the real output from netlab or containerlab.
 3. **Node logs**, from the Nodes tab.
-4. **`curl -s http://localhost:5173/api/v1/health/ready`** — is the stack itself
-   healthy?
+4. **`curl -s http://localhost:5173/api/v1/health/ready`** on the Twinlab host
+   (the default port; use your `FRONTEND_PORT`) — is the stack itself healthy?
 5. **`docker compose logs backend`** — for a `500 internal_error`, which means a
    bug rather than a usage problem.

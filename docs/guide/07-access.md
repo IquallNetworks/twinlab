@@ -187,7 +187,8 @@ Use a key for scripts and CI. Use your session for the browser.
 ### Connecting an agent (MCP)
 
 Twinlab serves the Model Context Protocol at `/mcp` on the same address as the
-UI, for example `https://twinlab.example.com/mcp`. Point an MCP client at that
+UI: `<twinlab-address>/mcp`, where `<twinlab-address>` is what you type to open
+Twinlab, such as `https://twinlab.example.com`. Point an MCP client at that
 URL over streamable HTTP and send an API key as a bearer token:
 
 ```
@@ -229,25 +230,36 @@ Add the jump host to `~/.ssh/config`:
 
 ```
 Host twinlab-jump
-  HostName localhost
-  Port 2222
+  HostName <jump-host>
+  Port <jump-port>
   User jump
   IdentityFile ~/.ssh/<your-registered-key>
   IdentitiesOnly yes
 ```
 
+`<jump-host>` and `<jump-port>` are your deployment's jump host. **Copy them
+from the Account page**, which shows the address this Twinlab advertises: the
+host and port depend on how the deployment was installed, so no value printed
+in this guide is yours. `<your-registered-key>` is the private key whose public
+half you registered above. The Account page also shows this block with the
+address filled in.
+
 Then reach a node by its management address:
 
 ```bash
-ssh -J twinlab-jump vyos@10.77.0.101
+ssh -J twinlab-jump vyos@<mgmt-address>
 ```
+
+`<mgmt-address>` is the node's management address, from the Nodes tab or the
+node's Connect drawer. It changes from lab to lab, since each lab gets a subnet
+of its own. `vyos` is the VyOS login: use the one for the node's platform.
 
 ### Do not use a bare `ssh -J` with `-i`
 
 This costs everyone an afternoon exactly once.
 
 ```bash
-ssh -J jump@host:2222 -i ~/.ssh/mykey vyos@10.77.0.101   # fails
+ssh -J jump@<jump-host>:<jump-port> -i ~/.ssh/<your-registered-key> vyos@<mgmt-address>   # fails
 ```
 
 Command-line identity options do **not** apply to the jump hop. The hop is its
@@ -266,10 +278,13 @@ at once:
 
 ```
 Host r1.mylab
-  HostName 10.77.0.101
+  HostName <r1-mgmt-address>
   User vyos
   ProxyJump twinlab-jump
 ```
+
+Here the lab is `mylab` and the node `r1`. The blocks the tab hands out carry
+your own names and the real addresses.
 
 ```bash
 ssh r1.mylab

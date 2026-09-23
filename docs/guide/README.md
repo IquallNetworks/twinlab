@@ -33,5 +33,11 @@ the Python client.
 
 Read 1 and 2 in order. The rest stand alone.
 
+**Values in angle brackets are yours to fill in**, such as `<jump-host>` or
+`<your-registered-key>`. Addresses and ports differ from one deployment to the
+next, so take them from your own Twinlab, not from this guide: the Account page
+shows the SSH jump host, and a node's Connect drawer shows its management
+address. Where the guide does print a number, it names the default it is.
+
 The design records under `docs/` in the repository go deeper than a guide
 should, if you need to know why something works the way it does.

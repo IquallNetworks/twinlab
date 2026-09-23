@@ -218,11 +218,15 @@ blocking the deploy.
 docker compose up -d --build
 ```
 
-| What | Where |
+| What | Where, with the default ports |
 | --- | --- |
 | Web UI | `http://localhost:5173` (`FRONTEND_PORT`) |
 | API | the same origin, under `/api/v1` |
 | SSH jump host | port 2222 (`JUMP_PORT`) |
+
+These are the addresses on the host itself. From another machine, use the
+host's own name or address in place of `localhost`, and your ports if you
+changed them.
 
 The backend port is not published. The frontend container proxies `/api/v1` to
 it, which is why the session cookie needs no cross-origin handling.
@@ -233,7 +237,8 @@ cannot scope their binding). Both are authenticated — host PAM credentials and
 a shared token — but they are privileged services, and nothing outside this
 machine ever needs them. On a host other people can reach, firewall both ports.
 
-Check that it came up:
+Check that it came up, on the host, with your `FRONTEND_PORT` if you changed
+it:
 
 ```bash
 curl -s http://localhost:5173/api/v1/health/ready

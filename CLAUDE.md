@@ -1076,6 +1076,11 @@ code is structured.
   maintainer's call.
 - **No authorship trailers** — do not add `Co-Authored-By`, `Generated with`, or any attribution to
   commit messages or PR bodies. Keep messages to the change itself.
+- **Log notable changes in `CHANGELOG.md`** — anything an operator or API/client user would
+  notice (a feature, a new or changed setting, a contract change, a dependency swap a client
+  user feels). The file is APPEND-ONLY: a new dated entry goes at the bottom, and a past entry
+  is never edited, reordered or removed; a correction or reversal is a new entry. It starts
+  2026-09-23 and is deliberately not backfilled.
 
 ### Code quality (once the toolchain is scaffolded)
 - Expect a strict Python setup managed with **`uv`**: `ruff format` + `ruff check` (strict),

@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 
-import httpx
+import httpx2
 import pytest
 from twinlab_client import TwinlabApiError, TwinlabClient
 
@@ -24,7 +24,7 @@ async def test_api_key_lifecycle(config: SuiteConfig, make_user_client: UserClie
     # Wire-level probe (the suite's one deliberate raw-HTTP exception, see
     # README): the typed client cannot observe extra wire fields, but the
     # secret must never appear in the listing payload.
-    async with httpx.AsyncClient(base_url=config.base_url) as raw:
+    async with httpx2.AsyncClient(base_url=config.base_url) as raw:
         response = await raw.get(
             "/api/v1/auth/api-keys", headers={"Authorization": f"Bearer {created.key}"}
         )

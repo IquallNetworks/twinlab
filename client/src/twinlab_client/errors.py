@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import cast
 
-import httpx
+import httpx2
 
 
 # Deliberately NOT frozen: re-raising through a context manager assigns
@@ -45,7 +45,7 @@ class TwinlabProtocolError(Exception):
         self.detail = detail
 
 
-def error_from_response(response: httpx.Response) -> TwinlabApiError:
+def error_from_response(response: httpx2.Response) -> TwinlabApiError:
     """Map a non-2xx response to `TwinlabApiError` (see the class docstring
     for the envelope and the best-effort legacy mapping)."""
     status = response.status_code

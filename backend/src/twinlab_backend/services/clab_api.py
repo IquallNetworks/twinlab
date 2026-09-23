@@ -6,7 +6,7 @@ inline as `topologyContent`, so the netlab-generated YAML flows straight through
 — no shared volume with the server is needed. Config push is not done here; it
 lives in the netlab-runner sidecar.
 
-httpx is a third-party boundary: its exceptions and the server's untyped JSON are
+httpx2 is a third-party boundary: its exceptions and the server's untyped JSON are
 translated here into typed results; nothing propagates as an exception.
 """
 
@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
 
-import httpx
+import httpx2
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as ws_connect
@@ -352,7 +352,7 @@ class ClabApiClient:
     """Stateless client; a JWT is fetched per operation via `_login`. `client`
     is injected so its lifecycle (and TLS/verify policy) is owned by the app."""
 
-    client: httpx.AsyncClient
+    client: httpx2.AsyncClient
     base_url: str
     username: str
     password: str
@@ -363,7 +363,7 @@ class ClabApiClient:
                 f"{self.base_url}/login",
                 json={"username": self.username, "password": self.password},
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(ClabApiError(f"login request failed: {exc}", None))
 
         if resp.status_code != HTTPStatus.OK:
@@ -383,15 +383,15 @@ class ClabApiClient:
         params: Mapping[str, str | bool] | None = None,
         json: object | None = None,
         timeout: float | None = None,
-    ) -> Result[httpx.Response, ClabApiError]:
+    ) -> Result[httpx2.Response, ClabApiError]:
         """Log in, then send one authenticated request to `path`. Returns the raw
         response for the caller to status-check and parse; only transport failures
         are turned into errors here. `timeout=None` uses the client default (not
-        httpx's "disable timeout")."""
+        httpx2's "disable timeout")."""
         auth = await self._login()
         if isinstance(auth, Err):
             return auth
-        timeout_arg = httpx.USE_CLIENT_DEFAULT if timeout is None else timeout
+        timeout_arg = httpx2.USE_CLIENT_DEFAULT if timeout is None else timeout
         try:
             resp = await self.client.request(
                 method,
@@ -401,7 +401,7 @@ class ClabApiClient:
                 headers={"Authorization": f"Bearer {auth.value}"},
                 timeout=timeout_arg,
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(ClabApiError(f"{method} {path} failed: {exc}", None))
         return Ok(resp)
 
@@ -414,7 +414,7 @@ class ClabApiClient:
         json: object | None = None,
         timeout: float | None = None,
         retry_server_errors: bool = False,
-    ) -> Result[httpx.Response, ClabApiError]:
+    ) -> Result[httpx2.Response, ClabApiError]:
         """`_authed` plus a bounded retry on clab-api's transient rejections.
 
         Always retried: the lab-busy 409 (see `_LAB_BUSY_MARKER` above) — the
@@ -532,7 +532,7 @@ class ClabApiClient:
 
     @staticmethod
     def _parse_message(
-        sent: Result[httpx.Response, ClabApiError], op: str
+        sent: Result[httpx2.Response, ClabApiError], op: str
     ) -> Result[str, ClabApiError]:
         """Status-check a lifecycle response and lift its `message` field. Shared
         by the node/lab start/stop/restart actions, which all answer the same."""
@@ -803,9 +803,9 @@ class ClabApiClient:
     async def open_terminal_stream(self, session_id: str) -> Result[ClientConnection, ClabApiError]:
         """Open the terminal session's WebSocket (GET .../terminal-sessions/{id}/stream)
         with a fresh JWT on the handshake, and return the live connection. The caller
-        owns the connection and must close it. httpx can't speak client WebSocket, so
-        this uses the `websockets` client; its handshake/transport errors are trapped
-        here into a typed error."""
+        owns the connection and must close it. This uses the `websockets` client (httpx2's
+        own WebSocket support is an optional extra, not installed); its
+        handshake/transport errors are trapped here into a typed error."""
         auth = await self._login()
         if isinstance(auth, Err):
             return auth
@@ -831,7 +831,7 @@ class ClabApiClient:
                 "GET",
                 f"{self.base_url}/api/v1/events",
                 headers={"Authorization": f"Bearer {auth.value}"},
-                timeout=httpx.Timeout(10.0, read=None),
+                timeout=httpx2.Timeout(10.0, read=None),
             ) as resp:
                 if resp.status_code != HTTPStatus.OK:
                     return
@@ -841,14 +841,14 @@ class ClabApiClient:
                     event = _parse_event(line)
                     if event is not None:
                         yield event
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             return
 
     async def health(self) -> Result[None, ClabApiError]:
         """Probe the server's unauthenticated health endpoint (readiness only)."""
         try:
             resp = await self.client.get(f"{self.base_url}/health")
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(ClabApiError(f"health request failed: {exc}", None))
 
         if resp.status_code != HTTPStatus.OK:

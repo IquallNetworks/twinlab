@@ -1,13 +1,13 @@
-"""Shared fixtures: a TwinlabClient wired to an httpx.MockTransport."""
+"""Shared fixtures: a TwinlabClient wired to an httpx2.MockTransport."""
 
 from collections.abc import Callable
 
-import httpx
+import httpx2
 import pytest
 
 from twinlab_client import TwinlabClient
 
-Handler = Callable[[httpx.Request], httpx.Response]
+Handler = Callable[[httpx2.Request], httpx2.Response]
 
 ClientFactory = Callable[[Handler], TwinlabClient]
 
@@ -15,6 +15,6 @@ ClientFactory = Callable[[Handler], TwinlabClient]
 @pytest.fixture
 def make_client() -> ClientFactory:
     def factory(handler: Handler) -> TwinlabClient:
-        return TwinlabClient("http://testserver", transport=httpx.MockTransport(handler))
+        return TwinlabClient("http://testserver", transport=httpx2.MockTransport(handler))
 
     return factory

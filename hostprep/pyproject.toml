@@ -14,9 +14,9 @@ dev = [
     "basedpyright",
     "pytest",
     "pytest-asyncio",
-    # App tests drive the ASGI app through httpx (fully typed, unlike
+    # App tests drive the ASGI app through httpx2 (fully typed, unlike
     # starlette's TestClient).
-    "httpx",
+    "httpx2>=2.13.1",
 ]
 
 [build-system]

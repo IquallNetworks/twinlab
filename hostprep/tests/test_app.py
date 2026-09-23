@@ -1,11 +1,11 @@
 """The HTTP boundary: token gate, input validation, per-item outcome shape.
-The primitives are monkeypatched — they have their own tests. httpx's
+The primitives are monkeypatched — they have their own tests. httpx2's
 AsyncClient over ASGITransport, which is fully typed (unlike starlette's
 TestClient)."""
 
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from hostprep import host
@@ -15,9 +15,9 @@ TOKEN = "test-token"
 AUTH = {"X-Hostprep-Token": TOKEN}
 
 
-def _client() -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+def _client() -> httpx2.AsyncClient:
+    transport = httpx2.ASGITransport(app=app)
+    return httpx2.AsyncClient(transport=transport, base_url="http://test")
 
 
 @pytest.fixture

@@ -485,7 +485,7 @@ Conventions:
 - Lab-guarded routes: **404** when the caller can't read the lab (existence
   hidden), **403** when readable but lacking the specific permission.
 - Names (lab/node/suite): ``^[A-Za-z0-9][A-Za-z0-9_.-]*$``, max 64.
-- **Async client**: every method is a coroutine (httpx.AsyncClient +
+- **Async client**: every method is a coroutine (httpx2.AsyncClient +
   `websockets`); the client is an async context manager.
 - Ids are UUIDs — **UUIDv7** (decided 2026-07-28: the backend bumps to
   Python 3.14 and uses stdlib `uuid.uuid7`; wire today: v4). Applies to every

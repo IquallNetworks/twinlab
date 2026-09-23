@@ -9,7 +9,7 @@ import os
 from collections.abc import Callable, Coroutine
 from typing import cast
 
-import httpx
+import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -36,13 +36,13 @@ def _settings(token: str | None) -> Settings:
     )
 
 
-def _client(token: str | None) -> httpx.AsyncClient:
+def _client(token: str | None) -> httpx2.AsyncClient:
     app = create_app()
     app.state.settings = _settings(token)
     app.state.session_factory = cast("async_sessionmaker[AsyncSession]", _NullSession)
     app.state.clab_client = cast("ClabApiClient", object())
-    transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+    transport = httpx2.ASGITransport(app=app)
+    return httpx2.AsyncClient(transport=transport, base_url="http://test")
 
 
 _LOOKUP = "/internal/ssh/authorized-keys?fingerprint=SHA256:abc"

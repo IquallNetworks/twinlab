@@ -1,11 +1,11 @@
-"""TwinlabClient over httpx.MockTransport: request shapes and response parsing."""
+"""TwinlabClient over httpx2.MockTransport: request shapes and response parsing."""
 
 import json
 from collections.abc import Callable
 from typing import cast
 from uuid import UUID
 
-import httpx
+import httpx2
 import pytest
 
 from twinlab_client import (
@@ -40,7 +40,7 @@ from twinlab_client import (
 )
 from twinlab_client.client import TwinlabClient
 
-ClientFactory = Callable[[Callable[[httpx.Request], httpx.Response]], TwinlabClient]
+ClientFactory = Callable[[Callable[[httpx2.Request], httpx2.Response]], TwinlabClient]
 
 _OWNER_ID = "0198c0de-0000-7000-8000-000000000001"
 _JOB_ID = "0198c0de-0000-7000-8000-00000000000a"
@@ -94,23 +94,23 @@ _LAB_DETAIL = {
 }
 
 
-def _json_body(request: httpx.Request) -> dict[str, object]:
+def _json_body(request: httpx2.Request) -> dict[str, object]:
     return cast("dict[str, object]", json.loads(request.content.decode()))
 
 
 async def test_login_sets_cookie_and_parses(make_client: ClientFactory) -> None:
     seen_cookie_header: list[str | None] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/api/v1/auth/login":
             assert _json_body(request) == {"username": "admin", "password": "pw12345678"}
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"username": "admin", "roles": ["admin"], "permissions": ["user:manage"]},
                 headers={"Set-Cookie": "twinlab_session=tok123; Path=/; HttpOnly"},
             )
         seen_cookie_header.append(request.headers.get("Cookie"))
-        return httpx.Response(
+        return httpx2.Response(
             200, json={"username": "admin", "roles": ["admin"], "permissions": ["user:manage"]}
         )
 
@@ -123,12 +123,12 @@ async def test_login_sets_cookie_and_parses(make_client: ClientFactory) -> None:
 
 
 async def test_api_key_sends_bearer_header() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["Authorization"] == "Bearer tl_secret"
-        return httpx.Response(200, json={"username": "ci", "roles": [], "permissions": []})
+        return httpx2.Response(200, json={"username": "ci", "roles": [], "permissions": []})
 
     async with TwinlabClient(
-        "http://testserver", api_key="tl_secret", transport=httpx.MockTransport(handler)
+        "http://testserver", api_key="tl_secret", transport=httpx2.MockTransport(handler)
     ) as client:
         _ = await client.me()
 
@@ -146,13 +146,13 @@ _SSH_KEY_WIRE = {
 
 
 async def test_create_ssh_key_body_and_parse(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/auth/ssh-keys"
         assert _json_body(request) == {
             "name": "laptop",
             "public_key": "ssh-ed25519 AAAAC3Nza galileo@laptop",
         }
-        return httpx.Response(201, json=_SSH_KEY_WIRE)
+        return httpx2.Response(201, json=_SSH_KEY_WIRE)
 
     async with make_client(handler) as client:
         key = await client.create_ssh_key("laptop", "ssh-ed25519 AAAAC3Nza galileo@laptop")
@@ -167,12 +167,12 @@ async def test_create_ssh_key_body_and_parse(make_client: ClientFactory) -> None
 async def test_list_and_delete_ssh_keys(make_client: ClientFactory) -> None:
     deleted: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
             deleted.append(request.url.path)
-            return httpx.Response(204)
+            return httpx2.Response(204)
         assert request.url.path == "/api/v1/auth/ssh-keys"
-        return httpx.Response(200, json=[_SSH_KEY_WIRE])
+        return httpx2.Response(200, json=[_SSH_KEY_WIRE])
 
     async with make_client(handler) as client:
         keys = await client.list_ssh_keys()
@@ -185,10 +185,10 @@ _PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY--
 
 
 async def test_generate_ssh_key_body_and_parse(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/auth/ssh-keys/generate"
         assert _json_body(request) == {"name": "laptop"}
-        return httpx.Response(201, json={"private_key": _PEM, "info": _SSH_KEY_WIRE})
+        return httpx2.Response(201, json={"private_key": _PEM, "info": _SSH_KEY_WIRE})
 
     async with make_client(handler) as client:
         generated = await client.generate_ssh_key("laptop")
@@ -198,9 +198,9 @@ async def test_generate_ssh_key_body_and_parse(make_client: ClientFactory) -> No
 
 
 async def test_ssh_access_enabled(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/ssh-access"
-        return httpx.Response(
+        return httpx2.Response(
             200, json={"enabled": True, "host": "labs.example.com", "port": 2222, "user": "jump"}
         )
 
@@ -210,8 +210,8 @@ async def test_ssh_access_enabled(make_client: ClientFactory) -> None:
 
 
 async def test_ssh_access_disabled_is_all_none(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200, json={"enabled": False, "host": None, "port": None, "user": None}
         )
 
@@ -221,8 +221,8 @@ async def test_ssh_access_disabled_is_all_none(make_client: ClientFactory) -> No
 
 
 async def test_non_2xx_raises_api_error(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, json={"code": "lab_not_found", "message": "no such lab"})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(404, json={"code": "lab_not_found", "message": "no such lab"})
 
     async with make_client(handler) as client:
         with pytest.raises(TwinlabApiError) as excinfo:
@@ -232,9 +232,9 @@ async def test_non_2xx_raises_api_error(make_client: ClientFactory) -> None:
 
 
 async def test_get_lab_parses_detail(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1"
-        return httpx.Response(200, json=_LAB_DETAIL)
+        return httpx2.Response(200, json=_LAB_DETAIL)
 
     async with make_client(handler) as client:
         detail = await client.get_lab("lab1")
@@ -264,8 +264,8 @@ async def test_get_lab_parses_drift(make_client: ClientFactory) -> None:
         "definition_drifted": True,
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=drifted)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=drifted)
 
     async with make_client(handler) as client:
         detail = await client.get_lab("lab1")
@@ -274,10 +274,10 @@ async def test_get_lab_parses_drift(make_client: ClientFactory) -> None:
 
 
 async def test_get_layout_parses_positions(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "GET"
         assert request.url.path == "/api/v1/labs/lab1/layout"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "positions": {"r1": {"x": 10.5, "y": -3}, "link:3": {"x": 0, "y": 0}},
@@ -297,7 +297,7 @@ async def test_get_layout_parses_positions(make_client: ClientFactory) -> None:
 
 
 async def test_put_layout_sends_full_replace(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "PUT"
         assert request.url.path == "/api/v1/labs/lab1/layout"
         body = _json_body(request)
@@ -305,7 +305,7 @@ async def test_put_layout_sends_full_replace(make_client: ClientFactory) -> None
             "positions": {"r1": {"x": 1.0, "y": 2.0}},
             "groups": {"pe": {"color": "#38bdf8"}},
         }
-        return httpx.Response(200, json=body)
+        return httpx2.Response(200, json=body)
 
     async with make_client(handler) as client:
         layout = await client.put_layout(
@@ -319,9 +319,9 @@ async def test_put_layout_sends_full_replace(make_client: ClientFactory) -> None
 
 async def test_put_layout_empty_clears(make_client: ClientFactory) -> None:
     # Omitting `groups` still replaces the WHOLE resource — styles cleared.
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert _json_body(request) == {"positions": {}, "groups": {}}
-        return httpx.Response(200, json={"positions": {}, "groups": {}})
+        return httpx2.Response(200, json={"positions": {}, "groups": {}})
 
     async with make_client(handler) as client:
         layout = await client.put_layout("lab1", {})
@@ -332,8 +332,8 @@ async def test_put_layout_empty_clears(make_client: ClientFactory) -> None:
 async def test_get_layout_malformed_position_is_protocol_error(
     make_client: ClientFactory,
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"positions": {"r1": {"x": "ten", "y": 0}}})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"positions": {"r1": {"x": "ten", "y": 0}}})
 
     async with make_client(handler) as client:
         with pytest.raises(TwinlabProtocolError):
@@ -341,12 +341,12 @@ async def test_get_layout_malformed_position_is_protocol_error(
 
 
 async def test_create_lab_posts_name_only(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "POST"
         assert request.url.path == "/api/v1/labs"
         assert _json_body(request) == {"name": "lab1"}
         created = dict(_LAB_DETAIL) | {"status": "created", "definition": None, "nodes": []}
-        return httpx.Response(201, json=created)
+        return httpx2.Response(201, json=created)
 
     async with make_client(handler) as client:
         detail = await client.create_lab("lab1")
@@ -355,10 +355,10 @@ async def test_create_lab_posts_name_only(make_client: ClientFactory) -> None:
 
 
 async def test_deploy_lab_submits_and_parses_job(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/deploy"
         assert _json_body(request) == {"configure": True, "skip_config_time_checks": False}
-        return httpx.Response(202, json=_job_wire())
+        return httpx2.Response(202, json=_job_wire())
 
     async with make_client(handler) as client:
         job = await client.deploy_lab("lab1", configure=True)
@@ -371,10 +371,10 @@ async def test_deploy_lab_submits_and_parses_job(make_client: ClientFactory) -> 
 
 
 async def test_destroy_lab_remove_param(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "DELETE"
         assert request.url.params["remove"] == "true"
-        return httpx.Response(202, json=_job_wire(kind="destroy", request={"remove": True}))
+        return httpx2.Response(202, json=_job_wire(kind="destroy", request={"remove": True}))
 
     async with make_client(handler) as client:
         job = await client.destroy_lab("lab1", remove=True)
@@ -394,9 +394,9 @@ async def test_get_job_parses_result_by_kind(make_client: ClientFactory) -> None
         "validation": None,
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == f"/api/v1/labs/lab1/jobs/{_JOB_ID}"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=_job_detail_wire(
                 status="succeeded",
@@ -414,8 +414,8 @@ async def test_get_job_parses_result_by_kind(make_client: ClientFactory) -> None
 
 
 async def test_failed_job_carries_error_envelope(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json=_job_detail_wire(
                 status="failed",
@@ -439,8 +439,8 @@ async def test_failed_job_carries_error_envelope(make_client: ClientFactory) -> 
 
 
 async def test_get_job_parses_the_step_log(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json=_job_detail_wire(
                 steps=[
@@ -474,8 +474,8 @@ async def test_get_job_parses_the_step_log(make_client: ClientFactory) -> None:
 async def test_job_step_accepts_an_unknown_code(make_client: ClientFactory) -> None:
     # The vocabulary is allowed to GAIN entries; a client pinned to today's set
     # would break on tomorrow's backend for a purely cosmetic field.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json=_job_detail_wire(
                 steps=[
@@ -497,8 +497,8 @@ async def test_job_step_accepts_an_unknown_code(make_client: ClientFactory) -> N
 async def test_job_step_rejects_an_unknown_level(make_client: ClientFactory) -> None:
     # `level` IS closed — a client renders on it, so an unknown value is a
     # protocol error rather than something to guess a colour for.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json=_job_detail_wire(
                 steps=[
@@ -518,10 +518,10 @@ async def test_job_step_rejects_an_unknown_level(make_client: ClientFactory) -> 
 
 
 async def test_list_jobs_sends_limit(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/jobs"
         assert request.url.params["limit"] == "5"
-        return httpx.Response(200, json=[_job_wire()])
+        return httpx2.Response(200, json=[_job_wire()])
 
     async with make_client(handler) as client:
         jobs = await client.list_jobs("lab1", limit=5)
@@ -532,11 +532,11 @@ async def test_list_jobs_sends_limit(make_client: ClientFactory) -> None:
 async def test_wait_job_polls_to_terminal(make_client: ClientFactory) -> None:
     polls: list[int] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         polls.append(1)
         if len(polls) < 3:
-            return httpx.Response(200, json=_job_detail_wire())
-        return httpx.Response(
+            return httpx2.Response(200, json=_job_detail_wire())
+        return httpx2.Response(
             200,
             json=_job_detail_wire(
                 kind="destroy",
@@ -553,8 +553,8 @@ async def test_wait_job_polls_to_terminal(make_client: ClientFactory) -> None:
 
 
 async def test_wait_job_deadline_raises_timeout(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_job_detail_wire())
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_job_detail_wire())
 
     async with make_client(handler) as client:
         with pytest.raises(TimeoutError):
@@ -566,10 +566,10 @@ async def test_put_test_suites_omits_none_expectation_fields(
 ) -> None:
     sent: list[dict[str, object]] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         body = _json_body(request)
         sent.append(body)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "test_suites": body["test_suites"],
@@ -643,8 +643,8 @@ async def test_put_test_suites_omits_none_expectation_fields(
 
 
 async def test_put_test_suites_shared_case_roundtrip(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json={
                 "test_suites": _json_body(request)["test_suites"],
@@ -679,7 +679,7 @@ async def test_dry_run_test_case_sends_a_draft_and_reads_the_structure(
     """The authoring probe: no expectation, so no outcome — and the parsed
     structure comes back, which is what makes a compare writable."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/test-suites/dry-run"
         body = json.loads(request.content)
         assert body["node"] == "r1"
@@ -691,7 +691,7 @@ async def test_dry_run_test_case_sends_a_draft_and_reads_the_structure(
             "interactive": False,
             "parse": "json",
         }
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "node": "r1",
@@ -723,8 +723,8 @@ async def test_dry_run_test_case_sends_a_draft_and_reads_the_structure(
 async def test_dry_run_test_case_reports_a_parse_failure_as_an_answer(
     make_client: ClientFactory,
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json={
                 "node": "r1",
@@ -748,9 +748,9 @@ async def test_dry_run_test_case_reports_a_parse_failure_as_an_answer(
 
 
 async def test_device_catalog_parses(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/catalog"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "devices": [
@@ -798,8 +798,8 @@ async def test_device_catalog_parses(make_client: ClientFactory) -> None:
 
 
 async def test_device_catalog_unknown_role_is_protocol_error(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json={
                 "devices": [
@@ -823,9 +823,9 @@ async def test_device_catalog_unknown_role_is_protocol_error(make_client: Client
 
 
 async def test_facts_returns_raw_node_namespace(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/facts"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={"nodes": {"r1": {"device": "vyos", "loopback": {"ipv4": "10.0.0.1/32"}}}},
         )
@@ -836,8 +836,8 @@ async def test_facts_returns_raw_node_namespace(make_client: ClientFactory) -> N
 
 
 async def test_facts_no_definition_is_api_error(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             409, json={"code": "no_definition", "message": "no definition", "extras": {}}
         )
 
@@ -879,8 +879,8 @@ async def test_suite_report_with_diff_and_skip_parses(make_client: ClientFactory
         ],
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json={
                 "test_suites": {},
@@ -897,7 +897,7 @@ async def test_suite_report_with_diff_and_skip_parses(make_client: ClientFactory
 
 
 async def test_set_netem_replace_semantics_body(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/nodes/r1/netem"
         assert _json_body(request) == {
             "interface": "eth1",
@@ -907,7 +907,7 @@ async def test_set_netem_replace_semantics_body(make_client: ClientFactory) -> N
             "rate": None,
             "corruption": None,
         }
-        return httpx.Response(200, json={"message": "netem applied"})
+        return httpx2.Response(200, json={"message": "netem applied"})
 
     async with make_client(handler) as client:
         result = await client.set_netem(
@@ -917,7 +917,7 @@ async def test_set_netem_replace_semantics_body(make_client: ClientFactory) -> N
 
 
 async def test_apply_actions_tags_items_and_aligns_results(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/actions"
         # A netem item IS the single route's body + node + kind (delta 24).
         assert _json_body(request) == {
@@ -935,7 +935,7 @@ async def test_apply_actions_tags_items_and_aligns_results(make_client: ClientFa
                 {"kind": "power", "node": "r2", "action": "stop"},
             ]
         }
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "results": [
@@ -963,8 +963,8 @@ async def test_apply_actions_surfaces_upfront_rejection_as_an_error(
     make_client: ClientFactory,
 ) -> None:
     # A structurally invalid item never executes: that IS an HTTP error.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             422, json={"code": "validation_error", "message": "jitter requires delay", "extras": {}}
         )
 
@@ -975,8 +975,8 @@ async def test_apply_actions_surfaces_upfront_rejection_as_an_error(
 
 
 async def test_show_netem_parses_durations(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json=[
                 {
@@ -997,9 +997,9 @@ async def test_show_netem_parses_durations(make_client: ClientFactory) -> None:
 
 
 async def test_interfaces_node_filter_param(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.params["node"] == "r1"
-        return httpx.Response(200, json=[{"node": "r1", "interfaces": []}])
+        return httpx2.Response(200, json=[{"node": "r1", "interfaces": []}])
 
     async with make_client(handler) as client:
         inventory = await client.interfaces("lab1", node="r1")
@@ -1048,9 +1048,9 @@ async def test_links_parses_table_and_impairment(make_client: ClientFactory) -> 
         },
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/links"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "links": [
@@ -1083,8 +1083,8 @@ async def test_links_parses_table_and_impairment(make_client: ClientFactory) -> 
 
 
 async def test_links_no_definition_raises_api_error(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             409,
             json={"code": "no_definition", "message": "lab 'lab1' has no definition", "extras": {}},
         )
@@ -1099,8 +1099,8 @@ async def test_links_no_definition_raises_api_error(make_client: ClientFactory) 
 async def test_links_unknown_oper_state_is_protocol_error(make_client: ClientFactory) -> None:
     # oper_state is pinned (the backend derives it) — an unknown value is a
     # protocol break, not something to tolerate.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200, json={"links": [_lab_link_payload(oper_state="flapping")], "live": True}
         )
 
@@ -1110,8 +1110,8 @@ async def test_links_unknown_oper_state_is_protocol_error(make_client: ClientFac
 
 
 async def test_ready_parses_503_as_degraded(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             503, json={"status": "degraded", "checks": {"database": "connection refused"}}
         )
 
@@ -1129,9 +1129,9 @@ async def test_events_yields_events_and_skips_keepalives(make_client: ClientFact
         ' "timestamp": "t2"}\n\n'
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/events"
-        return httpx.Response(200, text=body)
+        return httpx2.Response(200, text=body)
 
     async with make_client(handler) as client:
         events = [event async for event in client.events()]
@@ -1151,8 +1151,8 @@ async def test_events_discriminates_job_events_by_name(make_client: ClientFactor
         ' "status": "succeeded", "timestamp": "2026-07-30T12:00:00Z"}\n\n'
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=body)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, text=body)
 
     async with make_client(handler) as client:
         events = [event async for event in client.events()]
@@ -1173,8 +1173,8 @@ async def test_events_skips_unknown_event_names(make_client: ClientFactory) -> N
         'event: lab\ndata: {"lab": "lab1", "node": "r1", "action": "start", "timestamp": "t1"}\n\n'
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=body)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, text=body)
 
     async with make_client(handler) as client:
         events = [event async for event in client.events()]
@@ -1183,11 +1183,11 @@ async def test_events_skips_unknown_event_names(make_client: ClientFactory) -> N
 
 
 async def test_list_all_jobs_reads_the_fleet_route(make_client: ClientFactory) -> None:
-    seen: list[httpx.Request] = []
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
-        return httpx.Response(200, json=[_job_wire()])
+        return httpx2.Response(200, json=[_job_wire()])
 
     async with make_client(handler) as client:
         jobs = await client.list_all_jobs(limit=50)
@@ -1223,9 +1223,9 @@ async def test_list_network_templates_both_tiers(make_client: ClientFactory) -> 
         "source_lab": "lab1",
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/templates/network"
-        return httpx.Response(200, json=[_NETWORK_TEMPLATE_WIRE, published])
+        return httpx2.Response(200, json=[_NETWORK_TEMPLATE_WIRE, published])
 
     async with make_client(handler) as client:
         templates = await client.list_network_templates()
@@ -1234,9 +1234,9 @@ async def test_list_network_templates_both_tiers(make_client: ClientFactory) -> 
 
 
 async def test_get_network_template_serves_content(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/templates/network/mpls-l3vpn"
-        return httpx.Response(200, json=_NETWORK_TEMPLATE_WIRE | {"content": "provider: clab\n"})
+        return httpx2.Response(200, json=_NETWORK_TEMPLATE_WIRE | {"content": "provider: clab\n"})
 
     async with make_client(handler) as client:
         template = await client.get_network_template("mpls-l3vpn")
@@ -1245,14 +1245,14 @@ async def test_get_network_template_serves_content(make_client: ClientFactory) -
 
 
 async def test_node_template_crud_request_shapes(make_client: ClientFactory) -> None:
-    seen: list[httpx.Request] = []
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         if request.method == "DELETE":
-            return httpx.Response(204)
+            return httpx2.Response(204)
         status = 201 if request.method == "POST" else 200
-        return httpx.Response(status, json=_NODE_TEMPLATE_WIRE)
+        return httpx2.Response(status, json=_NODE_TEMPLATE_WIRE)
 
     async with make_client(handler) as client:
         created = await client.create_node_template(
@@ -1280,12 +1280,12 @@ async def test_node_template_crud_request_shapes(make_client: ClientFactory) -> 
 async def test_set_lab_template_publish_and_withdraw(make_client: ClientFactory) -> None:
     seen: list[dict[str, object]] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         body = _json_body(request)
         seen.append(body)
         assert request.url.path == "/api/v1/labs/lab1/template"
         if body["published"]:
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "name": "lab1",
@@ -1294,9 +1294,9 @@ async def test_set_lab_template_publish_and_withdraw(make_client: ClientFactory)
                     "source_lab": "lab1",
                 },
             )
-        # A withdraw answers a JSON null body (httpx's json= treats None as
+        # A withdraw answers a JSON null body (httpx2's json= treats None as
         # "no body", so spell the wire form out).
-        return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
+        return httpx2.Response(200, content=b"null", headers={"content-type": "application/json"})
 
     async with make_client(handler) as client:
         entry = await client.set_lab_template("lab1", published=True, description="the card")
@@ -1311,8 +1311,8 @@ async def test_set_lab_template_publish_and_withdraw(make_client: ClientFactory)
 
 
 async def test_node_template_bad_tier_is_protocol_error(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[_NODE_TEMPLATE_WIRE | {"tier": "communal"}])
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=[_NODE_TEMPLATE_WIRE | {"tier": "communal"}])
 
     async with make_client(handler) as client:
         with pytest.raises(TwinlabProtocolError):
@@ -1320,8 +1320,8 @@ async def test_node_template_bad_tier_is_protocol_error(make_client: ClientFacto
 
 
 async def test_lab_detail_serves_template_published(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_LAB_DETAIL | {"template_published": True})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_LAB_DETAIL | {"template_published": True})
 
     async with make_client(handler) as client:
         detail = await client.get_lab("lab1")
@@ -1356,14 +1356,14 @@ _NETWORK_IMPORT_PAYLOAD = {
 
 
 async def test_import_network_round_trip(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/import/network"
         body = json.loads(request.content)
         assert body == {
             "sources": [{"device": "iol", "content": "hostname r1\n", "name": "r1"}],
             "wiring": [["r1:Ethernet0/1", "r2:Ethernet0/1"]],
         }
-        return httpx.Response(200, json=_NETWORK_IMPORT_PAYLOAD)
+        return httpx2.Response(200, json=_NETWORK_IMPORT_PAYLOAD)
 
     async with make_client(handler) as client:
         result = await client.import_network(
@@ -1381,7 +1381,7 @@ async def test_import_network_round_trip(make_client: ClientFactory) -> None:
 
 
 async def test_custom_config_round_trip(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/custom-config"
         body = json.loads(request.content)
         # Scope keys travel by presence — a universal variant carries none.
@@ -1410,7 +1410,7 @@ async def test_custom_config_round_trip(make_client: ClientFactory) -> None:
                 | {"variants": body["templates"][0]["variants"]},
             ]
         }
-        return httpx.Response(200, json=served)
+        return httpx2.Response(200, json=served)
 
     async with make_client(handler) as client:
         stored = await client.put_custom_config(
@@ -1435,8 +1435,8 @@ async def test_custom_config_round_trip(make_client: ClientFactory) -> None:
 
 
 async def test_import_network_error_slug(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             422,
             json={
                 "code": "duplicate_node",
@@ -1452,9 +1452,9 @@ async def test_import_network_error_slug(make_client: ClientFactory) -> None:
 
 
 async def test_import_node_parses(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/import/node"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "fragment": "device: iol\nloopback:\n  ipv4: 10.0.0.1/32\n",
@@ -1473,7 +1473,7 @@ async def test_import_node_parses(make_client: ClientFactory) -> None:
 
 
 async def test_config_diff_round_trip(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/config-diff"
         body = json.loads(request.content)
         assert body == {
@@ -1481,7 +1481,7 @@ async def test_config_diff_round_trip(make_client: ClientFactory) -> None:
                 {"node": "r1", "content": "hostname r1\n", "interface_map": {"Gi0/1": "Et0/1"}}
             ]
         }
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "nodes": [
@@ -1513,12 +1513,12 @@ async def test_config_diff_round_trip(make_client: ClientFactory) -> None:
 
 
 async def test_suggest_wiring_parses(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/import/wiring-suggestion"
         assert json.loads(request.content) == {
             "sources": [{"device": "iol", "content": "hostname r1\n", "name": None}]
         }
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "wiring": [["r1:Ethernet0/1", "r2:Ethernet0/1"]],
@@ -1535,8 +1535,8 @@ async def test_suggest_wiring_parses(make_client: ClientFactory) -> None:
 
 
 async def test_import_network_wiring_error_slug(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             422,
             json={
                 "code": "wiring_conflict",
@@ -1555,9 +1555,9 @@ async def test_import_network_wiring_error_slug(make_client: ClientFactory) -> N
 
 
 async def test_host_resources_parses(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/host"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "sampled_at": "2026-08-11T12:00:00Z",
@@ -1598,9 +1598,9 @@ async def test_host_resources_parses(make_client: ClientFactory) -> None:
 
 
 async def test_docker_usage_parses(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/host/docker"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "root_dir": "/var/lib/docker",
@@ -1638,9 +1638,9 @@ async def test_docker_usage_parses(make_client: ClientFactory) -> None:
 
 
 async def test_lab_usage_parses_unmeasured_nodes(make_client: ClientFactory) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/api/v1/labs/lab1/usage"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "lab": "lab1",

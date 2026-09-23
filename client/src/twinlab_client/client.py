@@ -20,7 +20,7 @@ from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
-import httpx
+import httpx2
 
 from twinlab_client import _wire
 from twinlab_client._terminal import TerminalSession
@@ -105,14 +105,14 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         timeout: float = 30.0,
         action_timeout: float = 1800.0,
         verify_tls: bool = True,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
         """`base_url` = backend origin (e.g. "http://localhost:8000");
         `subpath` is appended to it. `api_key` authenticates every request as
         `Authorization: Bearer <key>` instead of a login session.
         `action_timeout` is the default `wait_job` deadline — submits
         themselves are fast 202s. `transport` is a testing seam
-        (httpx.MockTransport)."""
+        (httpx2.MockTransport)."""
         if not base_url.startswith(("http://", "https://")):
             raise ValueError(f"base_url must be an http(s) origin, got {base_url!r}")
         self._origin = base_url.rstrip("/")
@@ -121,7 +121,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         self._timeout = timeout
         self._action_timeout = action_timeout
         headers = {"Authorization": f"Bearer {api_key}"} if api_key is not None else {}
-        self._http = httpx.AsyncClient(
+        self._http = httpx2.AsyncClient(
             base_url=self._origin + self._subpath,
             headers=headers,
             timeout=timeout,
@@ -148,7 +148,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         json_body: object | None = None,
         params: dict[str, str | int | bool] | None = None,
         long: bool = False,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         if long:
             response = await self._http.request(
                 method, path, json=json_body, params=params, timeout=self._action_timeout
@@ -1074,7 +1074,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     async def _event_stream(self) -> AsyncGenerator[LabEvent | JobEvent]:
         # No read timeout: the stream idles between events (keepalive comments
         # keep the connection alive, not the read clock).
-        timeout = httpx.Timeout(self._timeout, read=None)
+        timeout = httpx2.Timeout(self._timeout, read=None)
         async with self._http.stream("GET", "/events", timeout=timeout) as response:
             if response.is_error:
                 _ = await response.aread()

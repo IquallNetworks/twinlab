@@ -1,23 +1,23 @@
 import json
 from collections.abc import Callable
 
-import httpx
+import httpx2
 
 from twinlab_backend.result import Err, Ok
 from twinlab_backend.services.runner_client import RunnerClient
 
 
-def _client(handler: Callable[[httpx.Request], httpx.Response]) -> RunnerClient:
+def _client(handler: Callable[[httpx2.Request], httpx2.Response]) -> RunnerClient:
     return RunnerClient(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
         base_url="http://runner.test",
     )
 
 
 async def test_configure_parses_per_node_results() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/configure"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "lab_name": "tl-1",
@@ -38,9 +38,9 @@ async def test_configure_parses_per_node_results() -> None:
 async def test_configure_sends_template_fileset() -> None:
     seen: dict[str, object] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.update(json.loads(request.content))
-        return httpx.Response(200, json={"lab_name": "tl-1", "succeeded": True, "nodes": []})
+        return httpx2.Response(200, json={"lab_name": "tl-1", "succeeded": True, "nodes": []})
 
     templates = {"mpls_te/ios.j2": "conf", "nat.j2": "user"}
     _ = await _client(handler).configure("name: tl-1\n", templates)
@@ -48,8 +48,8 @@ async def test_configure_sends_template_fileset() -> None:
 
 
 async def test_configure_marks_failed_node() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json={
                 "lab_name": "tl-1",
@@ -65,8 +65,8 @@ async def test_configure_marks_failed_node() -> None:
 
 
 async def test_configure_maps_bad_definition_to_typed_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(422, json={"detail": "netlab create failed"})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(422, json={"detail": "netlab create failed"})
 
     result = await _client(handler).configure("nonsense", {})
     assert isinstance(result, Err)
@@ -76,10 +76,10 @@ async def test_configure_maps_bad_definition_to_typed_error() -> None:
 async def test_ready_reports_ready_and_sends_templates() -> None:
     seen: dict[str, object] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/ready"
         seen.update(json.loads(request.content))
-        return httpx.Response(200, json={"ready": True})
+        return httpx2.Response(200, json={"ready": True})
 
     templates = {"mpls_te/ios.j2": "conf"}
     result = await _client(handler).ready("name: tl-1\n", templates)
@@ -89,9 +89,9 @@ async def test_ready_reports_ready_and_sends_templates() -> None:
 
 
 async def test_ready_maps_not_ready_to_typed_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         # 504: netlab exhausted its retry budget (a node never came up).
-        return httpx.Response(504, json={"detail": "devices did not become ready"})
+        return httpx2.Response(504, json={"detail": "devices did not become ready"})
 
     result = await _client(handler).ready("name: tl-1\n", {})
     assert isinstance(result, Err)
@@ -99,9 +99,9 @@ async def test_ready_maps_not_ready_to_typed_error() -> None:
 
 
 async def test_docker_usage_parses_the_daemon_footprint() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/docker/usage"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "root_dir": "/var/lib/docker",
@@ -131,12 +131,12 @@ async def test_docker_usage_parses_the_daemon_footprint() -> None:
 
 
 async def test_container_stats_are_keyed_by_container_name() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/docker/stats"
         # One repeated query parameter per container, so the runner samples
         # them concurrently in a single round trip.
         assert request.url.params.get_list("container") == ["clab-l-r1", "clab-l-r2"]
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "stats": [
@@ -162,7 +162,7 @@ async def test_container_stats_are_keyed_by_container_name() -> None:
 
 
 async def test_container_stats_with_no_containers_skips_the_round_trip() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("no containers means nothing to ask about")
 
     result = await _client(handler).container_stats(())

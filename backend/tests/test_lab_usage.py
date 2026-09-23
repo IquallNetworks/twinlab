@@ -6,7 +6,7 @@ above it are blackbox territory."""
 from collections.abc import Callable
 from typing import cast
 
-import httpx
+import httpx2
 
 from twinlab_backend.api.labs import lab_usage
 from twinlab_backend.result import Err, Ok, Result
@@ -36,9 +36,9 @@ class _FakeClab:
         )
 
 
-def _runner(handler: Callable[[httpx.Request], httpx.Response]) -> RunnerClient:
+def _runner(handler: Callable[[httpx2.Request], httpx2.Response]) -> RunnerClient:
     return RunnerClient(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
         base_url="http://runner.test",
     )
 
@@ -46,10 +46,10 @@ def _runner(handler: Callable[[httpx.Request], httpx.Response]) -> RunnerClient:
 async def test_running_nodes_carry_measures_and_stopped_ones_do_not() -> None:
     asked: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/docker/stats"
         asked.extend(request.url.params.get_list("container"))
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "stats": [
@@ -87,7 +87,7 @@ async def test_running_nodes_carry_measures_and_stopped_ones_do_not() -> None:
 
 
 async def test_undeployed_lab_is_not_live_rather_than_an_error() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
+    def handler(_: httpx2.Request) -> httpx2.Response:
         raise AssertionError("the runner must not be asked when there are no containers")
 
     clab = _FakeClab((), fail=True)
@@ -97,8 +97,8 @@ async def test_undeployed_lab_is_not_live_rather_than_an_error() -> None:
 
 
 async def test_runner_outage_keeps_the_node_rows_but_drops_live() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, text="runner down")
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(503, text="runner down")
 
     clab = _FakeClab((("r1", "running"),))
     usage = await lab_usage("lab1", cast(ClabApiClient, clab), _runner(handler))

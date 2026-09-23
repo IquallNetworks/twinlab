@@ -5,7 +5,7 @@ The runner owns config push: `POST /configure {definition}` runs `netlab create`
 results. The definition must carry a stable `name:` so the runner's regenerated
 inventory targets the containers clab-api deployed.
 
-httpx is a third-party boundary: its exceptions and the runner's JSON are
+httpx2 is a third-party boundary: its exceptions and the runner's JSON are
 translated here into typed results; nothing propagates as an exception.
 """
 
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Literal
 
-import httpx
+import httpx2
 from pydantic import BaseModel, ValidationError
 
 from twinlab_backend.result import Err, Ok, Result
@@ -164,7 +164,7 @@ class _ReadyResponse(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class RunnerClient:
-    client: httpx.AsyncClient
+    client: httpx2.AsyncClient
     base_url: str
 
     async def configure(
@@ -180,7 +180,7 @@ class RunnerClient:
                 json={"definition": definition, "templates": templates},
                 timeout=_CONFIGURE_TIMEOUT_SECONDS,
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(RunnerError("transport", f"configure request failed: {exc}"))
 
         if resp.status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
@@ -218,7 +218,7 @@ class RunnerClient:
                 json={"definition": definition, "templates": templates},
                 timeout=_READY_TIMEOUT_SECONDS,
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(RunnerError("transport", f"ready request failed: {exc}"))
 
         if resp.status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
@@ -238,7 +238,7 @@ class RunnerClient:
         normalization and matching stay here in the backend."""
         try:
             resp = await self.client.get(f"{self.base_url}/images", timeout=_IMAGES_TIMEOUT_SECONDS)
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(RunnerError("transport", f"images request failed: {exc}"))
 
         if resp.status_code != HTTPStatus.OK:
@@ -258,7 +258,7 @@ class RunnerClient:
             resp = await self.client.get(
                 f"{self.base_url}/docker/usage", timeout=_DOCKER_USAGE_TIMEOUT_SECONDS
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(RunnerError("transport", f"docker usage request failed: {exc}"))
 
         if resp.status_code != HTTPStatus.OK:
@@ -308,7 +308,7 @@ class RunnerClient:
                 params=[("container", name) for name in containers],
                 timeout=_DOCKER_STATS_TIMEOUT_SECONDS,
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(RunnerError("transport", f"docker stats request failed: {exc}"))
 
         if resp.status_code != HTTPStatus.OK:
@@ -363,7 +363,7 @@ class RunnerClient:
                 },
                 timeout=_EXEC_TIMEOUT_SECONDS,
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(RunnerError("transport", f"exec request failed: {exc}"))
 
         if resp.status_code == HTTPStatus.UNPROCESSABLE_ENTITY:

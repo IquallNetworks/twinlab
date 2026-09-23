@@ -799,8 +799,9 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   accept and releases the DB session before the relay (same rule as `/events`), creates a clab-api
   terminal session, and relays its JSON frames transparently in both directions (the browser does
   its own base64 decode), deleting the session on close. clab-api's terminal stream is a client
-  WebSocket, so it uses the `websockets` library (httpx can't); terminal-sessions accepts the short
-  node name, so no container resolution is needed. DB-backed auth + RBAC guard everything — **two
+  WebSocket, so it uses the `websockets` library (httpx2's WebSocket support is an extra Twinlab
+  does not install); terminal-sessions accepts the short node name, so no container resolution is
+  needed. DB-backed auth + RBAC guard everything — **two
   credentials**: opaque session cookies OR `Authorization: Bearer <api-key>` (shared resolver used
   by HTTP routes, `/events`, and the terminal handshake). Scoped RBAC (`docs/rbac-v2.md` + the
   contract's catalog appendix): `lab:read` for reads/events/netem-show/suite-read, `lab:edit` for
@@ -810,7 +811,7 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `template:manage` (delta 21 — authors the template library's user tier; reads need no
   permission). The clab-api
   client (`services/clab_api.py`) routes every authenticated call through one `_authed` helper.
-  Errors-as-values throughout; `try`/`except` only at the subprocess/httpx/pydantic boundaries.
+  Errors-as-values throughout; `try`/`except` only at the subprocess/httpx2/pydantic boundaries.
 - **`netlab-runner/`** — FastAPI (uv) config-push sidecar. `POST /configure {definition}` runs
   `netlab create` (regenerate the inventory) then `netlab initial`, which drives Ansible over the
   `docker` connection (exec into `clab-<lab>-<node>` by name via the mounted Docker socket — no host

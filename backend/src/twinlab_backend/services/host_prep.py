@@ -7,7 +7,7 @@ pre-start work, which Twinlab never runs. It is a dumb executor behind a
 shared token; THIS side owns the policy (bridge ownership, collisions,
 required-vs-optional modules), applied in the deploy/destroy jobs.
 
-httpx is a third-party boundary: its exceptions and the sidecar's JSON are
+httpx2 is a third-party boundary: its exceptions and the sidecar's JSON are
 translated here into typed results; nothing propagates as an exception.
 """
 
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Literal
 
-import httpx
+import httpx2
 from pydantic import BaseModel, ValidationError
 
 from twinlab_backend.result import Err, Ok, Result
@@ -71,7 +71,7 @@ class _ModulesResponse(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class HostPrepClient:
-    client: httpx.AsyncClient
+    client: httpx2.AsyncClient
     base_url: str
     token: str
 
@@ -86,7 +86,7 @@ class HostPrepClient:
                 headers={"X-Hostprep-Token": self.token},
                 timeout=_TIMEOUT_SECONDS,
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(HostPrepError(f"hostprep request failed: {exc}"))
         if resp.status_code != HTTPStatus.OK:
             return Err(HostPrepError(f"hostprep rejected the request: {resp.text}"))
@@ -128,7 +128,7 @@ class HostPrepClient:
                 headers={"X-Hostprep-Token": self.token},
                 timeout=_TIMEOUT_SECONDS,
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             return Err(HostPrepError(f"hostprep request failed: {exc}"))
         if resp.status_code != HTTPStatus.OK:
             return Err(HostPrepError(f"hostprep rejected the request: {resp.text}"))

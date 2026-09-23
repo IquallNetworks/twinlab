@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
-import httpx
+import httpx2
 import yaml
 
 from twinlab_backend.api.catalog import build_catalog
@@ -123,12 +123,12 @@ def test_build_catalog_degrades_without_runner() -> None:
 
 
 async def test_runner_list_images_parses() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/images"
-        return httpx.Response(200, json={"images": ["a:1", "b:latest"]})
+        return httpx2.Response(200, json={"images": ["a:1", "b:latest"]})
 
     client = RunnerClient(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
         base_url="http://runner.test",
     )
     result = await client.list_images()
@@ -137,11 +137,11 @@ async def test_runner_list_images_parses() -> None:
 
 
 async def test_runner_list_images_error_is_typed() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"detail": {"stage": "docker-images"}})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(500, json={"detail": {"stage": "docker-images"}})
 
     client = RunnerClient(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
         base_url="http://runner.test",
     )
     result = await client.list_images()

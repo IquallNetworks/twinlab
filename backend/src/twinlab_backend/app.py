@@ -1,6 +1,6 @@
 """FastAPI application factory.
 
-Settings and the shared httpx client / clab-api client are built once in the
+Settings and the shared httpx2 client / clab-api client are built once in the
 lifespan and stashed on `app.state`; handlers reach them via the typed
 dependencies in `deps`.
 """
@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-import httpx
+import httpx2
 from fastapi import FastAPI
 from starlette.concurrency import run_in_threadpool
 
@@ -121,7 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # SSE streams (delta 16). Empty and cheap when nobody is listening.
     job_events = JobEventBroker()
 
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
+    async with httpx2.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         app.state.settings = settings
         app.state.builtin_library = builtin_library
         app.state.network_templates = network_templates
@@ -155,7 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         finally:
             _ = sampler.cancel()
             # Stop in-flight jobs, then record what the cancellation left
-            # behind — before the engine (and the shared httpx client, whose
+            # behind — before the engine (and the shared httpx2 client, whose
             # context closes after this) go away.
             for task in list(job_tasks.values()):
                 _ = task.cancel()

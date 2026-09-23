@@ -4,15 +4,15 @@ translation of transport/HTTP/shape failures into typed results."""
 import json
 from collections.abc import Callable
 
-import httpx
+import httpx2
 
 from twinlab_backend.result import Err, Ok
 from twinlab_backend.services.host_prep import HostPrepClient
 
 
-def _client(handler: Callable[[httpx.Request], httpx.Response]) -> HostPrepClient:
+def _client(handler: Callable[[httpx2.Request], httpx2.Response]) -> HostPrepClient:
     return HostPrepClient(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
         base_url="http://hostprep:8091",
         token="secret",
     )
@@ -21,11 +21,11 @@ def _client(handler: Callable[[httpx.Request], httpx.Response]) -> HostPrepClien
 async def test_ensure_bridges_sends_token_and_parses_outcomes() -> None:
     seen: dict[str, object] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen["method"] = request.method
         seen["token"] = request.headers.get("X-Hostprep-Token")
         seen["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "bridges": [
@@ -47,9 +47,9 @@ async def test_ensure_bridges_sends_token_and_parses_outcomes() -> None:
 
 
 async def test_delete_bridges_uses_delete_method() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "DELETE"
-        return httpx.Response(
+        return httpx2.Response(
             200, json={"bridges": [{"name": "lab_1", "status": "in_use", "detail": "ports"}]}
         )
 
@@ -61,9 +61,9 @@ async def test_delete_bridges_uses_delete_method() -> None:
 
 
 async def test_load_modules_parses_per_item() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/modules"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "modules": [
@@ -79,8 +79,8 @@ async def test_load_modules_parses_per_item() -> None:
 
 
 async def test_http_error_is_a_typed_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, json={"detail": "invalid token"})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, json={"detail": "invalid token"})
 
     result = await _client(handler).ensure_bridges(["lab_1"])
     assert isinstance(result, Err)
@@ -88,8 +88,8 @@ async def test_http_error_is_a_typed_error() -> None:
 
 
 async def test_transport_error_is_a_typed_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("connection refused")
 
     result = await _client(handler).load_modules(["vrf"])
     assert isinstance(result, Err)
@@ -97,8 +97,8 @@ async def test_transport_error_is_a_typed_error() -> None:
 
 
 async def test_unexpected_shape_is_a_typed_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"bridges": [{"name": "lab_1", "status": "sideways"}]})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"bridges": [{"name": "lab_1", "status": "sideways"}]})
 
     result = await _client(handler).ensure_bridges(["lab_1"])
     assert isinstance(result, Err)

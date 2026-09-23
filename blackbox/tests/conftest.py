@@ -10,7 +10,7 @@ import os
 import secrets
 from collections.abc import AsyncIterator, Callable
 
-import httpx
+import httpx2
 import pytest
 from twinlab_client import GroupSummary, LabDetail, TwinlabApiError, TwinlabClient, UserSummary
 
@@ -55,7 +55,7 @@ def backend_ready(config: SuiteConfig) -> None:
 
     try:
         asyncio.run(check())
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         pytest.exit(f"backend at {config.base_url} is unreachable: {exc}", 4)
 
 
@@ -73,7 +73,7 @@ async def admin(config: SuiteConfig) -> AsyncIterator[TwinlabClient]:
     async with TwinlabClient(config.base_url) as client:
         _ = await client.login(config.admin_username, config.admin_password)
         yield client
-        with contextlib.suppress(TwinlabApiError, httpx.HTTPError):
+        with contextlib.suppress(TwinlabApiError, httpx2.HTTPError):
             await client.logout()
 
 
@@ -105,7 +105,7 @@ async def make_user_client(
 
     yield factory
     for summary, client in made:
-        with contextlib.suppress(TwinlabApiError, httpx.HTTPError):
+        with contextlib.suppress(TwinlabApiError, httpx2.HTTPError):
             await client.logout()
         await client.aclose()
         with contextlib.suppress(TwinlabApiError):

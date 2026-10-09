@@ -291,6 +291,10 @@ class OidcProvider:
     allow_create_users: bool
     allow_email_tying: bool
     trust_email: bool  # an ABSENT email_verified counts as verified
+    # Lowercase; a verified email must be at one of them to tie or create
+    # (an exact match: list each subdomain). Empty = any domain. Never applied
+    # to an identity that is already linked.
+    allowed_email_domains: list[str]
     default_group: Principal | None  # joined at account creation only
     enabled: bool
     icon: str | None  # a data: URI

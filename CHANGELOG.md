@@ -86,3 +86,27 @@ no secrets and no database.
 
 **API and `twinlab-client`:** unchanged. The MCP server uses the public API through
 `twinlab-client`.
+
+## 2026-10-09: Sign-in providers can be limited to email domains (contract delta 35)
+
+Design record: `docs/oidc.md`, "Allowed email domains".
+
+- A sign-in provider has a new setting, **Allowed email domains**. With `example.com` listed,
+  the provider ties and creates accounts only for a verified email at exactly `example.com`.
+  Anyone else is refused, and the login page tells them their email domain is not allowed.
+- The match ignores case and is exact: a subdomain such as `eu.example.com` must be listed on
+  its own.
+- Empty allows any domain, which is how providers behaved until now.
+- People already linked to the provider keep signing in whatever the list says. To stop one,
+  unlink or deactivate the account.
+
+**Upgrading:** nothing to configure. The backend's migration gives every existing provider an
+empty list, so nothing changes until you set one.
+
+**API and `twinlab-client`:**
+
+- `OidcProvider` gains `allowed_email_domains`.
+- `create_oidc_provider` takes it as an optional keyword (omitted = any domain).
+  `update_oidc_provider` requires it, like every other field of the replace.
+- Entries are bare domain names, stored lowercase. `@example.com` is a 422.
+- New sign-in error code: `oidc_email_domain_not_allowed`.

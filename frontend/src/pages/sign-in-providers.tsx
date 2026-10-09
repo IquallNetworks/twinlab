@@ -51,6 +51,8 @@ import {
   ICON_TYPES,
   PROVIDER_NAME_PATTERN,
   iconFileProblem,
+  invalidEmailDomains,
+  parseEmailDomains,
   parseScopes,
   secretChange,
   type SecretMode,
@@ -104,6 +106,15 @@ const providerFormSchema = z
     allow_create_users: z.boolean(),
     allow_email_tying: z.boolean(),
     trust_email: z.boolean(),
+    allowed_email_domains: z.string().superRefine((v, ctx) => {
+      const domains = parseEmailDomains(v)
+      const bad = invalidEmailDomains(domains)
+      if (bad.length > 0) {
+        ctx.addIssue({ code: 'custom', message: `Not a domain name: ${bad.join(', ')}` })
+      } else if (domains.length > 64) {
+        ctx.addIssue({ code: 'custom', message: 'At most 64 domains' })
+      }
+    }),
     default_group_id: z.string(),
     enabled: z.boolean(),
   })
@@ -128,6 +139,7 @@ function initialValues(provider: OidcProvider | null): ProviderFormValues {
       allow_create_users: false,
       allow_email_tying: false,
       trust_email: false,
+      allowed_email_domains: '',
       default_group_id: NO_GROUP,
       enabled: true,
     }
@@ -143,6 +155,7 @@ function initialValues(provider: OidcProvider | null): ProviderFormValues {
     allow_create_users: provider.allow_create_users,
     allow_email_tying: provider.allow_email_tying,
     trust_email: provider.trust_email,
+    allowed_email_domains: provider.allowed_email_domains.join(' '),
     default_group_id: provider.default_group?.id ?? NO_GROUP,
     enabled: provider.enabled,
   }
@@ -201,6 +214,7 @@ function ProviderFormDialog({
         allow_create_users: value.allow_create_users,
         allow_email_tying: value.allow_email_tying,
         trust_email: value.trust_email,
+        allowed_email_domains: parseEmailDomains(value.allowed_email_domains),
         default_group_id: value.default_group_id === NO_GROUP ? null : value.default_group_id,
         enabled: value.enabled,
       }
@@ -451,6 +465,29 @@ function ProviderFormDialog({
               </form.Field>
             </div>
 
+            <form.Field name="allowed_email_domains">
+              {(field) => (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={idp('domains')}>Allowed email domains</Label>
+                  <Input
+                    id={idp('domains')}
+                    className="font-mono"
+                    placeholder="any domain"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Space-separated, for example iquall.net. Creating and tying accounts then
+                    accept only a verified email at exactly one of these domains; list each
+                    subdomain you want too. Empty allows any. Accounts already linked keep
+                    signing in.
+                  </p>
+                  <FieldError errors={field.state.meta.errors} />
+                </div>
+              )}
+            </form.Field>
+
             <form.Field name="default_group_id">
               {(field) => (
                 <div className="flex flex-col gap-2">
@@ -685,6 +722,12 @@ function ProviderCard({ provider }: { provider: OidcProvider }) {
               trusts emails
             </Badge>
           )}
+          {(provider.allow_create_users || provider.allow_email_tying) &&
+            provider.allowed_email_domains.length > 0 && (
+              <Badge variant="outline" title="Accounts are created or tied only for emails at these domains">
+                {provider.allowed_email_domains.map((domain) => `@${domain}`).join(' ')}
+              </Badge>
+            )}
           {!provider.has_client_secret && <Badge variant="outline">public client</Badge>}
           {!provider.client_secret_readable && (
             <Badge variant="destructive" title="OIDC_SECRET_KEY changed or was lost — edit the provider and set the secret again">

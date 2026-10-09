@@ -174,6 +174,7 @@ export interface OidcProviderReplaceInput {
   allow_create_users: boolean
   allow_email_tying: boolean
   trust_email: boolean
+  allowed_email_domains: string[]
   default_group_id: string | null
   enabled: boolean
   client_secret?: string | null

@@ -18,6 +18,8 @@ export const OIDC_ERROR_MESSAGES = {
     'The provider did not share an email address, and Twinlab needs one to create your account.',
   oidc_email_unverified:
     'The provider did not confirm your email address is verified, so it cannot be used to sign you in.',
+  oidc_email_domain_not_allowed:
+    'This provider only creates or links Twinlab accounts for email addresses at certain domains, and yours is not one of them. Ask an administrator for access.',
   oidc_email_in_use:
     'An account with your email address already exists, but this provider is not allowed to sign into it. Ask an administrator to link it.',
   oidc_no_account:
@@ -101,6 +103,27 @@ export const DEFAULT_SCOPES = ['openid', 'email', 'profile']
 /** Space- or comma-separated scopes → a de-duplicated list. */
 export function parseScopes(text: string): string[] {
   return [...new Set(text.split(/[\s,]+/).filter((scope) => scope !== ''))]
+}
+
+/** The server's domain rule (delta 35): a DNS name in ASCII form — dot-separated
+ * labels of letters, digits and inner hyphens, at most 253 characters. */
+const EMAIL_DOMAIN_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/
+
+/** Free text → the allowed email domains: space- or comma-separated,
+ * lowercased, de-duplicated. A leading `@` is dropped, since "@iquall.net" is
+ * how people say it; the wire takes the bare domain. */
+export function parseEmailDomains(text: string): string[] {
+  const domains = text
+    .split(/[\s,]+/)
+    .filter((entry) => entry !== '')
+    .map((entry) => entry.replace(/^@/, '').toLowerCase())
+  return [...new Set(domains)]
+}
+
+/** The entries the server would refuse, so the form can name them first. */
+export function invalidEmailDomains(domains: string[]): string[] {
+  return domains.filter((domain) => domain.length > 253 || !EMAIL_DOMAIN_PATTERN.test(domain))
 }
 
 /** The provider form's secret choice. On edit the secret is WRITE-ONLY. */

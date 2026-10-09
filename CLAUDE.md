@@ -209,6 +209,13 @@ so `netlab_invalid`'s stderr reaches the agent. Guide pages are `twinlab://guide
 `docs` build context fills, like the frontend's; the client arrives through a `client` context.
 Unit tests drive the real app with the SDK's client in-process over the real `twinlab-client`,
 the backend faked with MockTransport; the blackbox `mcp` marker drives a live stack.
+— and delta 35 ALLOWED EMAIL DOMAINS on an OIDC provider, implemented 2026-10-09 (section
+of its own in `docs/oidc.md`): `allowed_email_domains` narrows TIE and CREATE to a verified
+email whose part after the LAST `@` equals a listed domain, lowercased — exact, so a subdomain
+is listed on its own, no wildcards. Empty = any (the create default; migration 0024 gives
+existing providers `[]`). A LINKED identity is never re-checked, since the link is the
+identity. The refusal is `oidc_email_domain_not_allowed`, checked after verification and
+before email-in-use. The API takes bare domains only; the admin form drops a typed `@`.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, versioned 0.9.0 like the whole tree, publication pending), **`blackbox/`**

@@ -71,6 +71,8 @@ export const oidcProviderSchema = z.object({
   allow_create_users: z.boolean(),
   allow_email_tying: z.boolean(),
   trust_email: z.boolean(),
+  // Lowercase; empty = any domain (delta 35).
+  allowed_email_domains: z.array(z.string()),
   default_group: z.object({ id: z.string(), name: z.string() }).nullable(),
   enabled: z.boolean(),
   icon: z.string().nullable(),

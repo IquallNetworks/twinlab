@@ -403,6 +403,7 @@ async def finish(
         allow_create_users=provider.allow_create_users,
         allow_email_tying=provider.allow_email_tying,
         trust_email=provider.trust_email,
+        allowed_email_domains=frozenset(provider.allowed_email_domains),
     )
     decision = resolution.resolve(claims.value, policy, await _lookups(db, provider, claims.value))
     if isinstance(decision, Refuse):

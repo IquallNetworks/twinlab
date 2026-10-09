@@ -8,6 +8,8 @@ import {
   isPlaceholderEmail,
   monogram,
   oidcErrorMessage,
+  invalidEmailDomains,
+  parseEmailDomains,
   parseScopes,
   PROVIDER_NAME_PATTERN,
   providerLoginUrl,
@@ -22,6 +24,7 @@ describe('oidc error messages', () => {
       'oidc_state_invalid',
       'oidc_provider_error',
       'oidc_token_invalid',
+      'oidc_email_domain_not_allowed',
       'oidc_email_missing',
       'oidc_email_unverified',
       'oidc_email_in_use',
@@ -90,6 +93,20 @@ describe('provider fields', () => {
   it('scopes parse from free text', () => {
     expect(parseScopes('openid email,profile  email')).toEqual(['openid', 'email', 'profile'])
     expect(parseScopes('  ')).toEqual([])
+  })
+
+  it('email domains parse from free text, as people write them', () => {
+    expect(parseEmailDomains('@IQUALL.net iquall.net, eu.iquall.net')).toEqual([
+      'iquall.net',
+      'eu.iquall.net',
+    ])
+    expect(parseEmailDomains('  ')).toEqual([])
+  })
+
+  it('email domains the server would refuse are named', () => {
+    expect(invalidEmailDomains(['iquall.net', 'xn--bcher-kva.example', 'localhost'])).toEqual([])
+    const bad = ['*.iquall.net', 'iquall.net.', '-iquall.net', 'a@iquall.net', 'x'.repeat(254)]
+    expect(invalidEmailDomains(bad)).toEqual(bad)
   })
 })
 

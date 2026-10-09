@@ -511,6 +511,20 @@ PROPOSED (delta 30/31/32).)
     needs a browser and a person; automation keeps using API keys. (wire
     today: no OIDC surface; ``users.email`` is an unused optional column
     and there is no display name.)
+(Delta 34, the MCP server, changes no client shape; its record is
+docs/mcp-server.md.)
+35. Allowed email domains on an OIDC provider (implemented 2026-10-09 on
+    the maintainer's request, awaiting review; design record docs/oidc.md,
+    "Allowed email domains"). ``OidcProvider.allowed_email_domains`` lists
+    the domains a VERIFIED email must be at for the provider to tie or
+    create; empty (the create default, and what migration 0024 gives every
+    existing provider) allows any. The match is exact and case-insensitive
+    on the part after the email's last ``@``, so a subdomain is listed on
+    its own. An already-linked identity is never re-checked: the link is
+    the identity. A refused sign-in redirects with the new code
+    ``oidc_email_domain_not_allowed``. Entries are bare lowercase domain
+    names (≤253 characters, ≤64 entries), de-duplicated; anything else is
+    a 422 validation_error.
 
 Conventions:
 
@@ -693,6 +707,9 @@ class OidcProvider:
     # does). Safe only for an issuer whose tenant controls every address it
     # can put in `email`. Built for Entra ID, which never sends the claim.
     trust_email: bool
+    # Delta 35: a VERIFIED email must be at one of these (exact, lowercase) to
+    # tie or create; empty = any domain. Never applied to a linked identity.
+    allowed_email_domains: list[str]
     default_group: Principal | None  # joined at CREATION only; None if deleted
     enabled: bool  # False hides it from the login page and refuses sign-in
     icon: str | None  # as on LoginProvider: a data: URI, set via its own route
@@ -2433,7 +2450,8 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
     # `/login?oidc_error=<code>`, with codes oidc_unavailable /
     # oidc_state_invalid / oidc_provider_error / oidc_token_invalid /
     # oidc_email_missing / oidc_email_unverified / oidc_email_in_use /
-    # oidc_no_account / oidc_identity_conflict / account_disabled. A person has to be at the
+    # oidc_no_account / oidc_identity_conflict / account_disabled, and since
+    # delta 35 oidc_email_domain_not_allowed. A person has to be at the
     # provider's login form, so a headless client cannot drive it. An OIDC
     # user automates by creating an API key after signing in in the browser.
 
@@ -2652,6 +2670,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         allow_create_users: bool = False,  # safe default: sign-in for linked users only
         allow_email_tying: bool = False,  # same
         trust_email: bool = False,  # same: vouching for an issuer is a deliberate act
+        # Delta 35. None = the server's default, [] (any domain): the list only
+        # narrows the two switches, which already default off.
+        allowed_email_domains: list[str] | None = None,
         default_group_id: UUID | None = None,
         enabled: bool = True,
     ) -> OidcProvider:
@@ -2677,6 +2698,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         allow_create_users: bool,
         allow_email_tying: bool,
         trust_email: bool,
+        allowed_email_domains: list[str],  # delta 35
         default_group_id: UUID | None,
         enabled: bool,
         client_secret: str | None | Unchanged = UNCHANGED,

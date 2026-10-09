@@ -49,6 +49,7 @@ class ProviderSpec:
     allow_create_users: bool
     allow_email_tying: bool
     trust_email: bool
+    allowed_email_domains: list[str]
     default_group_id: uuid.UUID | None
     enabled: bool
 
@@ -102,6 +103,7 @@ def _apply(provider: OidcProvider, spec: ProviderSpec) -> None:
     provider.allow_create_users = spec.allow_create_users
     provider.allow_email_tying = spec.allow_email_tying
     provider.trust_email = spec.trust_email
+    provider.allowed_email_domains = spec.allowed_email_domains
     provider.default_group_id = spec.default_group_id
     provider.enabled = spec.enabled
 

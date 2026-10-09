@@ -150,14 +150,16 @@ no `email` claim at all, nothing can tie or create.
    user is refused (`account_disabled`). The user's Twinlab email and display name are *not*
    overwritten from the claims. They are Twinlab data now, and syncing email could collide with
    the uniqueness rule in the middle of a sign-in.
-2. **Tie** (only if the provider allows it): the email must count as verified. It is matched
+2. **Tie** (only if the provider allows it): the email must count as verified, and be at an
+   allowed domain when the provider lists any (`oidc_email_domain_not_allowed`). It is matched
    against `users.email` case-insensitively. If the matched user is already linked to a
    *different* `sub` on this provider, the sign-in is refused (`oidc_identity_conflict`), because
    a user has at most one identity per provider. Otherwise the link is written and the user is
    signed in.
 3. **Create** (only if the provider allows it): this also requires a verified email. An
    unverified address would claim an email in the unique column that the real owner could then
-   never use. The new account gets:
+   never use. The domain rule of step 2 applies too, checked before whether the address is
+   already held. The new account gets:
    - `email` and `display_name` from the claims. The display name is `name`, else
      `preferred_username`, else the email.
    - a username derived from `preferred_username`, else the email's local part. It is truncated
@@ -170,6 +172,7 @@ no `email` claim at all, nothing can tie or create.
 4. Otherwise the sign-in is refused with the most specific reason that applies:
    - `oidc_email_missing`: creation is allowed, but the provider sent no `email` claim
    - `oidc_email_unverified`
+   - `oidc_email_domain_not_allowed`: the verified email is not at an allowed domain (delta 35)
    - `oidc_email_in_use`: the email belongs to an account, but this provider does not tie
    - `oidc_no_account`: nothing to link, tie or create
 
@@ -203,6 +206,7 @@ catalog does not change.
 | `scopes` | The default is `["openid", "email", "profile"]`, and `openid` is always required. The default comes from what the resolution rules need: `email` for tying and creation, `profile` for the display name and username. |
 | `allow_create_users` / `allow_email_tying` | Both `false` by default. The safe state is a provider that can only sign in users who are already linked. |
 | `trust_email` | `false` by default. When set, an absent `email_verified` counts as verified (see above). |
+| `allowed_email_domains` | Delta 35. Empty by default, which allows any domain. Otherwise tying and creation accept only an email at exactly one of these domains (see [Allowed email domains](#allowed-email-domains-delta-35)). |
 | `default_group_id` | An optional group joined *at creation only*, never re-applied on later sign-ins. If the group is deleted, the reference becomes null. |
 | `enabled` | `false` hides the provider from the login page and refuses sign-in through it, while keeping its links. |
 | icon | Optional, set through its own route (see [Icons](#icons)). |
@@ -345,7 +349,8 @@ New slugs:
   `invalid_icon`, 404 `provider_not_found`, 404 `identity_not_found`.
 - Callback codes (`oidc_error=`): `oidc_unavailable`, `oidc_state_invalid`,
   `oidc_provider_error`, `oidc_token_invalid`, `oidc_email_missing`, `oidc_email_unverified`,
-  `oidc_email_in_use`, `oidc_no_account`, `oidc_identity_conflict`, `account_disabled`.
+  `oidc_email_in_use`, `oidc_no_account`, `oidc_identity_conflict`, `account_disabled`, and
+  since delta 35 `oidc_email_domain_not_allowed`.
 
 **The Python client gets no `login_with_oidc`.** The flow needs a browser and a person at the
 provider's login form, and `twinlab-client` is headless. Automation for an OIDC user works the
@@ -457,6 +462,51 @@ What building it settled, beyond the design above.
   issuer is `http://dex.localhost:<DEX_PORT>/dex`. Browsers and the host resolve `*.localhost`
   to loopback on their own, and the overlay maps that name to the host gateway inside the
   backend, so both sides see one URL.
+
+## Allowed email domains (delta 35)
+
+**Status: implemented 2026-10-09 on the maintainer's request** ("Only @iquall.net accounts
+should be auto-created/linked"), awaiting review of the choices below. The shapes are in
+`docs/twinlab_client_shape.py` under `delta 35`.
+
+**The problem.** The two switches decide *whether* a provider ties and creates, never *for
+whom*. On a provider anyone can hold an account at, such as Google, "create accounts" meant
+"create an account for anyone on the internet", so the only safe setting for it was off, and
+every person had to be created by hand first.
+
+**The setting.** `allowed_email_domains` is a list of domains on the provider record. When it is
+not empty, tying and creation accept a sign-in only when its verified email is at one of them,
+and otherwise refuse it with `oidc_email_domain_not_allowed`. The choices:
+
+1. **It narrows tying and creation, not linked sign-ins.** The link is the durable identity, and
+   the email was used once, when the link was made. Re-checking it on every sign-in would make
+   the email the identity again, through the back door. A link from before the list was
+   narrowed keeps working; unlinking or deactivating the account is how to stop it, as it
+   already was.
+2. **Exact match, case-insensitive.** The domain is the part of the email after its last `@`
+   (a quoted local part may contain an `@`, a domain never does), lowercased and compared
+   whole. `eu.iquall.net` does not match `iquall.net`, and neither does `badiquall.net`. A
+   suffix rule is where lookalike domains slip through, and listing a subdomain is cheap. There
+   are no wildcards.
+3. **Judged on a verified email only.** Both steps already require one, and the domain of an
+   address nobody vouched for says nothing. An unverified email is still refused as
+   `oidc_email_unverified`. On a `trust_email` provider an absent claim still counts as
+   verified, and the domain is then judged on that address.
+4. **Empty means any domain**, and it is the create default. That is how every provider
+   behaved before the setting existed, and the migration gives existing providers `[]`. A
+   replace states the list like every other field.
+5. **Entries are bare domain names**: letters, digits, inner hyphens and dots, at most 253
+   characters, at most 64 entries. They are stored lowercase and de-duplicated. `@iquall.net`
+   is refused by the API with a message saying to list the domain bare, and the admin form
+   drops the `@` for you, since that is how people write it. An internationalised domain is
+   listed in its `xn--` form.
+6. **A refusal code of its own.** The person learns their domain is not one this provider
+   serves, and an administrator does not confuse it with a missing or unverified email.
+
+**Not included:** provider-specific organisation claims (Google's `hd`, Entra's `tid`). They
+pin the *tenant* rather than the address, and are stronger where a mail domain is shared
+between tenants, but each is one vendor's claim. The domain list works the same for every
+provider. A claim-based check can join later beside it.
 
 ## Deliberately not in this delta
 

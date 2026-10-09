@@ -76,6 +76,16 @@ provider that never states verification count as verified. Entra ID is the
 common case. Turn it on only for an issuer whose tenant owns every address it
 can put in a sign-in.
 
+**Allowed email domains** narrows both switches to your own people. With
+`example.com` listed, tying and creating accept only a verified email ending in
+`@example.com`, and anyone else is refused with a message saying their domain
+is not allowed. The match is exact and ignores case: `eu.example.com` is a
+different domain, so list each subdomain you want. Empty, the default, allows
+any domain. The list does not apply to someone already linked: a link is the
+identity itself, so narrowing the list later leaves existing links signing in.
+Unlink or deactivate an account to stop it. Restricting the domains matters most
+for a public provider such as Google, where anyone can have an account.
+
 Each person's linked providers are listed in their **Profile**. **Unlink**
 removes one, and the next sign-in through that provider goes through the rules
 above again. Unlinking is how you repair a tie that landed on the wrong account.

@@ -451,6 +451,10 @@ class OidcProvider(Base):
     allow_create_users: Mapped[bool] = mapped_column(Boolean())
     allow_email_tying: Mapped[bool] = mapped_column(Boolean())
     trust_email: Mapped[bool] = mapped_column(Boolean())
+    # Lowercase; an email must be at one of them to tie or create. Empty = any.
+    allowed_email_domains: Mapped[list[str]] = mapped_column(
+        JSONB(), server_default=text("'[]'::jsonb")
+    )
     # Joined by a user this provider CREATES, never re-applied on later sign-ins.
     default_group_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("groups.id", ondelete="SET NULL"), default=None

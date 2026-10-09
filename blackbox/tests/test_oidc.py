@@ -144,10 +144,21 @@ async def test_an_unreachable_issuer_is_refused_at_create(
 
 
 async def test_provider_input_is_validated_before_any_fetch(admin: TwinlabClient) -> None:
-    for name, scopes in (("Not-A-Slug", None), ("bb-noopenid", ["email"])):
+    cases: list[tuple[str, list[str] | None, list[str] | None]] = [
+        ("Not-A-Slug", None, None),
+        ("bb-noopenid", ["email"], None),
+        ("bb-atdomain", None, ["@iquall.net"]),  # a domain is listed bare (delta 35)
+    ]
+    for name, scopes, domains in cases:
         with pytest.raises(TwinlabApiError) as excinfo:
             _ = await admin.create_oidc_provider(
-                name, "X", "https://idp.invalid", "c", client_secret=None, scopes=scopes
+                name,
+                "X",
+                "https://idp.invalid",
+                "c",
+                client_secret=None,
+                scopes=scopes,
+                allowed_email_domains=domains,
             )
         assert excinfo.value.status_code == 422, name
 
@@ -212,6 +223,7 @@ async def _switch(
     tie: bool = False,
     enabled: bool = True,
     default_group: str | None = None,
+    domains: list[str] | None = None,
 ) -> OidcProvider:
     group_id = None
     if default_group is not None:
@@ -225,6 +237,7 @@ async def _switch(
         allow_create_users=create,
         allow_email_tying=tie,
         trust_email=False,
+        allowed_email_domains=domains or [],
         default_group_id=group_id,
         enabled=enabled,
     )
@@ -244,6 +257,7 @@ async def test_the_provider_reads_back_without_its_secret(
     assert dex.callback_url.endswith(f"/api/v1/auth/oidc/{PROVIDER}/callback")
     assert dex.allow_create_users is False and dex.allow_email_tying is False
     assert dex.scopes == ["openid", "email", "profile"]
+    assert dex.allowed_email_domains == []  # any domain, unless restricted
     with pytest.raises(TwinlabApiError) as excinfo:
         _ = await admin.create_oidc_provider(
             "bb-dex-again", "Again", dex.issuer, "x", client_secret=None
@@ -263,6 +277,7 @@ async def test_the_issuer_cannot_change(admin: TwinlabClient, dex: OidcProvider)
             allow_create_users=False,
             allow_email_tying=False,
             trust_email=False,
+            allowed_email_domains=[],
             default_group_id=None,
             enabled=True,
         )
@@ -401,3 +416,37 @@ async def test_icons_round_trip_as_data_uris(
     assert excinfo.value.code == "invalid_icon"
     cleared = await admin.clear_oidc_provider_icon(dex.name)
     assert cleared.icon is None
+
+
+@pytest.mark.oidc
+async def test_creation_and_tying_stay_inside_the_allowed_domains(
+    admin: TwinlabClient, dex: OidcProvider, config: SuiteConfig, unique: Callable[[str], str]
+) -> None:
+    # Delta 35. Dex's people are all @example.com.
+    restricted = await _switch(admin, dex, create=True, tie=True, domains=["Other.Example"])
+    assert restricted.allowed_email_domains == ["other.example"]  # stored lowercase
+    refused = await sign_in(config.base_url, ALICE)
+    await refused.browser.aclose()
+    assert refused.error == "oidc_email_domain_not_allowed"
+    assert all(u.email.lower() != ALICE for u in await admin.list_users())
+
+    carol = await admin.create_user(unique("carol"), CAROL, "Carol Local")
+    untied = await sign_in(config.base_url, CAROL)
+    await untied.browser.aclose()
+    assert untied.error == "oidc_email_domain_not_allowed"
+    assert (await admin.get_user(carol.user.id)).identities == []
+
+    # Listing the domain (in any case) lets the same sign-ins through.
+    _ = await _switch(admin, dex, create=True, tie=True, domains=["other.example", "EXAMPLE.COM"])
+    created = await sign_in(config.base_url, ALICE)
+    await created.browser.aclose()
+    assert created.signed_in, created.location
+    tied = await sign_in(config.base_url, CAROL)
+    await tied.browser.aclose()
+    assert tied.signed_in, tied.location
+
+    # An existing link is the identity: narrowing the list later leaves it alone.
+    _ = await _switch(admin, dex, domains=["other.example"])
+    again = await sign_in(config.base_url, ALICE)
+    await again.browser.aclose()
+    assert again.signed_in, again.location

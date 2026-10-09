@@ -18,7 +18,9 @@ import pytest
 from cryptography.fernet import Fernet
 from joserfc import jwt
 from joserfc.jwk import RSAKey
+from pydantic import ValidationError
 
+from twinlab_backend.api.oidc import ProviderCreate, ProviderReplace
 from twinlab_backend.auth.oidc import icons, secret_box, tokens
 from twinlab_backend.auth.oidc.metadata import (
     OidcCache,
@@ -65,8 +67,19 @@ def _claims(*, email: str | None = "alice@example.com", verified: bool | None = 
     )
 
 
-def _policy(*, create: bool = False, tie: bool = False, trust: bool = False) -> Policy:
-    return Policy(allow_create_users=create, allow_email_tying=tie, trust_email=trust)
+def _policy(
+    *,
+    create: bool = False,
+    tie: bool = False,
+    trust: bool = False,
+    domains: frozenset[str] = frozenset(),
+) -> Policy:
+    return Policy(
+        allow_create_users=create,
+        allow_email_tying=tie,
+        trust_email=trust,
+        allowed_email_domains=domains,
+    )
 
 
 def _lookups(
@@ -143,6 +156,104 @@ def test_creation_never_takes_an_email_that_is_already_held() -> None:
 def test_tying_wins_over_creation_when_both_are_allowed() -> None:
     decision = resolve(_claims(), _policy(create=True, tie=True), _lookups(holder=ALICE))
     assert decision == Tie(ALICE.id, "alice@example.com")
+
+
+# --------------------------------------------------------------------------- #
+# Restricting tying and creation to email domains (delta 35)
+# --------------------------------------------------------------------------- #
+
+EXAMPLE_ONLY = frozenset({"example.com"})
+
+
+def test_an_allowed_domain_ties_and_creates_whatever_its_case() -> None:
+    shouting = _claims(email="Alice@EXAMPLE.Com")
+    tie = _policy(tie=True, domains=EXAMPLE_ONLY)
+    create = _policy(create=True, domains=EXAMPLE_ONLY)
+    assert resolve(shouting, tie, _lookups(holder=ALICE)) == Tie(ALICE.id, "Alice@EXAMPLE.Com")
+    assert isinstance(resolve(shouting, create, _lookups()), Create)
+
+
+def test_any_other_domain_neither_ties_nor_creates() -> None:
+    tie = _policy(tie=True, domains=EXAMPLE_ONLY)
+    create = _policy(create=True, domains=EXAMPLE_ONLY)
+    refused = Refuse("oidc_email_domain_not_allowed")
+    # A subdomain is not its parent, and a lookalike suffix is not the domain.
+    for email in ("alice@other.org", "alice@eu.example.com", "alice@badexample.com"):
+        assert resolve(_claims(email=email), tie, _lookups(holder=ALICE)) == refused, email
+        assert resolve(_claims(email=email), create, _lookups()) == refused, email
+    # The domain follows the LAST @: a quoted local part cannot smuggle one in.
+    smuggled = _claims(email='"alice@example.com"@other.org')
+    assert resolve(smuggled, create, _lookups()) == refused
+
+
+def test_the_domain_is_judged_only_on_a_verified_email() -> None:
+    # Unverified is the more basic refusal: the domain of an address nobody
+    # vouched for says nothing.
+    unverified = _claims(email="alice@other.org", verified=False)
+    assert resolve(unverified, _policy(create=True, domains=EXAMPLE_ONLY), _lookups()) == Refuse(
+        "oidc_email_unverified"
+    )
+
+
+def test_a_refused_domain_is_reported_before_who_holds_the_address() -> None:
+    held = _lookups(holder=ALICE)
+    decision = resolve(
+        _claims(email="alice@other.org"), _policy(create=True, domains=EXAMPLE_ONLY), held
+    )
+    assert decision == Refuse("oidc_email_domain_not_allowed")
+
+
+def test_the_domains_never_touch_an_existing_link() -> None:
+    # The link is the identity; the email was used once, when it was made.
+    decision = resolve(
+        _claims(email="alice@other.org"), _policy(domains=EXAMPLE_ONLY), _lookups(linked=ALICE)
+    )
+    assert decision == SignIn(ALICE.id)
+
+
+def test_the_domain_list_is_normalized_and_checked() -> None:
+    accepted = ProviderReplace.model_validate(
+        {**_REPLACE, "allowed_email_domains": ["IQUALL.net", "iquall.net", "xn--bcher-kva.example"]}
+    )
+    assert accepted.allowed_email_domains == ["iquall.net", "xn--bcher-kva.example"]
+    for bad in ("@iquall.net", "*.iquall.net", "iquall.net.", "-iquall.net", "iq uall.net", ""):
+        with pytest.raises(ValidationError):
+            _ = ProviderReplace.model_validate({**_REPLACE, "allowed_email_domains": [bad]})
+    with pytest.raises(ValidationError):
+        _ = ProviderReplace.model_validate(
+            {**_REPLACE, "allowed_email_domains": [f"d{n}.example" for n in range(65)]}
+        )
+
+
+def test_the_domain_list_defaults_to_any_on_create_only() -> None:
+    created = ProviderCreate.model_validate(
+        {
+            "name": "p",
+            "display_name": "P",
+            "issuer": ISSUER,
+            "client_id": "c",
+            "client_secret": None,
+        }
+    )
+    assert created.allowed_email_domains == []
+    # A replace states the whole record, the list included.
+    without = {k: v for k, v in _REPLACE.items() if k != "allowed_email_domains"}
+    with pytest.raises(ValidationError):
+        _ = ProviderReplace.model_validate(without)
+
+
+_REPLACE: dict[str, object] = {
+    "display_name": "P",
+    "issuer": ISSUER,
+    "client_id": "c",
+    "scopes": ["openid"],
+    "allow_create_users": True,
+    "allow_email_tying": False,
+    "trust_email": False,
+    "allowed_email_domains": [],
+    "default_group_id": None,
+    "enabled": True,
+}
 
 
 def test_email_verified_is_true_only_for_json_true() -> None:

@@ -14,6 +14,7 @@ from typing import Literal
 # its own text — never from provider-supplied text.
 RefusalCode = Literal[
     "account_disabled",
+    "oidc_email_domain_not_allowed",
     "oidc_email_missing",
     "oidc_email_unverified",
     "oidc_email_in_use",
@@ -44,6 +45,9 @@ class Policy:
     allow_create_users: bool
     allow_email_tying: bool
     trust_email: bool
+    # The lowercase domains an email must be AT to tie or create (delta 35).
+    # EMPTY = any domain, which is what a provider without the setting did.
+    allowed_email_domains: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,15 @@ def email_counts_as_verified(claims: Claims, policy: Policy) -> bool:
     return claims.email_verified
 
 
+def email_domain_allowed(email: str, policy: Policy) -> bool:
+    """The domain is everything after the LAST `@` (a quoted local part may
+    hold one, a domain never does), matched exactly and case-insensitively:
+    a subdomain is not its parent, so each one an admin wants is listed."""
+    if not policy.allowed_email_domains:
+        return True
+    return email.rpartition("@")[2].lower() in policy.allowed_email_domains
+
+
 def resolve(claims: Claims, policy: Policy, lookups: Lookups) -> Decision:
     if lookups.linked is not None:
         if not lookups.linked.is_active:
@@ -115,6 +128,8 @@ def resolve(claims: Claims, policy: Policy, lookups: Lookups) -> Decision:
     if policy.allow_email_tying and email is not None and lookups.email_holder is not None:
         if not verified:
             return Refuse("oidc_email_unverified")
+        if not email_domain_allowed(email, policy):
+            return Refuse("oidc_email_domain_not_allowed")
         if lookups.email_holder_linked_here:
             return Refuse("oidc_identity_conflict")
         if not lookups.email_holder.is_active:
@@ -128,6 +143,10 @@ def resolve(claims: Claims, policy: Policy, lookups: Lookups) -> Decision:
         # that its real owner could then never use.
         if not verified:
             return Refuse("oidc_email_unverified")
+        # Before the in-use check: an address this provider may never act on
+        # is refused for that reason, not for who already holds it.
+        if not email_domain_allowed(email, policy):
+            return Refuse("oidc_email_domain_not_allowed")
         if lookups.email_holder is not None:
             return Refuse("oidc_email_in_use")
         return Create(email=email, display_name=display_name_for(claims, email))

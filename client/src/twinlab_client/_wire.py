@@ -385,6 +385,7 @@ def parse_oidc_provider(value: object) -> OidcProvider:
         allow_create_users=_get_bool(obj, "allow_create_users", where),
         allow_email_tying=_get_bool(obj, "allow_email_tying", where),
         trust_email=_get_bool(obj, "trust_email", where),
+        allowed_email_domains=_get_str_list(obj, "allowed_email_domains", where),
         default_group=parse_opt_principal(_req(obj, "default_group", where)),
         enabled=_get_bool(obj, "enabled", where),
         icon=_get_opt_str(obj, "icon", where),

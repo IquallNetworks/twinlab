@@ -446,6 +446,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         allow_create_users: bool = False,
         allow_email_tying: bool = False,
         trust_email: bool = False,
+        allowed_email_domains: list[str] | None = None,
         default_group_id: UUID | None = None,
         enabled: bool = True,
     ) -> OidcProvider:
@@ -453,8 +454,11 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         (PKCE alone); it is a required keyword so a confidential client is never
         created without its secret by omission. `scopes` None = the server's
         default (openid, email, profile); the three switches default OFF, the
-        safe state. The server fetches the issuer's discovery document first:
-        422 oidc_discovery_failed. 409 provider_name_taken / issuer_taken /
+        safe state. `allowed_email_domains` None = the server's default, any
+        domain; a list restricts tying and creation to emails at exactly those
+        domains (422 validation_error for one that is not a bare domain name).
+        The server fetches the issuer's discovery document first: 422
+        oidc_discovery_failed. 409 provider_name_taken / issuer_taken /
         oidc_secret_key_unset; 422 group_not_found."""
         body: dict[str, object] = {
             "name": name,
@@ -470,6 +474,8 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         }
         if scopes is not None:
             body["scopes"] = scopes
+        if allowed_email_domains is not None:
+            body["allowed_email_domains"] = allowed_email_domains
         payload = await self._send_json("POST", "/oidc-providers", json_body=body)
         return _wire.parse_oidc_provider(payload)
 
@@ -484,6 +490,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         allow_create_users: bool,
         allow_email_tying: bool,
         trust_email: bool,
+        allowed_email_domains: list[str],
         default_group_id: UUID | None,
         enabled: bool,
         client_secret: str | None | Unchanged = UNCHANGED,
@@ -500,6 +507,7 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
             "allow_create_users": allow_create_users,
             "allow_email_tying": allow_email_tying,
             "trust_email": trust_email,
+            "allowed_email_domains": allowed_email_domains,
             "default_group_id": str(default_group_id) if default_group_id is not None else None,
             "enabled": enabled,
         }

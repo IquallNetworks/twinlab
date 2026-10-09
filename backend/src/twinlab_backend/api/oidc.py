@@ -5,6 +5,7 @@ provider list and the two navigations of the flow. `admin_router` manages
 provider records under `user:manage`.
 """
 
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Annotated, NoReturn
@@ -52,6 +53,24 @@ def _scopes(value: list[str]) -> list[str]:
     return list(dict.fromkeys(value))
 
 
+# A DNS name in its ASCII form (an IDN as its xn-- spelling): dot-separated
+# labels of letters, digits and inner hyphens. Compared against the part of a
+# verified email after its last `@`, lowercased.
+_DOMAIN = re.compile(
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*"
+)
+
+
+def _email_domains(value: list[str]) -> list[str]:
+    domains = [domain.lower() for domain in value]
+    for domain in domains:
+        if len(domain) > 253 or _DOMAIN.fullmatch(domain) is None:
+            raise ValueError(
+                f"{domain!r} is not a domain name; list it bare, without the @ (iquall.net)"
+            )
+    return list(dict.fromkeys(domains))
+
+
 def _issuer(value: str) -> str:
     if not value.startswith(("https://", "http://")):
         raise ValueError("the issuer is an http(s) URL")
@@ -59,6 +78,9 @@ def _issuer(value: str) -> str:
 
 
 Scopes = Annotated[list[str], AfterValidator(_scopes)]
+# Why 64: an allowlist is a handful of an organisation's own domains; the bound
+# only keeps a pasted list from becoming a payload.
+EmailDomains = Annotated[list[str], Field(max_length=64), AfterValidator(_email_domains)]
 Issuer = Annotated[str, Field(min_length=8, max_length=512), AfterValidator(_issuer)]
 DisplayName = Annotated[str, Field(min_length=1, max_length=64)]
 ClientId = Annotated[str, Field(min_length=1, max_length=255)]
@@ -86,6 +108,9 @@ class ProviderCreate(BaseModel):
     allow_create_users: bool = False
     allow_email_tying: bool = False
     trust_email: bool = False
+    # Empty = any domain: the restriction narrows the two switches above, so
+    # with both off (their default) it has nothing to narrow.
+    allowed_email_domains: EmailDomains = Field(default_factory=list[str])
     default_group_id: uuid.UUID | None = None
     enabled: bool = True
 
@@ -98,6 +123,7 @@ class ProviderReplace(BaseModel):
     allow_create_users: bool
     allow_email_tying: bool
     trust_email: bool
+    allowed_email_domains: EmailDomains
     default_group_id: uuid.UUID | None
     enabled: bool
     # Write-only. OMITTED keeps the stored secret; a string replaces it; null
@@ -115,6 +141,7 @@ class ProviderReplace(BaseModel):
             allow_create_users=self.allow_create_users,
             allow_email_tying=self.allow_email_tying,
             trust_email=self.trust_email,
+            allowed_email_domains=self.allowed_email_domains,
             default_group_id=self.default_group_id,
             enabled=self.enabled,
         )
@@ -134,6 +161,7 @@ class OidcProviderOut(BaseModel):
     allow_create_users: bool
     allow_email_tying: bool
     trust_email: bool
+    allowed_email_domains: list[str]
     default_group: Principal | None
     enabled: bool
     icon: str | None
@@ -179,6 +207,7 @@ def _out(
         allow_create_users=provider.allow_create_users,
         allow_email_tying=provider.allow_email_tying,
         trust_email=provider.trust_email,
+        allowed_email_domains=provider.allowed_email_domains,
         default_group=Principal(id=group.id, name=group.name) if group is not None else None,
         enabled=provider.enabled,
         icon=providers.icon_uri(provider),
@@ -302,6 +331,7 @@ async def create(
             allow_create_users=body.allow_create_users,
             allow_email_tying=body.allow_email_tying,
             trust_email=body.trust_email,
+            allowed_email_domains=body.allowed_email_domains,
             default_group_id=body.default_group_id,
             enabled=body.enabled,
         ),

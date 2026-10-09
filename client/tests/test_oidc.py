@@ -44,6 +44,7 @@ _PROVIDER_WIRE: dict[str, object] = {
     "allow_create_users": False,
     "allow_email_tying": True,
     "trust_email": False,
+    "allowed_email_domains": ["example.com"],
     "default_group": None,
     "enabled": True,
     "icon": None,
@@ -128,6 +129,7 @@ async def test_create_provider_states_the_secret_even_when_public(
         body = _body(request)
         assert body["client_secret"] is None  # present, null: a public client
         assert "scopes" not in body  # the server's default
+        assert "allowed_email_domains" not in body  # likewise: any domain
         assert body["allow_create_users"] is False
         return httpx2.Response(201, json={**_PROVIDER_WIRE, "has_client_secret": False})
 
@@ -136,6 +138,7 @@ async def test_create_provider_states_the_secret_even_when_public(
             "dex", "Dex", "https://idp.example.com", "twinlab", client_secret=None
         )
     assert provider.has_client_secret is False
+    assert provider.allowed_email_domains == ["example.com"]
 
 
 async def _replace(client: TwinlabClient, secret: str | None | Unchanged) -> None:
@@ -148,6 +151,7 @@ async def _replace(client: TwinlabClient, secret: str | None | Unchanged) -> Non
         allow_create_users=False,
         allow_email_tying=True,
         trust_email=False,
+        allowed_email_domains=["example.com"],
         default_group_id=None,
         enabled=True,
         client_secret=secret,
@@ -168,6 +172,7 @@ async def test_replace_leaves_the_secret_alone_unless_told(make_client: ClientFa
     assert "client_secret" not in bodies[0]  # omitted on the wire = keep
     assert bodies[1]["client_secret"] is None  # null = remove
     assert bodies[2]["client_secret"] == "new-secret"
+    assert all(body["allowed_email_domains"] == ["example.com"] for body in bodies)
 
 
 async def test_icons_travel_as_raw_bytes_with_their_type(make_client: ClientFactory) -> None:

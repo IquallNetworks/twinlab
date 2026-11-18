@@ -1423,6 +1423,13 @@ concurrency (parallel execs don't corrupt / build exactly once) + backend
       merge cannot see it. Re-testing EXOS on a new release is fair game;
       `kind` needs a different mechanism, not a retry.
 
+    **ZTE — parked 2026-11-10, needs BOTH a human and an engineer.** Neither
+    containerlab nor netlab knows ZTE, so it is a port (containerlab kind or
+    vrnetlab wrapper, a netlab device with its templates, a ZXROS Ansible
+    plugin), not an admission. It is blocked first on an image and its licence
+    terms. Layers, tiers and the first probe are in §8 of
+    `docs/nos-sweep/acquisition-checklist.md`.
+
     **When picked up:** each platform runs the standing procedure in
     `docs/nos-sweep/admitting-a-platform.md` (probe → evidence in `results.md` →
     the up-to-five coordinated admission changes), against the **two bars**

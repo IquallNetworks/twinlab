@@ -116,6 +116,42 @@ they are worth a trial now.
 
 ---
 
+## 8. ZTE — PARKED (decided 2026-11-10): a port, not an admission
+
+Asked for on 2026-11-10 and parked the same day, after a feasibility check. Every platform
+admitted so far already had a containerlab kind and a netlab device, so admission was only
+Twinlab's own glue. ZTE has **neither**, so supporting it means writing the lower layers too:
+
+| Layer | State at containerlab 0.82 / netlab 26.7 | What it would take |
+|---|---|---|
+| containerlab (deploy) | No ZTE kind (checked in the binary); no vrnetlab build for ZXR10 found in srl-labs/vrnetlab or the forks | Wrap ZTE's VM image vrnetlab-style (needs KVM), or use a native container image if ZTE has one |
+| netlab (generate + push) | No ZTE device in `netsim/devices/` | A device definition plus Jinja templates per module. It can ride the runner's `netlab-defaults.yml` and a template path, so netlab upstream is not a dependency |
+| Ansible (push transport) | No ZTE collection, and no ZXROS cliconf/terminal plugin in `ansible.netcommon` | Write one, or skip the push and deliver config as a clab `startup-config` |
+
+The rest is the usual admission in `admitting-a-platform.md`. One piece already exists:
+netmiko has `zte_zxros` device types, for `interactive: true` cases.
+
+**It can come in tiers.** Tier 0 is a containerlab kind plus a netlab device that has no
+config templates. That alone gives deploy, terminal, the SSH jump, netem and power control.
+Tier 1 is netlab configuring interfaces and protocols, which needs the templates and the
+Ansible plugin. Tier 2 is `mode: cli` / `parse: textfsm` suite support, and possibly a
+config-import parser.
+
+**What is needed from you before any engineering:**
+1. **A ZTE virtual image, and which product it is** (e.g. a ZXR10 virtual router or an
+   M6000 vBRAS), and whether it is a VM disk or a container.
+2. **Its licence terms.** Running it under containerlab on a Linux host, outside ZTE's own
+   tooling, has to be allowed. This is the second bar: IOL worked and still failed it.
+3. **How far it has to go**: tier 0 (boots, mgmt IP, CLI) or tier 1+.
+
+**When picked up:** start with a tier-0 probe outside Twinlab. Wrap the image, deploy one node
+with containerlab directly, and confirm it boots, takes the mgmt IP and accepts SSH. That
+result decides whether the netlab device is worth writing.
+
+Sources: [containerlab vrnetlab manual](https://containerlab.dev/manual/vrnetlab),
+[netlab platforms](https://netlab.tools/platforms),
+[netlab: contributing new devices](https://netlab.tools/dev/devices/).
+
 ## Already in hand — nothing needed from you
 
 VyOS, linux, FRR, bird, dnsmasq, kind, MikroTik CHR 7.16.2 (built from the free vmdk at

@@ -110,6 +110,7 @@ async def test_deploy_lifecycle(admin: TwinlabClient, make_lab: LabFactory) -> N
 
     detail = await admin.get_lab(lab.name)
     assert detail.status == "deployed"
+    assert detail.live is True  # delta 38: the node list is a real reading
     # Delta 19: the deploy snapshotted exactly what it deployed — the stored
     # definition — so the lab starts undrifted.
     assert detail.deployed_definition == detail.definition

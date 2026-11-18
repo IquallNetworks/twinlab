@@ -751,6 +751,9 @@ class LabSummary:
     updated_at: datetime
     nodes: int
     nodes_running: int
+    # Delta 38: False = clab-api could not be read; the counts are then 0 and
+    # mean "unknown", not "no containers".
+    live: bool
     config_time_status: ConfigTimeStatus
     # Delta 19: True when the stored definition no longer matches the deployed
     # snapshot. None when nothing is running to drift from (status !=
@@ -779,6 +782,9 @@ class LabDetail:
     created_at: datetime
     updated_at: datetime
     nodes: list[LabNodeState]
+    # Delta 38: False = clab-api could not be read in time; `nodes` is then
+    # empty because it is unknown. The record fields are still true.
+    live: bool
     config_time_status: ConfigTimeStatus
     permissions: set[str]
     # Delta 21: True while this lab is published as a network template (the

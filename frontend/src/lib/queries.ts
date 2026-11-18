@@ -116,15 +116,23 @@ export const labGrantsQueryOptions = (name: string) =>
     queryFn: () => api.listGrants(name),
   })
 
+// Live state unavailable is a moment, not a verdict (delta 38): re-read until
+// clab-api answers, rather than leaving the page without its nodes.
+const NOT_LIVE_RETRY_MS = 5_000
+
 export const labsQueryOptions = queryOptions({
   queryKey: ['labs'],
   queryFn: () => api.listLabs(),
+  // One clab-api read serves the whole list, so its rows are live or not together.
+  refetchInterval: (query) =>
+    query.state.data?.some((lab) => !lab.live) === true ? NOT_LIVE_RETRY_MS : false,
 })
 
 export const labQueryOptions = (name: string) =>
   queryOptions({
     queryKey: ['labs', name],
     queryFn: () => api.getLab(name),
+    refetchInterval: (query) => (query.state.data?.live === false ? NOT_LIVE_RETRY_MS : false),
   })
 
 export const labInterfacesQueryOptions = (name: string) =>

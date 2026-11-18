@@ -152,6 +152,9 @@ export const labSummarySchema = z.object({
   updated_at: z.string(),
   nodes: z.number(), // containers present
   nodes_running: z.number(), // containers actually running
+  // Delta 38: false = clab-api could not be read, so both counts are 0 and
+  // mean "unknown" — render them as such, never as "no containers".
+  live: z.boolean(),
   config_time_status: configTimeStatusSchema,
   // Delta 19: true = the stored definition no longer matches the deployed
   // snapshot; null = nothing running to drift from (or snapshot unknown).
@@ -173,6 +176,10 @@ export const labDetailSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   nodes: z.array(labNodeStateSchema),
+  // Delta 38: false = clab-api did not answer in time (typically while another
+  // lab's deploy or destroy holds its lock); `nodes` is then empty because it
+  // is unknown. The record fields are still true.
+  live: z.boolean(),
   config_time_status: configTimeStatusSchema,
   // Delta 21: true while this lab is published as a network template (the
   // PUT /labs/{name}/template toggle) — the header renders the toggle state.

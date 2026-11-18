@@ -673,3 +673,32 @@ async def test_follow_logs_uses_the_short_name_and_parses_lines() -> None:
         None,
         clab_api.LogLine(stream="stderr", line="oops"),
     ]
+
+
+async def test_a_timeout_is_named_in_the_error() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/login":
+            return httpx2.Response(200, json={"token": "t"})
+        raise httpx2.ReadTimeout("", request=request)
+
+    result = await _client(handler).inspect("tmp1", timeout=0.1)
+    assert isinstance(result, Err)
+    assert result.error.status_code is None
+    assert result.error.message.endswith("failed: ReadTimeout")
+
+
+async def test_a_bounded_read_bounds_its_login_too() -> None:
+    # Delta 38: a hung clab-api hangs the login as well, so a 5 s read whose
+    # login waited out the client's 30 s default was a 30 s read (live-hit
+    # with clab-api paused).
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen[request.url.path] = request.extensions["timeout"]
+        if request.url.path == "/login":
+            return httpx2.Response(200, json={"token": "t"})
+        return httpx2.Response(200, json={})
+
+    _ = await _client(handler).inspect("tmp1", timeout=0.1)
+    assert seen["/login"] == seen["/api/v1/labs/tmp1"]
+    assert seen["/login"] == {"connect": 0.1, "read": 0.1, "write": 0.1, "pool": 0.1}

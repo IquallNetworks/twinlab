@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { DeployDialog } from '@/components/lab/deploy-dialog'
-import { LabPowerMenuItems } from '@/components/lab/lab-power-menu'
+import { containerlessReason, LabPowerMenuItems } from '@/components/lab/lab-power-menu'
 import { LabTemplateDialog } from '@/components/lab/lab-template-dialog'
 import { LabStatusBadge } from '@/components/lab/status-badge'
 import {
@@ -106,6 +106,7 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
   })
 
   const busy = destroy.isPending || del.isPending
+  const destroyBlocked = containerlessReason(lab)
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -181,10 +182,11 @@ export function LabHeader({ lab }: { lab: LabDetail }) {
                 <>
                   {/* Destroy tears down running containers, so it needs some;
                       delete removes the record either way (teardown is
-                      best-effort there) and stays available. */}
+                      best-effort there) and stays available. Unknown
+                      containers (delta 38) are not "none": say which. */}
                   <DropdownMenuItem
-                    disabled={lab.nodes.length === 0}
-                    title={lab.nodes.length === 0 ? `lab is ${lab.status}` : undefined}
+                    disabled={destroyBlocked !== null}
+                    title={destroyBlocked ?? undefined}
                     onSelect={() => setConfirming('destroy')}
                   >
                     Destroy

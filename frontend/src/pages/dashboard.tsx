@@ -59,7 +59,7 @@ function StatTile({
 function attentionRank(lab: LabSummary): number {
   if (lab.config_time_status === 'failed') return 0
   if (lab.status === 'deploying') return 1
-  if (lab.status === 'deployed' && lab.nodes_running < lab.nodes) return 2
+  if (lab.status === 'deployed' && lab.live && lab.nodes_running < lab.nodes) return 2
   if (lab.status === 'deployed') return 3
   return 4
 }
@@ -99,7 +99,11 @@ function LabCard({ lab, now }: { lab: LabSummary; now: number }) {
         </span>
         <LabStatusBadge status={lab.status} />
       </div>
-      <NodeBar running={lab.nodes_running} total={lab.nodes} />
+      {lab.live ? (
+        <NodeBar running={lab.nodes_running} total={lab.nodes} />
+      ) : (
+        <span className="font-mono text-xs text-muted-foreground">live state unavailable</span>
+      )}
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span className="truncate">{lab.owner?.name ?? 'unowned'}</span>
         {failed ? (
@@ -178,7 +182,10 @@ export function DashboardPage() {
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatTile label="labs" value={String(labs?.length ?? 0)} />
           <StatTile label="deployed" value={String(deployed)} />
-          <StatTile label="nodes running" value={`${nodesRunning}/${nodesTotal}`} />
+          <StatTile
+            label="nodes running"
+            value={(labs ?? []).every((lab) => lab.live) ? `${nodesRunning}/${nodesTotal}` : '—'}
+          />
           <StatTile
             label="config-time failures"
             value={String(configFailed)}

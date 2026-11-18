@@ -380,10 +380,18 @@ export function LabsPage() {
                     </TableCell>
                     <TableCell className="font-mono text-sm">
                       {/* running / present containers; 0/0 until deployed */}
-                      <span className={lab.nodes_running > 0 ? 'text-primary' : undefined}>
-                        {lab.nodes_running}
-                      </span>
-                      <span className="text-muted-foreground">/{lab.nodes}</span>
+                      {lab.live ? (
+                        <>
+                          <span className={lab.nodes_running > 0 ? 'text-primary' : undefined}>
+                            {lab.nodes_running}
+                          </span>
+                          <span className="text-muted-foreground">/{lab.nodes}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground" title="live state unavailable">
+                          —
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {formatDateTime(lab.created_at)}

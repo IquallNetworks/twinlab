@@ -113,6 +113,26 @@ starts. So waves stay available for hosts where one lab deploys at a time, and t
 protection that costs nothing is the slice's `CPUWeight`, which makes a boot burst yield to other
 work only under contention.
 
+#### Reads degrade behind the lock (contract delta 38)
+
+Turning waves off shortens the lock's longest holds but does not remove them: a destroy or a
+lab-wide stop of a large lab holds it too. So the reads that only show live state stopped
+waiting the backend's general 30 s for it. The lab list, lab detail, the link table and usage
+give clab-api **5 s** (a healthy inspect answers in about 30 ms), then answer from the stored
+record with `live: false`:
+
+- `LabSummary` and `LabDetail` gained `live`. False means the node counts or list are unknown,
+  not empty; the UI shows "Live node state unavailable", disables the power menu and shows
+  `—` for counts, and re-reads every 5 s until clab-api answers.
+- `GET /labs/{name}` stopped answering 502 for this. Before, the whole lab page failed.
+- `GET /labs/{name}/interfaces` serves only live data, so it still fails, with 502
+  `upstream_error`, after 5 s instead of 30 s.
+- Actions (power, netem, save, destroy) and the SSH jump's authorization lookup keep the long
+  timeout: they need an answer, not a quick degrade.
+
+Measured on the dev stack, a 40 s held lock: detail and list answered 200, `live: false`, in
+5.08 s (before: 30 s, then 502 for detail); after the lock, detail answered in 0.06 s.
+
 ## Host setup
 
 Twinlab cannot create the limits itself: they are host configuration, done once, as root.

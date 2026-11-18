@@ -235,3 +235,20 @@ of the job before polling settles at the interval.
   closely.
 
 **API:** unchanged.
+
+## 2026-11-18: Lab pages stay up while the containerlab API is busy
+
+A long operation on any lab, such as a deploy or the destroy of a large lab, makes the
+containerlab API answer every other lab's reads only when it finishes. A lab's page then hung
+for 30 seconds and failed with 502.
+
+- Lab pages now wait at most 5 seconds for live state, then show the stored lab with
+  **Live node state unavailable**, counts as `—` and the power menu disabled, and retry every
+  5 seconds until the API answers.
+- The lab list, the link table and resource usage give up after 5 seconds too, instead of 30.
+- The interfaces table, which has nothing stored to fall back on, still reports an error, now
+  after 5 seconds.
+
+**API and `twinlab-client`:** `LabSummary` and `LabDetail` gain `live` (contract delta 38).
+False means the node counts or node list could not be read and are unknown, not zero.
+`GET /labs/{name}` no longer answers 502 when the containerlab API is slow or down.

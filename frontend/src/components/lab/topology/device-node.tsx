@@ -3,7 +3,7 @@ import { Network, Router, Server, Zap } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
-import { DEVICE_H, DEVICE_W, NOT_DEPLOYED, type DeviceFlowNode } from './flow-types'
+import { DEVICE_H, DEVICE_W, NOT_DEPLOYED, STATE_UNKNOWN, type DeviceFlowNode } from './flow-types'
 
 // Hosts run plain images; everything else in netlab is router-shaped enough.
 const HOST_DEVICES = new Set(['linux', 'host'])
@@ -67,6 +67,9 @@ export function ConnectGrip({
 
 export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFlowNode>) {
   const notDeployed = data.state === NOT_DEPLOYED
+  // Unknown keeps the solid border of a deployed lab (it may well be one) and
+  // says so on hover, rather than borrowing not-deployed's dashed outline.
+  const unknown = data.state === STATE_UNKNOWN
   const running = data.state === 'running'
   return (
     <div
@@ -92,9 +95,16 @@ export function DeviceNode({ data, selected, isConnectable }: NodeProps<DeviceFl
       </div>
       <span
         aria-label={`state: ${data.state}`}
+        title={unknown ? 'live state unavailable' : undefined}
         className={cn(
           'absolute right-2 bottom-2 size-1.5 rounded-full',
-          running ? 'bg-primary' : notDeployed ? 'border border-muted-foreground' : 'bg-muted-foreground',
+          running
+            ? 'bg-primary'
+            : notDeployed
+              ? 'border border-muted-foreground'
+              : unknown
+                ? 'border border-dashed border-muted-foreground'
+                : 'bg-muted-foreground',
         )}
       />
       {data.groups !== undefined && data.groups.length > 0 && (

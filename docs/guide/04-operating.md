@@ -14,6 +14,13 @@ lab, and the header adds a `drifted` badge. The Overview tab's Definition card
 then offers a **Changes** view, which diffs the deployed text against the stored
 text.
 
+When the containerlab API is busy, Twinlab shows what it stored rather than
+waiting. A long operation on any lab, such as a deploy or the destroy of a big
+lab, can make it answer slowly for every lab. After 5 seconds the lab page shows
+**Live node state unavailable** instead of its nodes, the counts read `—`, and
+the power menu waits. The page retries on its own and fills in once the API
+answers.
+
 Drift is a hint. Nothing blocks on it, and a drifted lab keeps working — it is
 just no longer the lab its definition describes. A redeploy resolves it.
 

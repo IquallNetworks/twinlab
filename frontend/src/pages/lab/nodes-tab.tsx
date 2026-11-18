@@ -73,7 +73,12 @@ export function NodesTab({ name }: { name: string }) {
           </CardAction>
         </CardHeader>
         <CardContent>
-          {lab.nodes.length === 0 ? (
+          {!lab.live ? (
+            <p className="text-sm text-muted-foreground" role="status">
+              Live node state unavailable: the containerlab API did not answer in time, which
+              happens while another lab deploys or is torn down. Retrying.
+            </p>
+          ) : lab.nodes.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {lab.status === 'created'
                 ? 'No nodes yet — author a definition and deploy the lab.'

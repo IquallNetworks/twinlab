@@ -980,7 +980,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   for a whole deploy/destroy/node action, and inspect/links/interfaces/netem of EVERY lab
   need it too, so a delay inside the deploy stalls the fleet — past 30s this backend's clab
   reads time out and lab detail 502s. Anything that makes a clab-api call long blocks
-  everyone; keep slow work outside those calls. Measured too: IOL allocates its memory in one step, and the
+  everyone; keep slow work outside those calls. **Delta 38 (2026-11-18)** bounds the reads:
+  list/detail/links/usage give clab-api 5 s (`_LIVE_READ_TIMEOUT_SECONDS`), then serve the
+  stored record with `live: false` (`LabSummary`/`LabDetail` gained it); detail no longer
+  502s, `/interfaces` (live-only) still errors but after 5 s, and actions keep the long
+  timeout. Measured too: IOL allocates its memory in one step, and the
   runner holds ~110 MiB per `network_cli` node during config push. Its
   `/var/run/netns` bind is **rshared** (2026-08-06, found by the e2e suite): containerlab's node
   STOP parks the node's interfaces into a netns it creates there, and with the default-private

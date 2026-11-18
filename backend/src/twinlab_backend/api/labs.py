@@ -283,9 +283,10 @@ def _definition_drifted(lab: Lab) -> bool | None:
 
 
 def lab_summary(
-    lab: Lab, live: dict[str, tuple[NodeInfo, ...]], permissions: list[str]
+    lab: Lab, live: dict[str, tuple[NodeInfo, ...]] | None, permissions: list[str]
 ) -> LabSummary:
-    live_nodes = live.get(lab.name, ())
+    """`live` None = clab-api could not be read: counts of 0, marked not live."""
+    live_nodes = live.get(lab.name, ()) if live is not None else ()
     return LabSummary(
         name=lab.name,
         status=_lab_status(lab),
@@ -296,13 +297,16 @@ def lab_summary(
         # Counted on the raw passthrough (an off-vocabulary state simply isn't
         # "running") so one odd node can't 502 the whole listing.
         nodes_running=sum(1 for node in live_nodes if node.state == "running"),
+        live=live is not None,
         config_time_status=_config_time_status(lab.config_time_ok),
         definition_drifted=_definition_drifted(lab),
         permissions=_lab_scoped(permissions),
     )
 
 
-def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str]) -> LabDetail:
+def lab_detail(
+    lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str], *, live: bool
+) -> LabDetail:
     return LabDetail(
         name=lab.name,
         status=_lab_status(lab),
@@ -313,6 +317,7 @@ def lab_detail(lab: Lab, nodes: tuple[NodeInfo, ...], permissions: list[str]) ->
         created_at=lab.created_at,
         updated_at=lab.updated_at,
         nodes=[_to_node_state(n) for n in nodes],
+        live=live,
         config_time_status=_config_time_status(lab.config_time_ok),
         permissions=_lab_scoped(permissions),
         template_published=lab.template_published,
@@ -497,6 +502,15 @@ def _netem_model(impairment: ClabNetemImpairment) -> NetemImpairment:
         rate=impairment.rate,
         corruption=impairment.corruption,
     )
+
+
+# How long a READ that only shows live state waits for clab-api (delta 38). A
+# healthy inspect answers in ~30 ms; since v0.7 clab-api holds one process-wide
+# lock for a whole deploy, destroy or node action, and every lab's reads queue
+# behind it. Past this the reader gets the stored record marked not live,
+# instead of a page that hangs for the client's 30 s and then fails. Actions
+# keep the default: they need an answer, not a quick degrade.
+_LIVE_READ_TIMEOUT_SECONDS = 5.0
 
 
 async def _resolve_container(clab: ClabApiClient, lab_name: str, node_name: str) -> str:
@@ -717,7 +731,7 @@ async def _live_link_state(
     data) rather than failing the read — the table itself is stored data."""
     if lab.status != lab_store.STATUS_DEPLOYED:
         return None, {}
-    inventory_result = await clab.interfaces(lab.name)
+    inventory_result = await clab.interfaces(lab.name, timeout=_LIVE_READ_TIMEOUT_SECONDS)
     if isinstance(inventory_result, Err):
         return None, {}
     try:
@@ -730,7 +744,7 @@ async def _live_link_state(
     # One inspect resolves every endpoint container at once (netem is keyed by
     # container name).
     endpoint_nodes = {endpoint.node for link in links for endpoint in link.endpoints}
-    inspected = await clab.inspect(lab.name)
+    inspected = await clab.inspect(lab.name, timeout=_LIVE_READ_TIMEOUT_SECONDS)
     if isinstance(inspected, Err):
         return inventory, {}
     containers = {
@@ -790,18 +804,18 @@ async def _push_config(
     return Ok(report.value)
 
 
-async def _live_detail(lab: Lab, clab: ClabApiClient, permissions: list[str]) -> LabDetail:
+async def live_detail(lab: Lab, clab: ClabApiClient, permissions: list[str]) -> LabDetail:
     """Merge a stored lab record with its live node state from clab-api. A lab not
-    currently deployed (inspect 404) simply has no live nodes; any other clab-api
-    failure is surfaced as 502."""
-    inspected = await clab.inspect(lab.name)
+    currently deployed (inspect 404) simply has no live nodes. Any other
+    failure, a timeout behind clab-api's lock included, degrades to the record
+    with `live` False (delta 38): the record is still true, and a 502 took the
+    whole lab page down with it."""
+    inspected = await clab.inspect(lab.name, timeout=_LIVE_READ_TIMEOUT_SECONDS)
     if isinstance(inspected, Ok):
-        nodes = inspected.value
-    elif inspected.error.status_code == HTTPStatus.NOT_FOUND:
-        nodes = ()
-    else:
-        raise ApiError(502, "upstream_error", inspected.error.message)
-    return lab_detail(lab, nodes, permissions)
+        return lab_detail(lab, inspected.value, permissions, live=True)
+    if inspected.error.status_code == HTTPStatus.NOT_FOUND:
+        return lab_detail(lab, (), permissions, live=True)
+    return lab_detail(lab, (), permissions, live=False)
 
 
 async def _generate_topology(
@@ -1129,7 +1143,9 @@ async def create_lab(
         created = await lab_store.create_lab(db, request.name, allocated.value, user.id)
         if isinstance(created, Lab):
             granted = sorted(await effective_permissions_for(db, user, created))
-            return lab_detail(created, (), granted)
+            # A record created this instant has no containers: known, not
+            # unread, so live.
+            return lab_detail(created, (), granted, live=True)
         if created.reason == "name_taken":
             raise ApiError(409, "lab_exists", f"lab '{request.name}' already exists")
         # subnet_taken: raced by a concurrent create — the winner is excluded
@@ -1192,7 +1208,7 @@ async def update_lab_definition(
     # sync lazy-load (MissingGreenlet) outside a greenlet.
     await db.refresh(updated, ["updated_at"])
     granted = sorted(await effective_permissions_for(db, user, updated))
-    return await _live_detail(updated, clab, granted)
+    return await live_detail(updated, clab, granted)
 
 
 async def _submit_job(
@@ -1436,11 +1452,15 @@ async def list_labs(clab: ClabClientDep, db: SessionDep, user: CurrentUserDep) -
     labs = await lab_store.list_labs(db)
     perms_by_lab = await effective_permissions_bulk(db, user, labs)
     visible = [lab for lab in labs if perms.LAB_READ in perms_by_lab[lab.id]]
-    # Live node state is best-effort enrichment; if clab-api is unreachable the
-    # durable catalog still lists, with node counts of 0.
-    live_result = await clab.list_labs()
-    live = live_result.value if isinstance(live_result, Ok) else {}
-    return [lab_summary(lab, live, sorted(perms_by_lab[lab.id])) for lab in visible]
+    # Live node state is best-effort enrichment; if clab-api is unreachable (or
+    # slow behind its lock) the durable catalog still lists, with node counts of
+    # 0 marked not live (delta 38).
+    live_result = await clab.list_labs(timeout=_LIVE_READ_TIMEOUT_SECONDS)
+    if isinstance(live_result, Ok):
+        return [
+            lab_summary(lab, live_result.value, sorted(perms_by_lab[lab.id])) for lab in visible
+        ]
+    return [lab_summary(lab, None, sorted(perms_by_lab[lab.id])) for lab in visible]
 
 
 @router.get("/{lab_name}", dependencies=[Depends(require_lab(perms.LAB_READ))])
@@ -1451,7 +1471,7 @@ async def get_lab(
     if lab is None:
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     granted = sorted(await effective_permissions_for(db, user, lab))
-    return await _live_detail(lab, clab, granted)
+    return await live_detail(lab, clab, granted)
 
 
 async def _configure_job(
@@ -2285,8 +2305,9 @@ async def lab_interfaces(
 ) -> list[NodeInterfaces]:
     # The `node` filter takes the SHORT name, like the response keys (contract
     # delta 6); filtered here rather than upstream so we don't depend on
-    # clab-api's filter matching semantics.
-    result = await clab.interfaces(lab_name)
+    # clab-api's filter matching semantics. Live-only, so a failure stays an
+    # error, but a quick one (delta 38's read timeout).
+    result = await clab.interfaces(lab_name, timeout=_LIVE_READ_TIMEOUT_SECONDS)
     if isinstance(result, Err):
         raise _clab_action_failed(result.error)
     inventory = _interfaces_response(result.value, lab_name)
@@ -2306,7 +2327,7 @@ async def lab_usage(
     containers are asked about — a stopped one has nothing to report, and its
     row carries the state instead."""
     sampled_at = datetime.now(UTC)
-    inspected = await clab.inspect(lab_name)
+    inspected = await clab.inspect(lab_name, timeout=_LIVE_READ_TIMEOUT_SECONDS)
     if isinstance(inspected, Err):
         return LabUsageResponse(lab=lab_name, sampled_at=sampled_at, nodes=[], live=False)
 

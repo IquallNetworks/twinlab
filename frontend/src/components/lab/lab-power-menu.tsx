@@ -25,6 +25,17 @@ interface Entry {
  *
  * Freeze fans out over the nodes server-side and 409s when none are up; save
  * needs a running node to read a config from. Both say so instead of failing. */
+/** Why no container verb can be offered on `lab`, or null when some can. No
+ * containers at all: every container verb shares one honest reason rather
+ * than five variations of "there is nothing to do". Not knowing the containers
+ * (delta 38) is the same, with its own reason: the lab may well be running.
+ * The header's Destroy shares it. */
+export function containerlessReason(lab: Pick<LabDetail, 'live' | 'nodes' | 'status'>): string | null {
+  if (!lab.live) return 'live state unavailable'
+  if (lab.nodes.length === 0) return `lab is ${lab.status}`
+  return null
+}
+
 export function LabPowerMenuItems({ lab }: { lab: LabDetail }) {
   const name = lab.name
   const queryClient = useQueryClient()
@@ -66,9 +77,7 @@ export function LabPowerMenuItems({ lab }: { lab: LabDetail }) {
   const running = lab.nodes.filter((node) => node.state === 'running').length
   const paused = lab.nodes.filter((node) => node.state === 'paused').length
   const down = lab.nodes.length - running - paused
-  // No containers at all: every verb here acts on containers, so they share one
-  // honest reason rather than five variations of "there is nothing to do".
-  const bare = lab.nodes.length === 0 ? `lab is ${lab.status}` : null
+  const bare = containerlessReason(lab)
 
   const entries: Entry[] = []
   if (bare !== null) {

@@ -92,7 +92,7 @@ export function OverviewTab({ name }: { name: string }) {
           </div>
           <div>
             <div className="text-muted-foreground">Nodes</div>
-            <div className="font-mono">{lab.nodes.length}</div>
+            <div className="font-mono">{lab.live ? lab.nodes.length : '—'}</div>
           </div>
           <div>
             <div className="text-muted-foreground">Created</div>

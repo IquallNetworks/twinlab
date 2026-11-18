@@ -34,6 +34,12 @@ class ClabApiError:
     status_code: int | None
 
 
+def _describe(exc: BaseException) -> str:
+    """An exception as error text. A timeout's message is empty, and then its
+    type is the whole explanation."""
+    return str(exc) or type(exc).__name__
+
+
 @dataclass(frozen=True, slots=True)
 class UpstreamStream:
     """An open streaming response from clab-api that answered 200. Its owner
@@ -423,14 +429,18 @@ class ClabApiClient:
     username: str
     password: str
 
-    async def _login(self) -> Result[str, ClabApiError]:
+    async def _login(self, timeout: float | None) -> Result[str, ClabApiError]:
+        """`timeout` is the operation's own bound (None = the client default):
+        a hung clab-api hangs the login too, and a bounded read (delta 38) must
+        not wait out the default here first."""
         try:
             resp = await self.client.post(
                 f"{self.base_url}/login",
                 json={"username": self.username, "password": self.password},
+                timeout=httpx2.USE_CLIENT_DEFAULT if timeout is None else timeout,
             )
         except httpx2.HTTPError as exc:
-            return Err(ClabApiError(f"login request failed: {exc}", None))
+            return Err(ClabApiError(f"login request failed: {_describe(exc)}", None))
 
         if resp.status_code != HTTPStatus.OK:
             return Err(ClabApiError(f"login rejected: {resp.text}", resp.status_code))
@@ -454,7 +464,7 @@ class ClabApiClient:
         response for the caller to status-check and parse; only transport failures
         are turned into errors here. `timeout=None` uses the client default (not
         httpx2's "disable timeout")."""
-        auth = await self._login()
+        auth = await self._login(timeout)
         if isinstance(auth, Err):
             return auth
         timeout_arg = httpx2.USE_CLIENT_DEFAULT if timeout is None else timeout
@@ -468,7 +478,10 @@ class ClabApiClient:
                 timeout=timeout_arg,
             )
         except httpx2.HTTPError as exc:
-            return Err(ClabApiError(f"{method} {path} failed: {exc}", None))
+            # A timeout's message is empty; its type is the explanation.
+            return Err(
+                ClabApiError(f"{method} {path} failed: {str(exc) or type(exc).__name__}", None)
+            )
         return Ok(resp)
 
     async def _authed_lifecycle(
@@ -560,11 +573,14 @@ class ClabApiClient:
             return Err(ClabApiError(f"destroy rejected: {resp.text}", resp.status_code))
         return Ok(resp.text)
 
-    async def list_labs(self) -> Result[dict[str, tuple[NodeInfo, ...]], ClabApiError]:
+    async def list_labs(
+        self, *, timeout: float | None = None
+    ) -> Result[dict[str, tuple[NodeInfo, ...]], ClabApiError]:
         """List running labs the clab-api user owns (GET /api/v1/labs) as a
         `{lab_name: nodes}` map. Used to enrich our stored records with live node
-        state; a lab absent from the map simply has no running nodes."""
-        sent = await self._authed("GET", "/api/v1/labs")
+        state; a lab absent from the map simply has no running nodes. `timeout`
+        None = the client default."""
+        sent = await self._authed("GET", "/api/v1/labs", timeout=timeout)
         if isinstance(sent, Err):
             return sent
         resp = sent.value
@@ -578,11 +594,14 @@ class ClabApiClient:
             return Err(ClabApiError(f"unexpected list response: {exc}", resp.status_code))
         return Ok({name: tuple(_to_node_info(n) for n in nodes) for name, nodes in by_lab.items()})
 
-    async def inspect(self, lab_name: str) -> Result[tuple[NodeInfo, ...], ClabApiError]:
+    async def inspect(
+        self, lab_name: str, *, timeout: float | None = None
+    ) -> Result[tuple[NodeInfo, ...], ClabApiError]:
         """Inspect one lab's containers (GET /api/v1/labs/{labName}); the response
         is a bare node array. A 404 (lab not currently deployed) carries its
-        status so the caller can distinguish it from an upstream failure."""
-        sent = await self._authed("GET", f"/api/v1/labs/{lab_name}")
+        status so the caller can distinguish it from an upstream failure.
+        `timeout` None = the client default."""
+        sent = await self._authed("GET", f"/api/v1/labs/{lab_name}", timeout=timeout)
         if isinstance(sent, Err):
             return sent
         resp = sent.value
@@ -670,7 +689,7 @@ class ClabApiClient:
         error body, so it is read here and returned as an error with its status.
         No read timeout: a capture of a quiet link and a quiet log send nothing
         for a long time, and the caller's own bounds end them."""
-        auth = await self._login()
+        auth = await self._login(None)
         if isinstance(auth, Err):
             return auth
         request = self.client.build_request(
@@ -683,7 +702,7 @@ class ClabApiClient:
         try:
             resp = await self.client.send(request, stream=True)
         except httpx2.HTTPError as exc:
-            return Err(ClabApiError(f"{what} request failed: {exc}", None))
+            return Err(ClabApiError(f"{what} request failed: {_describe(exc)}", None))
         if resp.status_code == HTTPStatus.OK:
             return Ok(UpstreamStream(resp))
         try:
@@ -729,14 +748,16 @@ class ClabApiClient:
         )
 
     async def interfaces(
-        self, lab_name: str, node: str | None = None
+        self, lab_name: str, node: str | None = None, *, timeout: float | None = None
     ) -> Result[tuple[NodeInterfaces, ...], ClabApiError]:
         """List each node's interfaces (GET .../interfaces), optionally filtered to
-        one `node`. The response is an array of per-node interface lists."""
+        one `node`. The response is an array of per-node interface lists.
+        `timeout` None = the client default."""
         sent = await self._authed(
             "GET",
             f"/api/v1/labs/{lab_name}/interfaces",
             params={"node": node} if node is not None else None,
+            timeout=timeout,
         )
         if isinstance(sent, Err):
             return sent
@@ -938,7 +959,7 @@ class ClabApiClient:
         owns the connection and must close it. This uses the `websockets` client (httpx2's
         own WebSocket support is an optional extra, not installed); its
         handshake/transport errors are trapped here into a typed error."""
-        auth = await self._login()
+        auth = await self._login(None)
         if isinstance(auth, Err):
             return auth
         url = f"{_ws_base(self.base_url)}/api/v1/terminal-sessions/{session_id}/stream"
@@ -947,7 +968,7 @@ class ClabApiClient:
                 url, additional_headers={"Authorization": f"Bearer {auth.value}"}
             )
         except (OSError, InvalidHandshake, TimeoutError) as exc:
-            return Err(ClabApiError(f"terminal stream connect failed: {exc}", None))
+            return Err(ClabApiError(f"terminal stream connect failed: {_describe(exc)}", None))
         return Ok(conn)
 
     async def stream_events(self) -> AsyncIterator[LabEvent]:
@@ -955,7 +976,7 @@ class ClabApiClient:
         parsed, lab-scoped ones. Ends quietly on a login failure, a non-200, or the
         upstream closing — the SSE layer lets the browser reconnect. `read=None`
         disables the read timeout since events are sparse; connect/write are bounded."""
-        auth = await self._login()
+        auth = await self._login(None)
         if isinstance(auth, Err):
             return
         try:
@@ -981,7 +1002,7 @@ class ClabApiClient:
         try:
             resp = await self.client.get(f"{self.base_url}/health")
         except httpx2.HTTPError as exc:
-            return Err(ClabApiError(f"health request failed: {exc}", None))
+            return Err(ClabApiError(f"health request failed: {_describe(exc)}", None))
 
         if resp.status_code != HTTPStatus.OK:
             return Err(ClabApiError(f"unhealthy: {resp.text}", resp.status_code))

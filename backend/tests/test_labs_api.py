@@ -130,7 +130,7 @@ def test_definition_drifted_tristate() -> None:
 def test_detail_serves_deployed_snapshot() -> None:
     lab = _lab("tmp1", "deployed", None)
     lab.deployed_definition = "name: x\n"
-    detail = lab_detail(lab, (), [])
+    detail = lab_detail(lab, (), [], live=True)
     assert detail.deployed_definition == "name: x\n"
     assert detail.definition_drifted is False
 
@@ -142,7 +142,7 @@ def test_detail_drift_comparison_is_exact_text() -> None:
     # (live-verified in the blackbox lifecycle test).
     lab = _lab("tmp1", "deployed", None)
     lab.deployed_definition = "name: x\n\n"
-    assert lab_detail(lab, (), []).definition_drifted is True
+    assert lab_detail(lab, (), [], live=True).definition_drifted is True
 
 
 def _artifacts(nodes: dict[str, str], devices: dict[str, str]) -> ClabArtifacts:
@@ -209,9 +209,9 @@ def test_detail_surfaces_topology_message() -> None:
     # print) rides the detail instead of being silently dropped.
     lab = _lab("tmp1", "created", None)
     lab.definition = "name: tmp1\nmessage: Use ssh to reach r1.\n"
-    assert lab_detail(lab, (), []).message == "Use ssh to reach r1."
+    assert lab_detail(lab, (), [], live=True).message == "Use ssh to reach r1."
     lab.definition = None
-    assert lab_detail(lab, (), []).message is None
+    assert lab_detail(lab, (), [], live=True).message is None
 
 
 def test_layout_request_accepts_opaque_ids_and_clears_empty() -> None:
@@ -253,7 +253,7 @@ def test_layout_request_shape_bounds() -> None:
 
 def test_detail_maps_stored_definition_and_live_nodes() -> None:
     lab = _lab("tmp1", "deployed", _user("bob"))
-    detail = lab_detail(lab, (_NODE,), ["lab:read"])
+    detail = lab_detail(lab, (_NODE,), ["lab:read"], live=True)
     assert detail.definition == "name: x\n"
     assert detail.owner is not None and detail.owner.name == "bob"
     assert len(detail.nodes) == 1
@@ -266,7 +266,7 @@ def test_detail_maps_stored_definition_and_live_nodes() -> None:
 
 def test_detail_empty_nodes_for_destroyed_lab() -> None:
     lab = _lab("tmp1", "destroyed", None)
-    detail = lab_detail(lab, (), [])
+    detail = lab_detail(lab, (), [], live=True)
     assert detail.status == "destroyed"
     assert detail.nodes == []
 
@@ -274,7 +274,7 @@ def test_detail_empty_nodes_for_destroyed_lab() -> None:
 def test_detail_created_record_has_no_definition() -> None:
     lab = _lab("tmp1", "created", None)
     lab.definition = None
-    detail = lab_detail(lab, (), [])
+    detail = lab_detail(lab, (), [], live=True)
     assert detail.status == "created"
     assert detail.definition is None
     assert detail.config_time_status == "not_run"

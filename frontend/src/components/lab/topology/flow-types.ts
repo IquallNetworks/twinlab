@@ -37,6 +37,9 @@ export type StubFlowNode = Node<{ label: string; [key: string]: unknown }, 'stub
 export type AppNode = DeviceFlowNode | LanFlowNode | StubFlowNode
 
 export const NOT_DEPLOYED = 'not-deployed'
+// A node whose container state could not be read (delta 38: clab-api did not
+// answer in time). Distinct from NOT_DEPLOYED: the lab may be running fine.
+export const STATE_UNKNOWN = 'unknown'
 
 // A manual arrangement: canvas element id -> position. Persisted server-side
 // per lab (delta 19, `GET/PUT /labs/{name}/layout`) and shared across users;

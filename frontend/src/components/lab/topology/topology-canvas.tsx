@@ -42,6 +42,7 @@ import {
   LAN_H,
   LAN_W,
   NOT_DEPLOYED,
+  STATE_UNKNOWN,
   type AppNode,
 } from './flow-types'
 import { LanNode } from './lan-node'
@@ -114,13 +115,17 @@ function prefixLabel(link: LabLink): string | undefined {
   return link.prefix_ipv4 ?? link.prefix_ipv6 ?? undefined
 }
 
-function buildGraph(
-  lab: LabDetail,
+/** Exported for its test. Only the live half of the lab is read. */
+export function buildGraph(
+  lab: Pick<LabDetail, 'nodes' | 'live'>,
   topology: ParsedTopology,
   impairedByNode: ReadonlyMap<string, number>,
   serverLinks: LabLink[] | null,
 ): BuiltGraph {
   const liveByName = new Map(lab.nodes.map((node) => [node.name, node]))
+  // A node with no container is undeployed only when the containers were
+  // actually read; otherwise its state is unknown, not absent (delta 38).
+  const absent = lab.live ? NOT_DEPLOYED : STATE_UNKNOWN
   const nodes: AppNode[] = []
 
   for (const topoNode of topology.nodes) {
@@ -134,7 +139,7 @@ function buildGraph(
       data: {
         label: topoNode.name,
         device: topoNode.device,
-        state: live?.state ?? NOT_DEPLOYED,
+        state: live?.state ?? absent,
         impairedIfaces: impairedByNode.get(topoNode.name) ?? 0,
       },
     })
@@ -182,7 +187,7 @@ function buildGraph(
             height: DEVICE_H,
             data: {
               label: endpoint.node,
-              state: liveByName.get(endpoint.node)?.state ?? NOT_DEPLOYED,
+              state: liveByName.get(endpoint.node)?.state ?? absent,
               impairedIfaces: impairedByNode.get(endpoint.node) ?? 0,
             },
           })
@@ -605,7 +610,7 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
             <span className="font-mono text-sm font-medium">{selectedId}</span>
             <Badge
               variant={
-                selectedData.state === NOT_DEPLOYED
+                selectedData.state === NOT_DEPLOYED || selectedData.state === STATE_UNKNOWN
                   ? 'outline'
                   : nodeStateBadgeVariant(selectedData.state)
               }
@@ -630,7 +635,9 @@ function CanvasInner({ lab, topology }: { lab: LabDetail; topology: ParsedTopolo
               </div>
             ) : (
               <span className="text-xs text-muted-foreground">
-                Not deployed — no runtime actions.
+                {selectedData.state === STATE_UNKNOWN
+                  ? 'Live state unavailable — no runtime actions.'
+                  : 'Not deployed — no runtime actions.'}
               </span>
             )}
           </div>

@@ -19,7 +19,9 @@ class _FakeClab:
         self._nodes = nodes
         self._fail = fail
 
-    async def inspect(self, lab_name: str) -> Result[tuple[NodeInfo, ...], ClabApiError]:
+    async def inspect(
+        self, lab_name: str, *, timeout: float | None = None
+    ) -> Result[tuple[NodeInfo, ...], ClabApiError]:
         if self._fail:
             return Err(ClabApiError(status_code=502, message="clab down"))
         return Ok(

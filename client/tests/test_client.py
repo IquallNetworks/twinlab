@@ -89,6 +89,7 @@ _LAB_DETAIL = {
             "mgmt_ip": "192.168.121.101",
         }
     ],
+    "live": True,
     "config_time_status": "passed",
     "permissions": ["lab:read", "lab:edit"],
     "template_published": False,
@@ -249,6 +250,7 @@ async def test_get_lab_parses_detail(make_client: ClientFactory) -> None:
     async with make_client(handler) as client:
         detail = await client.get_lab("lab1")
     assert isinstance(detail, LabDetail)
+    assert detail.live is True
     assert detail.owner == Principal(id=UUID(_OWNER_ID), name="admin")
     assert detail.nodes == [
         LabNodeState(

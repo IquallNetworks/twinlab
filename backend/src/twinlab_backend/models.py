@@ -590,6 +590,9 @@ class LabSummary(BaseModel):
     updated_at: datetime
     nodes: int
     nodes_running: int
+    # Delta 38: False when clab-api could not be read (the counts are then 0
+    # and mean "unknown", not "no containers"). The record fields stay true.
+    live: bool
     # Config-time validation gate from the most recent configure. A skipped
     # gate RETAINS the previous result; "no config-time suites" = "not_run".
     config_time_status: ConfigTimeStatus
@@ -622,6 +625,11 @@ class LabDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     nodes: list[LabNodeState]
+    # Delta 38: False when clab-api could not be read in time — `nodes` is then
+    # empty because it is UNKNOWN, not because the lab has no containers. The
+    # detail used to 502 instead, which took the whole lab page down while
+    # clab-api's process-wide lock was held by another lab's long operation.
+    live: bool
     config_time_status: ConfigTimeStatus
     permissions: list[str]
     # Delta 21: True while this lab is published as a network template (the

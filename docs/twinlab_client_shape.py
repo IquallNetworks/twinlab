@@ -543,6 +543,17 @@ docs/mcp-server.md.)
     stopped or was removed, or a 12-hour upstream limit). ``lab:read``. No
     replay, like ``/events``. 409 ``lab_not_running``, 404
     ``node_not_found``. Client: ``follow_node_logs()``.
+38. Lab reads degrade when clab-api is slow (implemented 2026-11-18,
+    awaiting review; recorded in docs/resource-limits.md). Since v0.7
+    clab-api holds ONE process-wide lock for a whole deploy, destroy or
+    node action, and every lab's reads wait on it. ``LabSummary`` and
+    ``LabDetail`` gain ``live: bool``: False when clab-api could not be
+    read within 5 s, and then the node counts or list are UNKNOWN, not
+    empty. ``GET /labs/{name}`` no longer answers 502 for that: it serves
+    the stored record, not live. ``GET /labs``, the link table and
+    ``/usage`` already degraded and now give up after 5 s instead of 30 s.
+    ``GET /labs/{name}/interfaces``, which serves only live data, still
+    answers 502 ``upstream_error``, after 5 s.
 
 Conventions:
 
@@ -1427,6 +1438,9 @@ class LabSummary:
     updated_at: datetime
     nodes: int
     nodes_running: int
+    # PROPOSED (delta 38): False = clab-api could not be read; the counts are
+    # then 0 and mean "unknown", not "no containers".
+    live: bool
     config_time_status: (
         ConfigTimeStatus  # APPROVED — wire today: config_time_ok: bool | None
     )
@@ -1474,6 +1488,9 @@ class LabDetail:  # No Summary/Detail split for v1.0 (see LabSummary note).
     created_at: datetime
     updated_at: datetime
     nodes: list[LabNodeState]
+    # PROPOSED (delta 38): False = clab-api did not answer in time; `nodes` is
+    # then empty because it is unknown. Was a 502 for the whole read.
+    live: bool
     config_time_status: ConfigTimeStatus  # APPROVED — wire today: config_time_ok
     permissions: set[str]
 

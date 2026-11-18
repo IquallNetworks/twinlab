@@ -53,6 +53,7 @@ def lab_wire(**overrides: object) -> dict[str, object]:
         "created_at": "2026-09-23T10:00:00+00:00",
         "updated_at": "2026-09-23T11:00:00+00:00",
         "nodes": [],
+        "live": True,
         "config_time_status": "not_run",
         "permissions": ["lab:read"],
         "template_published": False,

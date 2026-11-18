@@ -595,7 +595,16 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   REPLACE semantics — so the netem API stays the one way to shape a lab; `defaults.tc.enable`
   and a knob-less `tc:` are NOT rejected, since a node may be named `tc`) — are 422
   `unsupported_directive`
-  rather than silently ignored, and the definition's top-level `message:` rides `LabDetail` —
+  rather than silently ignored. **Since 2026-11-17 the same gate refuses every `clab.*` setting
+  that reaches OUTSIDE the lab** (binds/license/startup-config/network-mode/ports/kind/runtime/
+  srl-agents on a node, group or `defaults.devices.<d>`, a link's uplink/vxlan) and every
+  `defaults.providers.clab` setting but `bridge_type`: netlab passes `clab:` to containerlab
+  verbatim, and its only bind check is that the source exists where netlab RUNS, so
+  `clab.binds: ["/:/host"]` mounted the host's root into a node for any `lab:edit` holder
+  (proven live). The deploy SUBMIT re-runs the gate, so a definition stored before a key joined
+  the list cannot deploy. Still open: lab nodes run PRIVILEGED (a plain linux node sees the
+  host's block devices), so `lab:terminal`/any `image:` remain host-level trust — parked as the
+  privileged-node investigation, and the definition's top-level `message:` rides `LabDetail` —
   up-parity gaps 1/2/5/6/7, decisions in `docs/nos-sweep/`); `POST /labs/{name}/deploy` is the ONLY deploy verb —
   from the stored definition, fresh or overwrite-in-place, opt-in `configure`; 409 `no_definition`
   on an unauthored record; the deploy job's first step is an **image pre-flight** (gap 3): a

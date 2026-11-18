@@ -2996,9 +2996,12 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         netlab keys Twinlab does not honor are 422 `unsupported_directive`
         rather than silently ignored (up-parity decisions, docs/nos-sweep/):
         `tools:`, `defaults.netlab.up/down` shell hooks,
-        `defaults.providers.clab.bridge_type: ovs-bridge`, and link or
-        interface `tc:` impairment; extras `directives` lists each
-        `{key, reason}`."""
+        `defaults.providers.clab.bridge_type: ovs-bridge`, link or
+        interface `tc:` impairment, every other `defaults.providers.clab`
+        setting, and (2026-11-17) the `clab.*` settings that reach outside
+        the lab — binds, license, startup-config, network-mode, ports, kind,
+        runtime, srl-agents on a node, group or device default, and a link's
+        uplink/vxlan; extras `directives` lists each `{key, reason}`."""
         raise NotImplementedError
 
     async def deploy_lab(
@@ -3018,7 +3021,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         + custom config: fresh if "created"/"destroyed", overwrite-in-place
         if running. The terminal job's `result` is a DeployResponse.
 
-        Pre-accept (synchronous) errors: 409 no stored definition yet; 409
+        Pre-accept (synchronous) errors: 409 no stored definition yet; 422
+        `unsupported_directive` when the STORED definition holds a key the
+        PUT now refuses (one saved before the key joined the list); 409
         `job_in_flight` — ONE running job per lab, any kind. Post-accept
         failures — netlab rejecting the stored definition, clab-api/runner
         unreachable — fail the JOB (`error` carries the envelope); a push

@@ -176,6 +176,44 @@ async def test_update_definition_rejects_unsupported_directives(
     assert detail.definition is None
 
 
+async def test_update_definition_rejects_host_reaching_clab_keys(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    """netlab passes a definition's `clab:` settings to containerlab verbatim,
+    and some reach outside the lab: `clab.binds` mounted host paths into a node
+    (its only check is that the source exists where netlab runs, and `/` always
+    does). Each is refused by key, wherever netlab accepts it."""
+    lab = await make_lab(None)
+    definition = """\
+provider: clab
+defaults.device: linux
+defaults.devices.linux.clab.network-mode: host
+nodes:
+  h1:
+    clab.binds: ["/etc/hostname:/probe:ro"]
+  h2: {}
+groups:
+  g1:
+    members: [h1]
+    clab.ports: ["2222:22"]
+links: [h1-h2]
+"""
+    with pytest.raises(TwinlabApiError) as excinfo:
+        _ = await admin.update_definition(lab.name, definition)
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "unsupported_directive"
+    raw_directives = excinfo.value.extras["directives"]
+    assert isinstance(raw_directives, list)
+    directives = [cast("dict[str, object]", d) for d in cast("list[object]", raw_directives)]
+    assert {d["key"] for d in directives} == {
+        "defaults.devices.linux.clab.network-mode",
+        "groups.g1.clab.ports",
+        "nodes.h1.clab.binds",
+    }
+    detail = await admin.get_lab(lab.name)
+    assert detail.definition is None
+
+
 async def test_update_definition_rejects_tc_impairment(
     admin: TwinlabClient, make_lab: LabFactory
 ) -> None:

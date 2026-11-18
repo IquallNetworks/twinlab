@@ -460,6 +460,88 @@ links:
     assert find_unsupported_directives(definition) == []
 
 
+def test_find_unsupported_directives_rejects_host_reaching_clab_keys() -> None:
+    # netlab passes `clab:` settings to containerlab verbatim, and `clab.binds`
+    # let a definition mount host paths into a node (proven live 2026-11-17).
+    # Every placement netlab accepts is refused: a node (nested, dotted, and the
+    # list form of `nodes:`), a group, a device default, a link, and any
+    # provider setting.
+    definition = """\
+provider: clab
+defaults.device: linux
+defaults.devices.linux.clab.network-mode: host
+defaults.providers.clab.lab_prefix: ""
+nodes:
+  h1:
+    clab:
+      binds: ["/:/host"]
+      ports: ["2222:22"]
+  h2:
+    clab.license: /etc/shadow
+groups:
+  g1:
+    members: [h2]
+    clab.kind: ext-container
+links:
+- h1:
+  h2:
+  clab.uplink: eth0
+- interfaces: [{node: h1}, {node: h2}]
+  clab:
+    vxlan: {remote: 192.0.2.1, vni: 10}
+"""
+    keys = [d.key for d in find_unsupported_directives(definition)]
+    assert keys == [
+        "defaults.devices.linux.clab.network-mode",
+        "defaults.providers.clab.lab_prefix",
+        "groups.g1.clab.kind",
+        "links[0].clab.uplink",
+        "links[1].clab.vxlan",
+        "nodes.h1.clab.binds",
+        "nodes.h1.clab.ports",
+        "nodes.h2.clab.license",
+    ]
+    listed = """\
+provider: clab
+defaults.device: linux
+nodes:
+- name: h1
+  clab: {startup-config: /etc/passwd, runtime: podman, srl-agents: [/etc/x]}
+"""
+    assert [d.key for d in find_unsupported_directives(listed)] == [
+        "nodes[0].clab.runtime",
+        "nodes[0].clab.srl-agents",
+        "nodes[0].clab.startup-config",
+    ]
+
+
+def test_find_unsupported_directives_allows_in_lab_clab_keys_and_clab_names() -> None:
+    # Settings that stay inside the node are fine, and so is a node or group
+    # merely NAMED clab (like a node named tc) — even one carrying a key that
+    # would be refused under a `clab:` attribute.
+    definition = """\
+provider: clab
+defaults.device: linux
+defaults.providers.clab.bridge_type: bridge
+nodes:
+  clab:
+    ports: 1
+  h2:
+    clab:
+      env: {A: "1"}
+      dns: {servers: [192.0.2.53]}
+      startup-delay: 5
+      restart-policy: always
+      cmd: sleep infinity
+      exec: [true]
+      type: ixrd3
+groups:
+  clab:
+    members: [h2]
+"""
+    assert find_unsupported_directives(definition) == []
+
+
 def test_read_message() -> None:
     assert read_message("name: x\nmessage: Use ssh to reach r1.\n") == "Use ssh to reach r1."
     assert read_message("name: x\n") is None

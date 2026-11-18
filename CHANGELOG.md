@@ -169,3 +169,32 @@ Design record: `docs/resource-limits.md`.
 - Needs clab-api v0.10.0 (the previous entry).
 
 **API and `twinlab-client`:** unchanged.
+
+## 2026-11-17: Definitions can no longer reach outside the lab through `clab:` settings
+
+**Security fix.** netlab passes a definition's `clab:` settings to containerlab unchanged, and
+Twinlab did not check them. Anyone allowed to edit a lab could, for example, set
+`clab.binds: ["/:/host"]` on a node and get the host's whole filesystem, read-write, inside it.
+netlab's only check on a bind is that its source path exists, and it checks inside its own
+container, where `/` always exists. This was confirmed with a read-only bind of a host file.
+
+- Saving a definition now refuses, with 422 `unsupported_directive`, every `clab:` setting that
+  reaches outside the lab: `binds`, `license`, `startup-config`, `network-mode`, `ports`,
+  `kind`, `runtime` and `srl-agents` on a node, a group or `defaults.devices.<device>`, and
+  `uplink` and `vxlan` on a link. Any `defaults.providers.clab` setting other than
+  `bridge_type` is refused too.
+- Deploying re-checks the stored definition, so a lab saved before this change with one of
+  these keys is refused until the key is removed.
+- Settings that stay inside the node are unaffected: `env`, `dns`, `cmd`, `exec`,
+  `startup-delay`, `restart-policy` and the rest.
+
+**Not fixed by this:** lab nodes still run privileged, as containerlab starts them. Root inside
+a plain linux node can see the host's disks, so terminal access to a node, and the freedom to
+choose any node image, still amount to trust at the level of the host. Grant `lab:terminal` and
+`lab:edit` accordingly until that is addressed.
+
+**Upgrading:** check stored definitions for these keys before upgrading. A deploy of one that
+uses them now fails with `unsupported_directive`, naming each key.
+
+**API and `twinlab-client`:** no new types. `PUT /labs/{name}` refuses more keys, and
+`POST /labs/{name}/deploy` can now answer 422 `unsupported_directive` before accepting the job.

@@ -1810,6 +1810,25 @@ in the contract as `PROPOSED (delta 33)`.
 
 Review round 1 (2026-09-23) resolved all five open questions; implemented the same day, preceded by the tree-wide move from httpx to httpx2 that Authlib 1.8 expects.
 
+### Unprivileged lab nodes · **parked 2026-11-17, maintainer's call**
+
+29. **Lab nodes run privileged, so node access is host access.** Found 2026-11-17 while closing
+    the `clab.*` definition keys that reached outside a lab (refused at PUT and deploy since
+    that day). containerlab starts nodes with `privileged=true`: a plain `linux` node with no
+    `clab:` settings runs as root and sees the host's block devices (`/dev/nvme0n1p*` listed
+    from inside one, nothing mounted). So today:
+    - `lab:terminal` on such a node can mount the host's disk;
+    - `lab:edit` can choose any `image:` (a supported feature), which then runs privileged.
+
+    **When picked up:** per admitted platform (VyOS, FRR, CHR, bird, dnsmasq, linux), find
+    whether it deploys, configures and passes its suites without `privileged`, and with which
+    capabilities instead (`NET_ADMIN` and `SYS_ADMIN` are the likely floor; vrnetlab VMs need
+    `/dev/kvm`). netlab's runner configures linux and daemon nodes from the HOST side
+    (`ip netns exec`), so their in-node privileges may not matter at all. The result decides
+    whether Twinlab can override containerlab's default on the generated topology, the way it
+    already sets `cgroup-parent`. Until then the CHANGELOG tells operators to grant
+    `lab:terminal` and `lab:edit` as host-level trust.
+
 ### i18n · **deferred**
 
 Internationalization is deferred project-wide, not just for the frontend rework

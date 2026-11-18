@@ -1160,15 +1160,7 @@ async def update_lab_definition(
     # Legal netlab keys Twinlab decided to reject rather than silently ignore
     # (up-parity decisions, docs/nos-sweep/): the dry create below would accept
     # them and the deploy would quietly not honor them.
-    unsupported = find_unsupported_directives(request.definition)
-    if unsupported:
-        raise ApiError(
-            422,
-            "unsupported_directive",
-            "the definition uses netlab features Twinlab does not honor: "
-            + ", ".join(directive.key for directive in unsupported),
-            {"directives": [{"key": d.key, "reason": d.reason} for d in unsupported]},
-        )
+    _reject_unsupported_directives(request.definition)
 
     definition = _named_definition(request.definition, lab_name)
     definition, mgmt_subnet = await _resolve_mgmt_subnet(
@@ -1384,6 +1376,9 @@ async def deploy_lab(
         raise ApiError(404, "lab_not_found", f"unknown lab '{lab_name}'")
     if lab.definition is None:
         raise ApiError(409, "no_definition", f"lab '{lab_name}' has no stored definition yet")
+    # Re-checked here, not only at PUT: a definition stored before a key joined
+    # the list (the host-reaching clab.* keys, 2026-11-17) must not deploy.
+    _reject_unsupported_directives(lab.definition)
 
     body = request if request is not None else DeployLabRequest()
     lab_id = lab.id  # captured before submit: a losing submit expires the row
@@ -2450,6 +2445,20 @@ def _builtin_collision(name: str) -> ApiError:
 
 def _netlab_failed(message: str, stderr: str) -> ApiError:
     return ApiError(422, "netlab_invalid", message, {"stderr": stderr})
+
+
+def _reject_unsupported_directives(definition: str) -> None:
+    """422 `unsupported_directive` naming every refused key (see
+    `find_unsupported_directives`); shared by the PUT and the deploy submit."""
+    unsupported = find_unsupported_directives(definition)
+    if unsupported:
+        raise ApiError(
+            422,
+            "unsupported_directive",
+            "the definition uses netlab features Twinlab does not honor: "
+            + ", ".join(directive.key for directive in unsupported),
+            {"directives": [{"key": d.key, "reason": d.reason} for d in unsupported]},
+        )
 
 
 def _deploy_failed(message: str) -> ApiError:

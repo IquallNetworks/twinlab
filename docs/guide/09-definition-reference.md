@@ -28,6 +28,16 @@ Each of these is a legal netlab key that Twinlab rejects at save time with
 | `defaults.netlab.up`, `defaults.netlab.down` | arbitrary shell from a stored definition, on a multi-user server | nothing — this is a deliberate refusal |
 | `defaults.providers.clab.bridge_type: ovs-bridge` | Twinlab's host-preparation sidecar creates Linux bridges | use the default bridge type |
 | link and interface `tc:` | netlab applies `tc:` during `netlab up`, the step Twinlab replaces | the impairment API — [page 4](04-operating.md) |
+| `clab.binds`, `clab.license`, `clab.startup-config`, `clab.srl-agents` | each reads files from the host into a node | nothing — a lab must not reach outside itself |
+| `clab.network-mode`, `clab.ports`, link `clab.uplink`, link `clab.vxlan` | each connects a node to the host's network, its interfaces, another container or a remote address | the SSH jump host for access to a node |
+| `clab.kind`, `clab.runtime` | some kinds act on the host or on other containers, and Twinlab fixes the runtime | `device:` chooses the kind |
+| any other `defaults.providers.clab` setting | containerlab provider settings belong to the deployment | nothing |
+
+The `clab.*` keys are refused wherever netlab accepts them: on a node, a group,
+or `defaults.devices.<device>`. Other `clab.*` settings stay inside the node and
+are fine, for example `env`, `dns`, `cmd`, `exec`, `startup-delay` and
+`restart-policy`. A definition saved before a key joined this list can no longer
+be deployed. Its deploy is refused the same way until you remove the key.
 
 **Twinlab refuses rather than ignoring.** That is the point of the list.
 Accepting a key and silently dropping it is what people expect, and it is worse:

@@ -706,6 +706,37 @@ def _tc_impairment_key(path: tuple[str, ...], value: object) -> str | None:
     return None
 
 
+# containerlab settings netlab passes straight through from a definition's
+# `clab:` block (node, group, `defaults.devices.<device>` or link) that reach
+# OUTSIDE the lab: the host's filesystem, network stack, NICs or other
+# containers. netlab's only check on a bind is that its source exists inside
+# the container running netlab, which `/` always does. Twinlab's own device
+# data still sets kind/binds/startup-config; only the DEFINITION is refused.
+_HOST_REACHING_CLAB_KEYS = {
+    "binds": "mounts host paths into the node",
+    "license": "mounts a host file into the node",
+    "startup-config": "reads a host file into the node",
+    "network-mode": "joins the node to the host's or another container's network",
+    "ports": "publishes node ports on the host, around the SSH jump host",
+    "kind": "selects a containerlab kind; some act on the host or on other containers",
+    "runtime": "selects the container runtime, which Twinlab fixes",
+    "srl-agents": "mounts host paths into the node",
+    "uplink": "attaches the lab to a host network interface",
+    "vxlan": "opens a tunnel from the host to a remote address",
+}
+
+
+def _clab_key(path: tuple[str, ...]) -> str | None:
+    """The host-reaching `clab.<key>` a path sets, if any. `clab` must be the
+    ATTRIBUTE, not a node or group that happens to be named `clab` (legal, like
+    a node named `tc`): directly under `nodes`/`groups` it is a name."""
+    if len(path) < 2 or path[-2] != "clab" or path[-1] not in _HOST_REACHING_CLAB_KEYS:
+        return None
+    if len(path) >= 3 and path[-3] in ("nodes", "groups"):
+        return None
+    return path[-1]
+
+
 def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
     """Definition keys that are legal netlab schema but that Twinlab REJECTS
     rather than silently ignores (up-parity decisions, docs/nos-sweep/):
@@ -715,8 +746,11 @@ def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
     `bridge_type` would silently get Linux bridges from hostprep, and link or
     interface `tc:` impairment is applied by `netlab up` alone — a step Twinlab
     replaces (gap 1, rejected for v1.0; the netem API impairs a deployed lab).
-    An unparseable or non-mapping definition returns [] — the dry `netlab
-    create` stays the syntax authority."""
+    Since 2026-11-17 also every `clab.*` setting that reaches outside the lab
+    (`_HOST_REACHING_CLAB_KEYS`) and every `defaults.providers.clab` setting:
+    netlab passes them to containerlab verbatim, and `clab.binds` alone let any
+    lab author mount host paths into a node. An unparseable or non-mapping
+    definition returns [] — the dry `netlab create` stays the syntax authority."""
     try:
         parsed: Any = yaml.safe_load(definition)
     except yaml.YAMLError:
@@ -744,6 +778,24 @@ def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
             found["defaults.providers.clab.bridge_type"] = UnsupportedDirective(
                 "defaults.providers.clab.bridge_type",
                 "OVS bridges are not supported — hostprep creates Linux bridges",
+            )
+        elif (
+            len(path) == 4
+            and path[:3] == ("defaults", "providers", "clab")
+            and path[3] != "bridge_type"
+        ):
+            # Provider settings are deployment policy (container naming,
+            # runtime, kernel modules): Twinlab's, never a lab's.
+            key = _display_path(path)
+            found[key] = UnsupportedDirective(
+                key, "containerlab provider settings belong to the deployment"
+            )
+        elif (clab_key := _clab_key(path)) is not None:
+            key = _display_path(path)
+            found[key] = UnsupportedDirective(
+                key,
+                f"`clab.{clab_key}` {_HOST_REACHING_CLAB_KEYS[clab_key]} — refused "
+                "because a lab must not reach outside itself",
             )
     return sorted(found.values(), key=lambda directive: directive.key)
 

@@ -569,8 +569,9 @@ async def test_mixed_nos_lab_configures_and_converges(
     and a DEVICE-KEYED suite (delta 17 — one test, a case per device) sees the
     OSPF adjacency come up between them.
 
-    Needs the vyos and bird images on the host; bird is built locally with
-    `netlab clab build bird` (see blackbox/README.md)."""
+    Needs the vyos and bird images on the host; bird is built locally with the
+    STACK's netlab, `docker compose exec netlab-runner netlab clab build bird`,
+    never a host netlab (see blackbox/README.md)."""
     lab = await make_lab(None)
     _ = await admin.update_definition(lab.name, MIXED_NOS_LAB_DEFINITION)
     job = await admin.deploy_lab(lab.name, configure=True)

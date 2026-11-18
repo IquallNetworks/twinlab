@@ -72,7 +72,12 @@ stack without the service.
   lab *records* only and never deploys.
 - Most deploy-marked tests need only the `linux` node image. **One needs two more**: the
   mixed-NOS test deploys VyOS + bird + linux together, so the host also needs the vyos image
-  (pullable) and `netlab/bird:latest` (built locally — `netlab clab build bird`). The pair is
+  (pullable) and `netlab/bird:latest`, built locally **with the stack's own netlab**:
+  `docker compose exec netlab-runner netlab clab build bird`. Do not build it with a netlab
+  installed on the host: the BIRD it builds must match the config the stack's netlab writes,
+  and a different netlab release can build a BIRD that rejects it. Host netlab 26.06 built
+  BIRD 2.14, which fails on 26.07's config with `syntax error, unexpected DEV` and surfaces as
+  a deploy error, "namespace path not available" for the bird node. The pair is
   deliberate: both configure over docker exec with no egress from the lab node, unlike FRR,
   whose netlab initial script installs packages (see `docs/nos-sweep/results.md`).
 - One deviation from client-only: the LAN test asserts the host bridge's existence (and its

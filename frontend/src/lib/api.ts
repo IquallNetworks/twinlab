@@ -636,6 +636,32 @@ export const api = {
 // How often a pending job is re-read. Long operations take minutes; 1.5 s keeps
 // completion latency low without hammering the backend.
 const JOB_POLL_MS = 1500
+// Consecutive network failures a job read rides out before giving up. A
+// browser on the lab host sees the host's network change whenever a lab's
+// bridges and veths come and go, and Chrome then fails every request in
+// flight (net::ERR_NETWORK_CHANGED): a destroy's own poll was lost that way,
+// and the page never learned the destroy had succeeded. That is a moment, so a
+// few reads ride it out; a backend that is really gone still surfaces.
+const JOB_READ_NETWORK_RETRIES = 5
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** One job read, retried on a network failure only. Reading a job changes
+ * nothing, so a retry is always safe; an HTTP error (an ApiError) is the
+ * server's answer and is never retried. fetch reports a network failure as a
+ * TypeError. */
+async function readJob(name: string, jobId: string): Promise<JobDetail> {
+  for (let failures = 0; ; failures += 1) {
+    try {
+      return await api.getJob(name, jobId)
+    } catch (err) {
+      if (!(err instanceof TypeError) || failures >= JOB_READ_NETWORK_RETRIES) throw err
+      await sleep(JOB_POLL_MS)
+    }
+  }
+}
 
 /** Poll a submitted job to its terminal state. Resolves with the terminal Job
  * on success (callers parse `job.result` with the matching result schema);
@@ -643,10 +669,10 @@ const JOB_POLL_MS = 1500
  * operation could not run. No deadline: deploys legitimately take minutes, and
  * mutation pending-states communicate progress meanwhile. */
 export async function waitJob(name: string, job: Job): Promise<JobDetail> {
-  let current = await api.getJob(name, job.id)
+  let current = await readJob(name, job.id)
   while (current.status === 'running') {
-    await new Promise((resolve) => setTimeout(resolve, JOB_POLL_MS))
-    current = await api.getJob(name, current.id)
+    await sleep(JOB_POLL_MS)
+    current = await readJob(name, current.id)
   }
   if (current.status === 'failed') {
     // A failed job always carries its error envelope; the fallback is defensive.

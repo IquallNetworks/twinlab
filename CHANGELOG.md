@@ -252,3 +252,12 @@ for 30 seconds and failed with 502.
 **API and `twinlab-client`:** `LabSummary` and `LabDetail` gain `live` (contract delta 38).
 False means the node counts or node list could not be read and are unknown, not zero.
 `GET /labs/{name}` no longer answers 502 when the containerlab API is slow or down.
+
+## 2026-11-18: The UI no longer loses track of a job when the host's network changes
+
+A browser running on the lab host sees the host's network change whenever a lab's bridges come
+or go, and Chrome then fails every request in flight. If one of those was the page checking on
+a job, the page stopped checking: a destroy could succeed while its dialog waited forever. The
+page now rides out a few such failures in a row (about 7 seconds) before reporting an error.
+
+**API and `twinlab-client`:** unchanged.

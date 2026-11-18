@@ -729,10 +729,13 @@ _HOST_REACHING_CLAB_KEYS = {
 def _clab_key(path: tuple[str, ...]) -> str | None:
     """The host-reaching `clab.<key>` a path sets, if any. `clab` must be the
     ATTRIBUTE, not a node or group that happens to be named `clab` (legal, like
-    a node named `tc`): directly under `nodes`/`groups` it is a name."""
+    a node named `tc`). Decided by POSITION: `clab` is a name only in exactly
+    `nodes.clab.<attr>` / `groups.clab.<attr>`. Matching the text before it
+    instead let a node NAMED `nodes` (or `groups`) carry `clab.binds` past
+    the gate (`nodes.nodes.clab.binds`); anything ambiguous is refused."""
     if len(path) < 2 or path[-2] != "clab" or path[-1] not in _HOST_REACHING_CLAB_KEYS:
         return None
-    if len(path) >= 3 and path[-3] in ("nodes", "groups"):
+    if len(path) == 3 and path[0] in ("nodes", "groups"):
         return None
     return path[-1]
 

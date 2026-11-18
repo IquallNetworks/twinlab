@@ -626,3 +626,13 @@ def test_group_extraction_dedups_and_survives_a_cycle() -> None:
 
 def test_group_extraction_is_empty_without_groups() -> None:
     assert netlab._extract_node_groups({"nodes": {}}, "nodes: [n1]\n") == {}  # pyright: ignore[reportPrivateUsage]
+
+
+def test_find_unsupported_directives_sees_clab_on_nodes_named_like_sections() -> None:
+    # A node named `nodes` or `groups` once passed `clab.binds` (the gate read
+    # the text two keys up, not the position): proven live, saved with a bind.
+    for name in ("nodes", "groups"):
+        for section in ("nodes", "groups"):
+            definition = f"{section}:\n  {name}:\n    clab:\n      binds: ['/:/host']\n"
+            found = [d.key for d in find_unsupported_directives(definition)]
+            assert found == [f"{section}.{name}.clab.binds"], (section, name, found)

@@ -261,3 +261,16 @@ a job, the page stopped checking: a destroy could succeed while its dialog waite
 page now rides out a few such failures in a row (about 7 seconds) before reporting an error.
 
 **API and `twinlab-client`:** unchanged.
+
+## 2026-11-18: The `clab:` refusal no longer misses nodes named `nodes` or `groups`
+
+**Security fix** to the 2026-11-17 `clab:` refusal. A node or group named `nodes` or `groups`
+could still carry host-reaching `clab:` settings such as `clab.binds`, because the check took
+`clab` there for a node's name. Such a definition was saved, and deploying it would have
+mounted the host paths it named. The check now goes by where `clab` sits in the definition, and
+refuses it everywhere but as the name of a node or group directly under `nodes:` or `groups:`.
+
+**Upgrading:** a stored definition that used this gap is refused at its next save or deploy
+with `unsupported_directive`, naming the key.
+
+**API and `twinlab-client`:** unchanged.

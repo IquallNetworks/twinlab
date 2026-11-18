@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     SecretStr,
     ValidationError,
     field_validator,
@@ -56,6 +57,9 @@ _OPTIONAL_ENV_KEYS = {
     "lab_files_dir": "LAB_FILES_DIR",
     "public_origin": "PUBLIC_ORIGIN",
     "oidc_secret_key": "OIDC_SECRET_KEY",
+    "lab_cgroup_parent": "LAB_CGROUP_PARENT",
+    "boot_wave_size": "BOOT_WAVE_SIZE",
+    "boot_wave_interval_seconds": "BOOT_WAVE_INTERVAL_SECONDS",
 }
 
 # A Fernet key is 32 random bytes, URL-safe base64 encoded (44 characters).
@@ -158,6 +162,27 @@ class Settings(BaseModel):
     # requires it so a deployed stack cannot ship without one.
     oidc_secret_key: SecretStr | None = None
 
+    # The cgroup every lab node is placed under (containerlab `cgroup-parent`,
+    # docker `--cgroup-parent`): on a systemd host a slice such as
+    # "twinlab-labs.slice", whose MemoryHigh/CPUWeight the operator sets so labs
+    # are throttled together rather than the host OOM-killing its neighbours
+    # (docs/resource-limits.md). "" = the runtime default, i.e. no grouping:
+    # the slice is host setup Twinlab cannot do, and placing nodes in a slice
+    # nobody limited buys nothing.
+    lab_cgroup_parent: str = ""
+
+    # Deploy can boot nodes in waves of `boot_wave_size`,
+    # `boot_wave_interval_seconds` apart (containerlab `startup-delay`); 0
+    # seconds, the default, boots every node at once. OFF by default because
+    # the delays keep clab-api's deploy call open, and clab-api >= 0.7 holds
+    # ONE process-wide lock for a whole deploy that every other lab's inspect,
+    # links, netem and node actions also need: 7 VyOS nodes in waves stall the
+    # whole fleet for ~30s, past this backend's 30s read timeout (measured,
+    # docs/resource-limits.md). The slice's CPUWeight is the host protection
+    # that costs nothing. A size of 2 is only what an opt-in starts from.
+    boot_wave_size: int = Field(default=2, ge=1)
+    boot_wave_interval_seconds: int = Field(default=0, ge=0)
+
     @model_validator(mode="after")
     def _hostprep_pair(self) -> Settings:
         if bool(self.hostprep_url) != (self.hostprep_token is not None):
@@ -218,6 +243,23 @@ class Settings(BaseModel):
         # a relative one would silently resolve against dockerd's cwd.
         if value and not value.startswith("/"):
             raise ValueError("LAB_FILES_DIR must be an absolute path")
+        return value
+
+    @field_validator("lab_cgroup_parent")
+    @classmethod
+    def _cgroup_parent_shape(cls, value: str) -> str:
+        # Docker takes a slice name under the systemd cgroup driver and a path
+        # under cgroupfs; anything else fails every deploy at the daemon, so
+        # it fails loading instead.
+        if not value:
+            return value
+        if not (value.endswith(".slice") or value.startswith("/")) or any(
+            char.isspace() for char in value
+        ):
+            raise ValueError(
+                'LAB_CGROUP_PARENT must be a systemd slice name like "twinlab-labs.slice" '
+                "or an absolute cgroup path"
+            )
         return value
 
     @field_validator("ssh_jump_address")

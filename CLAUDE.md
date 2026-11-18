@@ -934,7 +934,27 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `ssh -J jump@host:2222 <node-user>@<mgmt_ip>` — Ansible-ready.
 - **`clab-api`** — the containerlab API server (`srl-labs/clab-api-server`, Apache-2.0), host-coupled
   (host network + PID, Docker socket and PAM databases mounted); it deploys lab nodes as sibling
-  containers on the host daemon and authenticates a host user in the `clab_api` group. Its
+  containers on the host daemon and authenticates a host user in the `clab_api` group. **v0.10.0
+  (containerlab 0.83) since 2026-11-17**, up from v0.5.0, because `cgroup-parent` needs
+  containerlab ≥ 0.79. That bump carries **resource limits** (deployment settings only, design
+  record `docs/resource-limits.md`): a lab on a shared host had the OOM killer taking OTHER
+  processes, and the maintainer's rule is that labs slow down rather than die. So deploy
+  places every node under `LAB_CGROUP_PARENT` (containerlab `cgroup-parent` on the generated
+  topology's `defaults` AND every node, kind/group values dropped, so a definition cannot
+  escape it; `services/clab_topology.py`) and compose places the services under
+  `SERVICES_CGROUP_PARENT`; the operator sets `MemoryHigh` + `CPUWeight` on the common parent
+  slice, which throttles and swaps but never kills. Every Docker memory limit is a
+  `memory.max` (a kill line), which is why there are NO per-node limits. Deploy CAN boot
+  nodes in WAVES (containerlab `startup-delay`, `BOOT_WAVE_INTERVAL_SECONDS`, definition
+  order, an explicit `clab.startup-delay` wins): a NOS boot is a CPU burst (7 VyOS nodes
+  took ~6 of 8 cores for 30s), and containerlab's `max-workers` was measured and does NOT
+  stagger boots, only container creation. **Waves are OFF by default** (shipped on, turned
+  off the same day): since v0.7.0 clab-api holds ONE process-wide lock (`containerlabMu`)
+  for a whole deploy/destroy/node action, and inspect/links/interfaces/netem of EVERY lab
+  need it too, so a delay inside the deploy stalls the fleet — past 30s this backend's clab
+  reads time out and lab detail 502s. Anything that makes a clab-api call long blocks
+  everyone; keep slow work outside those calls. Measured too: IOL allocates its memory in one step, and the
+  runner holds ~110 MiB per `network_cli` node during config push. Its
   `/var/run/netns` bind is **rshared** (2026-08-06, found by the e2e suite): containerlab's node
   STOP parks the node's interfaces into a netns it creates there, and with the default-private
   propagation the nsfs mounts don't cross the container boundary — parking then fails ("unknown FS

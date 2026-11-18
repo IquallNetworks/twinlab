@@ -118,6 +118,40 @@ disruptive:
   Leave it unset if you only use Twinlab's own passwords. See
   [Access](07-access.md#signing-in-through-an-identity-provider).
 
+### Sharing the host with other work
+
+Deploy can boot a lab's nodes in waves instead of all at once, which spreads
+out the CPU burst of a boot. It is off by default. Set
+`BOOT_WAVE_INTERVAL_SECONDS` (for example `10`) to turn it on, and
+`BOOT_WAVE_SIZE` (default 2) for the nodes per wave. Only turn it on where one
+lab deploys at a time: while a lab boots in waves, the containerlab API answers
+no other lab, so every other lab's page stalls until the deploy finishes.
+
+Twinlab sets no memory limit of its own. If other work runs on the same host,
+put Twinlab in cgroups you limit, so that it is slowed down instead of the
+kernel's OOM killer ending other processes. On a systemd host, set the limit
+once on a parent slice:
+
+```bash
+sudo systemctl set-property twinlab.slice MemoryHigh=16G CPUWeight=20
+```
+
+Then place labs and services in its two children, in `.env`:
+
+```bash
+LAB_CGROUP_PARENT=twinlab-labs.slice
+SERVICES_CGROUP_PARENT=twinlab-services.slice
+```
+
+- Size `MemoryHigh` to what the host can spare after its other work. Above it,
+  the kernel throttles Twinlab and moves lab memory to swap, so **the host needs
+  swap** (`swapon --show`).
+- Use `MemoryHigh`, not `MemoryMax`. `MemoryMax` is the point where the kernel
+  kills processes inside the slice, which means lab nodes.
+- `CPUWeight` below the default 100 makes labs give way to other processes only
+  when the CPU is contended. On an idle host they still run at full speed.
+- `sudo systemctl revert twinlab.slice` removes the limit.
+
 ## Node images
 
 Twinlab never distributes images. You fetch them yourself, and only for the

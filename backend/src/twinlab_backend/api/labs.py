@@ -108,6 +108,7 @@ from twinlab_backend.services.clab_api import (
 from twinlab_backend.services.clab_api import NetemImpairment as ClabNetemImpairment
 from twinlab_backend.services.clab_api import NodeInterfaces as ClabNodeInterfaces
 from twinlab_backend.services.clab_api import NodeLogs as ClabNodeLogs
+from twinlab_backend.services.clab_topology import BootStagger, place_in_cgroup, stagger_boot
 from twinlab_backend.services.cli_adapters import adapt_command
 from twinlab_backend.services.configimport import diff as configimport_diff
 from twinlab_backend.services.custom_config import (
@@ -1240,6 +1241,8 @@ async def _deploy_job(
     steps: JobStepRecorder,
     *,
     lab_files_dir: str,
+    cgroup_parent: str,
+    boot_stagger: BootStagger | None,
     previous_status: str,
     configure: bool,
     skip_config_time: bool,
@@ -1310,9 +1313,18 @@ async def _deploy_job(
             if lab_dir is not None
             else strip_generated_binds(artifacts.topology)
         )
-        await steps.record(
-            "clab_deploy_started", f"deploying {len(artifacts.node_facts)} containers via clab-api"
-        )
+        # Host policy, never part of the definition (docs/resource-limits.md).
+        if cgroup_parent:
+            shippable = place_in_cgroup(shippable, cgroup_parent)
+        started = f"deploying {len(artifacts.node_facts)} containers via clab-api"
+        if boot_stagger is not None:
+            shippable, staggered = stagger_boot(shippable, boot_stagger)
+            if boot_stagger.waves(staggered) > 1:
+                started += (
+                    f", booting in {boot_stagger.waves(staggered)} waves of "
+                    f"{boot_stagger.wave_size}, {boot_stagger.interval_seconds}s apart"
+                )
+        await steps.record("clab_deploy_started", started)
         deployed = await clab.deploy(shippable, reconfigure=True)
         if isinstance(deployed, Err):
             await steps.record("clab_deploy_started", deployed.error.message, level="error")
@@ -1401,6 +1413,12 @@ async def deploy_lab(
             lab_name,
             steps,
             lab_files_dir=settings.lab_files_dir,
+            cgroup_parent=settings.lab_cgroup_parent,
+            boot_stagger=(
+                BootStagger(settings.boot_wave_size, settings.boot_wave_interval_seconds)
+                if settings.boot_wave_interval_seconds
+                else None
+            ),
             previous_status=previous_status,
             configure=body.configure,
             skip_config_time=body.skip_config_time_checks,

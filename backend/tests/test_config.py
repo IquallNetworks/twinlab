@@ -107,3 +107,34 @@ def test_oidc_secret_key_must_be_a_fernet_key() -> None:
     unset = load_settings(_without("OIDC_SECRET_KEY"))
     assert isinstance(unset, Ok)
     assert unset.value.oidc_secret_key is None
+
+
+def test_lab_cgroup_parent_is_a_slice_or_a_path_or_unset() -> None:
+    # Docker takes a slice name (systemd driver) or a path (cgroupfs); anything
+    # else would fail every deploy at the daemon, so it fails startup instead.
+    env = {k: v for k, v in os.environ.items() if k != "LAB_CGROUP_PARENT"}
+    unset = load_settings(env)
+    assert isinstance(unset, Ok)
+    assert unset.value.lab_cgroup_parent == ""
+    for good in ("twinlab-labs.slice", "/twinlab/labs"):
+        loaded = load_settings(_env(LAB_CGROUP_PARENT=good))
+        assert isinstance(loaded, Ok), good
+        assert loaded.value.lab_cgroup_parent == good
+    for bad in ("twinlab-labs", "twinlab labs.slice", "relative/path"):
+        assert isinstance(load_settings(_env(LAB_CGROUP_PARENT=bad)), Err), bad
+
+
+def test_boot_waves_default_off_and_can_be_turned_on() -> None:
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("BOOT_WAVE_SIZE", "BOOT_WAVE_INTERVAL_SECONDS")
+    }
+    default = load_settings(env)
+    assert isinstance(default, Ok)
+    assert (default.value.boot_wave_size, default.value.boot_wave_interval_seconds) == (2, 0)
+    on = load_settings(_env(BOOT_WAVE_INTERVAL_SECONDS="10"))
+    assert isinstance(on, Ok)
+    assert on.value.boot_wave_interval_seconds == 10
+    for bad in ({"BOOT_WAVE_SIZE": "0"}, {"BOOT_WAVE_INTERVAL_SECONDS": "-1"}):
+        assert isinstance(load_settings(_env(**bad)), Err), bad

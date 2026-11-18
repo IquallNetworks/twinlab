@@ -126,3 +126,46 @@ change. Destroy running labs before the switch: a lab deployed by v0.5.0 and man
 was not tested.
 
 **API and `twinlab-client`:** unchanged.
+
+## 2026-11-17: Labs can boot in waves, and can be kept from taking over a shared host
+
+Design record: `docs/resource-limits.md`.
+
+- **Deploy can boot a lab's nodes in waves**, a few at a time with a pause between, in
+  definition order. Starting every node at once saturates the host's CPU: the 7-node VyOS
+  example kept about 6 of 8 cores busy for 30 seconds. **Waves are off by default**, because
+  the containerlab API holds one lock for the whole of a deploy, and every other lab's status,
+  links, interfaces, impairments and node actions wait on it. While a 7-node VyOS lab booted in
+  waves, other labs' pages stalled for about 30 seconds. Turn waves on only where one lab
+  deploys at a time. The deploy's progress says when a lab boots in waves, and a node whose
+  definition sets `clab.startup-delay` keeps its own.
+- **Labs and Twinlab's services can be placed in cgroups you limit**, so that on a host shared
+  with other work, Twinlab is throttled and swapped instead of the OOM killer ending other
+  processes. Labs are slowed, never killed. Twinlab sets no limit itself: you set it once on the
+  host (see Upgrading). This is also the way to keep a boot from starving other work without
+  waves: give the Twinlab slice a low `CPUWeight`.
+
+**Upgrading:**
+
+- To turn waves on, set `BOOT_WAVE_INTERVAL_SECONDS` (seconds between waves; 0, the default,
+  boots everything at once) and, if 2 nodes per wave is not what you want, `BOOT_WAVE_SIZE`.
+  With 2 nodes 10 seconds apart, a lab of about 110 nodes or more reaches the deploy's
+  600-second timeout, so raise `BOOT_WAVE_SIZE` for labs that size.
+- To limit Twinlab on a systemd host, set the limit on the parent slice once, then point
+  Twinlab at its two children in `.env` and recreate the stack:
+
+  ```sh
+  sudo systemctl set-property twinlab.slice MemoryHigh=16G CPUWeight=20
+  ```
+
+  ```sh
+  LAB_CGROUP_PARENT=twinlab-labs.slice
+  SERVICES_CGROUP_PARENT=twinlab-services.slice
+  ```
+
+  Use `MemoryHigh`, not `MemoryMax`: `MemoryMax` is a kill line. The host needs swap, because
+  throttling works by paging lab memory out. Running labs move into the slice on their next
+  deploy.
+- Needs clab-api v0.10.0 (the previous entry).
+
+**API and `twinlab-client`:** unchanged.

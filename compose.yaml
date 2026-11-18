@@ -16,8 +16,15 @@
 
 name: twinlab
 
+# The cgroup every Twinlab service is placed under, e.g. twinlab-services.slice
+# beside the labs' twinlab-labs.slice, so ONE limit on the parent twinlab.slice
+# covers both (docs/resource-limits.md). The runner matters most: config push
+# holds a process per network_cli node. Empty = Docker's default placement.
+x-services-cgroup: &services-cgroup ${SERVICES_CGROUP_PARENT:-}
+
 services:
   postgres:
+    cgroup_parent: *services-cgroup
     image: postgres:17
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -33,6 +40,7 @@ services:
     restart: unless-stopped
 
   backend:
+    cgroup_parent: *services-cgroup
     build: ./backend
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -81,6 +89,15 @@ services:
       # dockerd resolves bind sources on the host, clab-api pre-flights them
       # in its own fs. Required so the stack can't silently strip binds.
       LAB_FILES_DIR: ${LAB_FILES_DIR:?set LAB_FILES_DIR in .env (absolute path, e.g. /var/lib/twinlab/lab-files)}
+      # The cgroup every lab node is placed under, e.g. twinlab-labs.slice on a
+      # systemd host whose MemoryHigh/CPUWeight you set (docs/resource-limits.md).
+      # Unset = docker's default placement, i.e. no limit on labs as a group.
+      LAB_CGROUP_PARENT: ${LAB_CGROUP_PARENT:-}
+      # Deploy can boot nodes in waves of BOOT_WAVE_SIZE, BOOT_WAVE_INTERVAL_SECONDS
+      # apart. Unset = off (every node at once): while a lab boots in waves,
+      # clab-api serves no other lab (docs/resource-limits.md).
+      BOOT_WAVE_SIZE: ${BOOT_WAVE_SIZE:-}
+      BOOT_WAVE_INTERVAL_SECONDS: ${BOOT_WAVE_INTERVAL_SECONDS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -106,6 +123,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    cgroup_parent: *services-cgroup
     build:
       context: ./frontend
       # The static production bundle behind nginx (frontend/nginx.conf owns
@@ -138,6 +156,7 @@ services:
   # and every tool acts with it through the public API, so this service holds
   # no secrets and no database. No host port, like the backend.
   mcp:
+    cgroup_parent: *services-cgroup
     build:
       context: ./mcp
       additional_contexts:
@@ -181,6 +200,7 @@ services:
   # outright — none of which meaningfully widens this container's reach, since
   # the mounted Docker socket is already root-equivalent on the host.
   netlab-runner:
+    cgroup_parent: *services-cgroup
     build: ./netlab-runner
     pid: host
     cap_add: [SYS_ADMIN, SYS_PTRACE, NET_ADMIN]
@@ -217,6 +237,7 @@ services:
   # are reachable from here without host networking or privileges (the same
   # mechanism the netlab-runner's SSH config push relies on).
   jump:
+    cgroup_parent: *services-cgroup
     build: ./jump
     environment:
       BACKEND_URL: http://backend:8000
@@ -253,6 +274,7 @@ services:
   # shared token. The backend owns all bookkeeping (bridge ownership,
   # collisions, required-vs-optional modules).
   hostprep:
+    cgroup_parent: *services-cgroup
     build: ./hostprep
     network_mode: host
     cap_drop: [ALL]
@@ -280,6 +302,7 @@ services:
   # host PID, the Docker socket, and the passwd/shadow/group databases. Prereqs
   # on the host: a user in the `clab_api` group and the node images pulled.
   clab-api:
+    cgroup_parent: *services-cgroup
     image: ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.10.0
     network_mode: host
     pid: host

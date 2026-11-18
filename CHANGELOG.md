@@ -110,3 +110,19 @@ empty list, so nothing changes until you set one.
   `update_oidc_provider` requires it, like every other field of the replace.
 - Entries are bare domain names, stored lowercase. `@example.com` is a 422.
 - New sign-in error code: `oidc_email_domain_not_allowed`.
+
+## 2026-11-17: clab-api server v0.10.0
+
+The stack's containerlab API server moves from v0.5.0 to v0.10.0, which bundles containerlab
+0.83.0 instead of 0.77.0. Twinlab needs it for the next change: placing lab nodes in a cgroup
+(`cgroup-parent`) arrived in containerlab 0.79.
+
+- Every endpoint and setting Twinlab uses is unchanged; the API only gained endpoints.
+- A node whose container exits during deploy now has its output in clab-api's log, so
+  a crashing daemon names its own error.
+
+**Upgrading:** `docker compose pull clab-api && docker compose up -d clab-api`. No settings
+change. Destroy running labs before the switch: a lab deployed by v0.5.0 and managed by v0.10.0
+was not tested.
+
+**API and `twinlab-client`:** unchanged.

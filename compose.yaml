@@ -280,7 +280,7 @@ services:
   # host PID, the Docker socket, and the passwd/shadow/group databases. Prereqs
   # on the host: a user in the `clab_api` group and the node images pulled.
   clab-api:
-    image: ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.5.0
+    image: ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.10.0
     network_mode: host
     pid: host
     privileged: true

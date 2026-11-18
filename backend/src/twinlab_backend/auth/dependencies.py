@@ -23,7 +23,7 @@ from twinlab_backend.auth.service import effective_permissions_for, global_permi
 from twinlab_backend.auth.sessions import resolve_session
 from twinlab_backend.config import Settings
 from twinlab_backend.db.models import User
-from twinlab_backend.deps import SessionDep, SettingsDep
+from twinlab_backend.deps import SessionDep, SettingsDep, shielded_session
 from twinlab_backend.result import Err
 from twinlab_backend.services import lab_store
 
@@ -88,6 +88,35 @@ def require_global(permission: str) -> Callable[..., Awaitable[User]]:
         return user
 
     return dependency
+
+
+async def authorize_lab_stream(
+    request: Request, settings: Settings, lab_name: str, permission: str
+) -> str:
+    """`require_lab` for a long-lived streaming response, returning the lab's
+    status. The caller and the lab are resolved in a short session that is
+    closed before the stream starts: FastAPI closes a dependency's session only
+    after the response has been sent, which for a 30-minute capture would hold
+    a pooled connection for 30 minutes. Same answers as `require_lab`: 401, 404
+    when the caller cannot read the lab, 403 when it lacks `permission`."""
+    async with shielded_session(request.app.state.session_factory) as session:
+        user = await resolve_credentials(
+            session,
+            settings,
+            authorization=request.headers.get("Authorization"),
+            cookie_token=request.cookies.get(settings.session_cookie_name),
+        )
+        if user is None:
+            raise ApiError(401, "not_authenticated", "not authenticated")
+        lab = await lab_store.get_lab(session, lab_name)
+        if lab is None:
+            raise _unknown_lab(lab_name)
+        granted = await effective_permissions_for(session, user, lab)
+        if perms.LAB_READ not in granted:
+            raise _unknown_lab(lab_name)
+        if permission not in granted:
+            raise ApiError(403, "permission_denied", f"missing permission: {permission}")
+        return lab.status
 
 
 def require_lab(

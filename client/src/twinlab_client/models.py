@@ -867,6 +867,20 @@ class NodeLogsResponse:
     logs: str
 
 
+LOG_STREAMS = ("stdout", "stderr")
+LogStream = Literal["stdout", "stderr"]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeLogLine:
+    """One line from `follow_node_logs` (delta 37), verbatim: Docker's
+    timestamp prefix included, as in `NodeLogsResponse.logs`. A container with
+    a TTY reports every line as ``stdout``."""
+
+    stream: LogStream
+    line: str
+
+
 @dataclass(frozen=True, slots=True)
 class NodeInterface:
     name: str

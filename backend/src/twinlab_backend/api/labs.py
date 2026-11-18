@@ -2268,8 +2268,10 @@ async def node_logs(
 ) -> NodeLogsResponse:
     # 200 lines is a sane display default; large enough to be useful, small enough
     # not to ship a whole boot log by accident. Callers widen it via ?tail=.
-    # clab-api's logs endpoint matches on the container name (not the short node
-    # name the action endpoints accept), so resolve it from live state first.
+    # clab-api takes the short name since v0.10, but the inspect stays: an unknown
+    # name falls through to a fuzzy match there ("r1" serves core-r1's log, by
+    # suffix), and its `containerName` merely echoes the name it was sent. The
+    # inspect makes the name exact and supplies the real container name.
     container = await _resolve_container(clab, lab_name, node_name)
     result = await clab.node_logs(lab_name, container, tail=str(tail))
     if isinstance(result, Err):

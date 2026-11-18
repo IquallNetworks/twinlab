@@ -11,9 +11,11 @@ translated here into typed results; nothing propagates as an exception.
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+import logging
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Literal
 
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -23,11 +25,39 @@ from websockets.exceptions import InvalidHandshake
 
 from twinlab_backend.result import Err, Ok, Result
 
+logger = logging.getLogger("twinlab.clab_api")
+
 
 @dataclass(frozen=True, slots=True)
 class ClabApiError:
     message: str
     status_code: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class UpstreamStream:
+    """An open streaming response from clab-api that answered 200. Its owner
+    must `aclose` it, and closing is what ends the work upstream: a capture
+    stops when its client disconnects, a log follow when its reader goes."""
+
+    response: httpx2.Response
+
+    def chunks(self) -> AsyncIterator[bytes]:
+        # Decoded, not raw: should clab-api ever compress, the relay must not
+        # hand compressed bytes on under its own content type.
+        return self.response.aiter_bytes()
+
+    async def aclose(self) -> None:
+        await self.response.aclose()
+
+
+@dataclass(frozen=True, slots=True)
+class LogLine:
+    """One line of a followed container log, verbatim (Docker's timestamp
+    prefix included, as in the snapshot read)."""
+
+    stream: Literal["stdout", "stderr"]
+    line: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +226,42 @@ class _MessageResponse(BaseModel):
 class _LogsResponse(BaseModel):
     container_name: str = Field(alias="containerName")
     logs: str
+
+
+class _ErrorBody(BaseModel):
+    error: str
+
+
+def _error_sentence(body: str) -> str:
+    """clab-api's refusals are `{"error": "..."}`; its sentence is the message.
+    Any other body is passed on as it came."""
+    try:
+        return _ErrorBody.model_validate_json(body).error
+    except ValidationError:
+        return body
+
+
+class _LogStreamLine(BaseModel):
+    stream: Literal["stdout", "stderr"]
+    line: str
+
+
+async def follow_log_lines(stream: UpstreamStream) -> AsyncIterator[LogLine | None]:
+    """Parse a followed log stream (NDJSON, one object per line). Yields None
+    for clab-api's keepalive, the blank line it sends every 25s while the node
+    is quiet, so the caller can write something and notice a reader that left.
+    A line that does not parse ends the stream: it means clab-api changed shape,
+    and guessing at it would show the user lines that are not the node's."""
+    async for raw in stream.response.aiter_lines():
+        if not raw.strip():
+            yield None
+            continue
+        try:
+            parsed = _LogStreamLine.model_validate_json(raw)
+        except ValidationError as exc:
+            logger.warning("unexpected log stream line, ending the stream: %s", exc)
+            return
+        yield LogLine(stream=parsed.stream, line=parsed.line)
 
 
 class _SaveResponse(BaseModel):
@@ -575,11 +641,11 @@ class ClabApiClient:
     async def node_logs(
         self, lab_name: str, container_name: str, tail: str = "all"
     ) -> Result[NodeLogs, ClabApiError]:
-        """Fetch a node's container logs (GET .../nodes/{container}/logs). Unlike the
-        node lifecycle actions (which accept the short node name), clab-api's logs
-        endpoint matches on the full container name (`clab-<lab>-<node>`) and rejects
-        a short name — so the caller resolves the node to its container first. `tail`
-        is the number of trailing lines, or "all"; the `follow` (stream) mode is unused."""
+        """Fetch a node's container logs (GET .../nodes/{container}/logs). clab-api
+        accepts the short name too since v0.10, but answers an unknown one with a
+        fuzzy match, and `containerName` echoes whatever was sent; the caller
+        resolves the exact container first. `tail` is the number of trailing lines,
+        or "all"; `follow_logs` streams."""
         sent = await self._authed(
             "GET",
             f"/api/v1/labs/{lab_name}/nodes/{container_name}/logs",
@@ -595,6 +661,72 @@ class ClabApiClient:
         except ValidationError as exc:
             return Err(ClabApiError(f"unexpected logs response: {exc}", resp.status_code))
         return Ok(NodeLogs(container_name=parsed.container_name, logs=parsed.logs))
+
+    async def _open_stream(
+        self, what: str, path: str, params: Sequence[tuple[str, str]]
+    ) -> Result[UpstreamStream, ClabApiError]:
+        """Open a long-lived GET and hand back the stream once clab-api has
+        answered 200. A refusal arrives before the first byte as an ordinary
+        error body, so it is read here and returned as an error with its status.
+        No read timeout: a capture of a quiet link and a quiet log send nothing
+        for a long time, and the caller's own bounds end them."""
+        auth = await self._login()
+        if isinstance(auth, Err):
+            return auth
+        request = self.client.build_request(
+            "GET",
+            f"{self.base_url}{path}",
+            params=list(params),
+            headers={"Authorization": f"Bearer {auth.value}"},
+            timeout=httpx2.Timeout(10.0, read=None),
+        )
+        try:
+            resp = await self.client.send(request, stream=True)
+        except httpx2.HTTPError as exc:
+            return Err(ClabApiError(f"{what} request failed: {exc}", None))
+        if resp.status_code == HTTPStatus.OK:
+            return Ok(UpstreamStream(resp))
+        try:
+            _ = await resp.aread()
+            text = resp.text
+        except httpx2.HTTPError as exc:
+            text = f"(unreadable body: {exc})"
+        finally:
+            await resp.aclose()
+        return Err(ClabApiError(f"{what} rejected: {_error_sentence(text)}", resp.status_code))
+
+    async def open_capture(
+        self,
+        lab_name: str,
+        targets: Sequence[str],
+        *,
+        duration_seconds: int,
+        packet_limit: int | None,
+        snap_length: int | None,
+    ) -> Result[UpstreamStream, ClabApiError]:
+        """Start a packet capture (GET .../capture/stream) of `targets`, each
+        `<node>:<interface>`, streamed as one pcapng section. It ends after
+        `duration_seconds`, at `packet_limit`, or when the stream is closed.
+        clab-api holds its process-wide lock only while loading the lab."""
+        params = [("target", target) for target in targets]
+        params.append(("duration", f"{duration_seconds}s"))
+        if packet_limit is not None:
+            params.append(("packetLimit", str(packet_limit)))
+        if snap_length is not None:
+            params.append(("snapLength", str(snap_length)))
+        return await self._open_stream("capture", f"/api/v1/labs/{lab_name}/capture/stream", params)
+
+    async def follow_logs(
+        self, lab_name: str, node_name: str, *, tail: int
+    ) -> Result[UpstreamStream, ClabApiError]:
+        """Follow a node's container log (GET .../nodes/{node}/logs?follow=true),
+        starting with its last `tail` lines; read it with `follow_log_lines`.
+        Since v0.10.0 the logs route accepts the short node name."""
+        return await self._open_stream(
+            "log follow",
+            f"/api/v1/labs/{lab_name}/nodes/{node_name}/logs",
+            [("tail", str(tail)), ("follow", "true")],
+        )
 
     async def interfaces(
         self, lab_name: str, node: str | None = None

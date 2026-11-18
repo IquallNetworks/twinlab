@@ -768,6 +768,14 @@ class NodeLogsResponse(BaseModel):
     logs: str
 
 
+class NodeLogLine(BaseModel):
+    """One followed log line, the `log` event of the log stream (delta 37).
+    Verbatim, Docker's timestamp prefix included, as in `NodeLogsResponse`."""
+
+    stream: Literal["stdout", "stderr"]
+    line: str
+
+
 class NodeInterface(BaseModel):
     name: str
     alias: str

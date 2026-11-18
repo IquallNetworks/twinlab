@@ -198,3 +198,24 @@ uses them now fails with `unsupported_directive`, naming each key.
 
 **API and `twinlab-client`:** no new types. `PUT /labs/{name}` refuses more keys, and
 `POST /labs/{name}/deploy` can now answer 422 `unsupported_directive` before accepting the job.
+
+## 2026-11-17: Packet capture and live log following
+
+Two new ways to watch a running lab, both open to anyone who can read it (`lab:read`).
+
+- **Packet capture.** Each link in the Nodes tab's Links table has a **Capture** button. It
+  saves the traffic on the chosen interfaces as one pcapng file for Wireshark. Every capture
+  has a duration, up to 30 minutes; an optional packet limit ends it sooner, and **Stop and
+  save** ends it whenever you like and keeps what arrived so far. A capture that runs its
+  course waits for you to click **Save file**. The API is `GET /labs/{name}/capture?target=<node>:<interface>&duration_seconds=<n>`,
+  which streams the file as it is captured. Nothing is stored on the server.
+- **Following a node's log.** The node logs dialog has a **Follow** button that appends new
+  lines as the node writes them, so a boot can be watched without pressing Refresh. Following
+  ends when the node stops. The API is `GET /labs/{name}/nodes/{node}/logs/stream`, as
+  Server-Sent Events.
+
+**Upgrading:** both need clab-api v0.10.0, which this stack already runs. Nothing to configure.
+
+**API and `twinlab-client`:** two new routes (contract deltas 36 and 37). The client gains
+`capture()`, which yields the pcapng bytes, and `follow_node_logs()`, which yields the new
+`NodeLogLine`. New error codes: `invalid_capture_target` and `node_not_running`.

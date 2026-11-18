@@ -216,6 +216,24 @@ is listed on its own, no wildcards. Empty = any (the create default; migration 0
 existing providers `[]`). A LINKED identity is never re-checked, since the link is the
 identity. The refusal is `oidc_email_domain_not_allowed`, checked after verification and
 before email-in-use. The API takes bare domains only; the admin form drops a typed `@`.
+— and deltas 36 + 37 LIVE STREAMS, implemented 2026-11-17 (awaiting review), design record
+`docs/live-streams.md`: thin passthroughs over clab-api v0.10 endpoints, both `lab:read`.
+**36** `GET /labs/{name}/capture?target=<node>:<if>&duration_seconds=` streams ONE pcapng
+section (clab-api `capture/stream`, packet sockets in the node netns, no Edgeshark; duration
+REQUIRED ≤1800s because nginx cuts an hour of silence and a quiet link sends nothing; the
+management interface is not capturable). **37** `GET /labs/{name}/nodes/{node}/logs/stream`
+is SSE (`log` = `NodeLogLine`, `end` when the node STOPS or is removed — Docker ends a follow
+on stop, measured). Both authorize UP FRONT via `authorize_lab_stream` and close its DB
+session before streaming — FastAPI 0.139 closes a yield dependency's session only after the
+response, so `require_lab` would pin a pooled connection for a whole capture — and refuse
+with the envelope before the first byte; closing the upstream response is what stops clab-
+api's work, and it does stop it (seen in clab-api's request durations). Client `capture()` /
+`follow_node_logs()` are async generators like `events()`; NOT MCP tools. The UI's Links
+table gains a Capture dialog that FETCHES the stream (a download link can neither show the
+envelope nor stop early and keep the bytes) and cuts a stopped capture at the last whole
+pcapng block (`lib/pcapng.ts`); the logs dialog gains Follow, with no auto-reconnect since
+there is no resume point. Resumable terminals were deferred: every session belongs to
+Twinlab's one clab-api account, so Twinlab would have to own session ownership.
 Three non-compose
 projects sit beside the services: **`client/`** (`twinlab-client`, the distributable async Python
 client — PyPI-ready, versioned 0.9.0 like the whole tree, publication pending), **`blackbox/`**

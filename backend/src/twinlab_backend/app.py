@@ -28,6 +28,7 @@ from twinlab_backend.api.imports import router as imports_router
 from twinlab_backend.api.internal import router as internal_router
 from twinlab_backend.api.jobs import fleet_router as fleet_jobs_router
 from twinlab_backend.api.jobs import router as jobs_router
+from twinlab_backend.api.lab_streams import router as lab_streams_router
 from twinlab_backend.api.labs import router as labs_router
 from twinlab_backend.api.oidc import admin_router as oidc_admin_router
 from twinlab_backend.api.oidc import router as oidc_router
@@ -183,6 +184,7 @@ def create_app() -> FastAPI:
     app.include_router(oidc_router, prefix=_API_PREFIX)
     app.include_router(oidc_admin_router, prefix=_API_PREFIX)
     app.include_router(labs_router, prefix=_API_PREFIX)
+    app.include_router(lab_streams_router, prefix=_API_PREFIX)
     app.include_router(jobs_router, prefix=_API_PREFIX)
     app.include_router(fleet_jobs_router, prefix=_API_PREFIX)
     app.include_router(grants_router, prefix=_API_PREFIX)

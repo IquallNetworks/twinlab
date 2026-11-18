@@ -598,3 +598,78 @@ async def test_open_terminal_stream_errs_when_login_fails() -> None:
     result = await _client(handler).open_terminal_stream("sess-abc")
     assert isinstance(result, Err)
     assert result.error.status_code == 401
+
+
+# --- Live streams (deltas 36, 37) ---
+
+_PCAPNG_HEADER = b"\x0a\x0d\x0d\x0a" + b"\x1c\x00\x00\x00" + b"\x00" * 20
+
+
+async def test_open_capture_streams_the_pcapng_and_sends_every_target() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/login":
+            return httpx2.Response(200, json={"token": "t"})
+        assert request.url.path == "/api/v1/labs/tmp1/capture/stream"
+        assert request.url.params.get_list("target") == ["r1:eth1", "r2:Ethernet0/1"]
+        assert request.url.params.get("duration") == "30s"
+        assert request.url.params.get("packetLimit") == "100"
+        assert "snapLength" not in request.url.params
+        return httpx2.Response(200, content=_PCAPNG_HEADER)
+
+    opened = await _client(handler).open_capture(
+        "tmp1",
+        ["r1:eth1", "r2:Ethernet0/1"],
+        duration_seconds=30,
+        packet_limit=100,
+        snap_length=None,
+    )
+    assert isinstance(opened, Ok), opened
+    received = b"".join([chunk async for chunk in opened.value.chunks()])
+    await opened.value.aclose()
+    assert received == _PCAPNG_HEADER
+
+
+async def test_open_capture_refusal_carries_status_and_body() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/login":
+            return httpx2.Response(200, json={"token": "t"})
+        return httpx2.Response(409, json={"error": "node r2 is not running"})
+
+    opened = await _client(handler).open_capture(
+        "tmp1", ["r2:eth1"], duration_seconds=5, packet_limit=None, snap_length=None
+    )
+    assert isinstance(opened, Err)
+    assert opened.error.status_code == 409
+    assert "node r2 is not running" in opened.error.message
+
+
+async def test_follow_logs_uses_the_short_name_and_parses_lines() -> None:
+    body = "\n".join(
+        [
+            json.dumps({"containerName": "clab-tmp1-r1", "line": "boot", "stream": "stdout"}),
+            "",  # clab-api's keepalive
+            json.dumps({"containerName": "clab-tmp1-r1", "line": "oops", "stream": "stderr"}),
+            "{not json",
+            json.dumps({"containerName": "clab-tmp1-r1", "line": "never seen", "stream": "stdout"}),
+        ]
+    )
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/login":
+            return httpx2.Response(200, json={"token": "t"})
+        assert request.url.path == "/api/v1/labs/tmp1/nodes/r1/logs"
+        assert request.url.params.get("follow") == "true"
+        assert request.url.params.get("tail") == "50"
+        return httpx2.Response(200, content=body.encode())
+
+    opened = await _client(handler).follow_logs("tmp1", "r1", tail=50)
+    assert isinstance(opened, Ok), opened
+    lines = [line async for line in clab_api.follow_log_lines(opened.value)]
+    await opened.value.aclose()
+    # The keepalive is a None; the malformed line ends the stream rather than
+    # being guessed at, so the line after it never arrives.
+    assert lines == [
+        clab_api.LogLine(stream="stdout", line="boot"),
+        None,
+        clab_api.LogLine(stream="stderr", line="oops"),
+    ]

@@ -474,6 +474,43 @@ export const api = {
       `/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/logs?tail=${tail}`,
       nodeLogsResponseSchema,
     ),
+  // Delta 37: open the followed log and hand back the response, whose body is
+  // the SSE stream (`log` events, then `end` when the node stops or is
+  // removed; parse it with lib/sse.ts). Fetched rather than opened with
+  // EventSource so a refusal (409 lab_not_running, 404 node_not_found, 502
+  // upstream_error) is thrown here as the usual envelope; aborting `signal`
+  // ends the follow.
+  openNodeLogStream: async (
+    name: string,
+    node: string,
+    tail: number,
+    signal: AbortSignal,
+  ): Promise<Response> => {
+    const resp = await fetch(
+      `${BASE}/labs/${encodeURIComponent(name)}/nodes/${encodeURIComponent(node)}/logs/stream?tail=${tail}`,
+      { signal, headers: { Accept: 'text/event-stream' } },
+    )
+    if (!resp.ok) throw await toApiError(resp)
+    return resp
+  },
+  // Delta 36: start a capture and hand back the open response, whose body is
+  // the pcapng stream. A refusal arrives before the first byte as the usual
+  // envelope and is thrown here; aborting `signal` ends the capture.
+  openCapture: async (
+    name: string,
+    request: { targets: string[]; durationSeconds: number; packetLimit: number | null },
+    signal: AbortSignal,
+  ): Promise<Response> => {
+    const query = new URLSearchParams()
+    for (const target of request.targets) query.append('target', target)
+    query.set('duration_seconds', String(request.durationSeconds))
+    if (request.packetLimit !== null) query.set('packet_limit', String(request.packetLimit))
+    const resp = await fetch(`${BASE}/labs/${encodeURIComponent(name)}/capture?${query}`, {
+      signal,
+    })
+    if (!resp.ok) throw await toApiError(resp)
+    return resp
+  },
   labInterfaces: (name: string) =>
     request(`/labs/${encodeURIComponent(name)}/interfaces`, labInterfacesSchema),
   // The netlab-derived logical link table with per-endpoint live state and

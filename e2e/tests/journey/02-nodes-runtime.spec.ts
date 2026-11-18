@@ -86,9 +86,19 @@ test('logs stream and the web terminal answers a command', async ({ page }) => {
   await r3.getByRole('button', { name: 'Actions' }).click()
   await page.getByRole('menuitem', { name: 'Logs' }).click()
   await expect(page.getByText('Logs — r3')).toBeVisible()
-  await expect(page.getByText('last 200 lines')).toBeVisible()
-  await expect(page.locator('pre').first()).not.toBeEmpty()
-  await page.getByRole('button', { name: 'Refresh' }).click()
+
+  // The dialog opens FOLLOWING the log (delta 37), from the last 200 lines;
+  // Stop following turns it into the snapshot with Refresh, and Follow back.
+  const logs = page.getByRole('dialog')
+  await expect(logs.getByText(/following · \d+ lines/)).toBeVisible({ timeout: 15_000 })
+  await expect(logs.locator('pre')).not.toBeEmpty()
+  await expect(logs.getByRole('button', { name: 'Refresh' })).toHaveCount(0)
+  await logs.getByRole('button', { name: 'Stop following' }).click()
+  await expect(logs.getByText('last 200 lines')).toBeVisible()
+  await expect(logs.locator('pre')).not.toBeEmpty()
+  await logs.getByRole('button', { name: 'Refresh' }).click()
+  await logs.getByRole('button', { name: 'Follow' }).click()
+  await expect(logs.getByText(/following · \d+ lines/)).toBeVisible({ timeout: 15_000 })
   await page.keyboard.press('Escape')
 
   // The terminal over the shell transport (docker exec — credential-free).

@@ -402,3 +402,38 @@ async def test_batch_actions_permission_and_existence_hiding(
     with pytest.raises(TwinlabApiError) as hidden:
         _ = await viewer.apply_actions(unique("ghost"), actions)
     assert hidden.value.status_code == 404
+
+
+async def test_live_streams_refuse_an_undeployed_lab(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    # Deltas 36 and 37: both streams refuse with the envelope before their
+    # first byte, so the refusal surfaces on the first iteration.
+    lab = await make_lab(None)
+    _ = await admin.update_definition(lab.name, LINUX_LAB_DEFINITION)
+
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [chunk async for chunk in admin.capture(lab.name, ["n1:eth1"], duration_seconds=2)]
+    assert (raised.value.status_code, raised.value.code) == (409, "lab_not_running")
+
+    # A malformed target is refused as malformed whatever the lab's state.
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [chunk async for chunk in admin.capture(lab.name, ["n1"], duration_seconds=2)]
+    assert (raised.value.status_code, raised.value.code) == (422, "invalid_capture_target")
+
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [line async for line in admin.follow_node_logs(lab.name, "n1")]
+    assert (raised.value.status_code, raised.value.code) == (409, "lab_not_running")
+
+
+async def test_live_streams_hide_a_lab_the_caller_cannot_read(
+    make_lab: LabFactory, make_user_client: UserClientFactory
+) -> None:
+    lab = await make_lab(None)
+    _, outsider = await make_user_client(None)
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [chunk async for chunk in outsider.capture(lab.name, ["n1:eth1"], duration_seconds=2)]
+    assert (raised.value.status_code, raised.value.code) == (404, "lab_not_found")
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [line async for line in outsider.follow_node_logs(lab.name, "n1")]
+    assert (raised.value.status_code, raised.value.code) == (404, "lab_not_found")

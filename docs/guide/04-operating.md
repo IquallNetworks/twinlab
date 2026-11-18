@@ -6,8 +6,8 @@ it on purpose.
 ## Live state is not the definition
 
 Everything on this page acts on containers, not on the stored text. Power, logs,
-terminals, the interface inventory, the link table and impairment all read and
-change what runs. None of them touch the definition.
+terminals, the interface inventory, the link table, packet capture and
+impairment all read and change what runs. None of them touch the definition.
 
 That separation is what lets a lab **drift**. Edit the definition of a deployed
 lab, and the header adds a `drifted` badge. The Overview tab's Definition card
@@ -73,6 +73,16 @@ change the definition, and it does not survive a destroy.
 **Logs** give you a node's container output, with a tail count. This is the
 container's stdout, not the NOS log, so what you see depends on the platform.
 
+The logs dialog **follows** the log as it opens, appending new lines as the
+node writes them, which is how to watch a node boot. **Stop following** turns
+it into a snapshot with **Refresh**, and **Follow** goes back. It starts from
+the last 200 lines, keeps the newest 5,000, and stops scrolling while you read
+further up. Following ends when the node stops; the dialog says so and offers
+to follow again. It does not reconnect on its own, because following again
+starts from a fresh tail, so lines from the gap can repeat or go missing. If
+Twinlab refuses to follow (the lab was destroyed meanwhile, say), the dialog
+shows its reason.
+
 **The web terminal** opens a session in a node from the browser. It needs
 `lab:terminal`.
 
@@ -108,6 +118,34 @@ an impaired link is not degraded — impairment is behaviour you asked for.
 
 When Twinlab cannot reach live state it says so instead of guessing. The table
 marks itself not live and keeps showing the topology, which is still true.
+
+## Capturing traffic
+
+Each link in the **Links** table has a **Capture** button while the lab runs.
+It saves the traffic on the link's interfaces as one pcapng file, which
+Wireshark opens. Anyone who can read the lab can capture it.
+
+Pick the interfaces, a duration (up to 30 minutes) and, if you like, a packet
+limit. Both ends of a point-to-point link see the same packets, so the dialog
+starts with one end ticked. Every interface you add appears in the file under
+its own name, `<node>:<interface>`. The management interface is not a lab link
+and cannot be captured.
+
+**Stop and save** ends a capture early and keeps what arrived, cut cleanly so
+Wireshark reads it without complaint. A capture that runs its full duration
+waits for you to click **Save file**. Closing the dialog drops the capture.
+
+The browser holds the capture in memory until it saves it. For long or busy
+captures, use the client library's `capture()` or `curl`, which write to disk as
+the packets arrive:
+
+```bash
+curl -H "Authorization: Bearer $TWINLAB_API_KEY" -o r1.pcapng \
+  "<twinlab-address>/api/v1/labs/<lab>/capture?target=r1:eth1&duration_seconds=120"
+```
+
+`<twinlab-address>` is what you type to open Twinlab in the browser, and the
+API key comes from the Account page ([page 7](07-access.md)).
 
 ## Impairment
 

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { expect, test } from '@playwright/test'
 
 import { E2E_NET_LINKS, E2E_NET_NAME } from '../../fixtures/fixtures'
@@ -20,6 +22,35 @@ test('the links table lists every named link with live state', async ({ page }) 
   await expect(links.getByRole('columnheader', { name: 'Impairment' })).toBeVisible()
   // The OSPF triangle is up end to end.
   await expect(links.locator('[data-slot="badge"]', { hasText: 'up' }).first()).toBeVisible()
+})
+
+test("a link's traffic is captured to a pcapng download", async ({ page }) => {
+  await page.goto(`/labs/${E2E_NET_NAME}/nodes`)
+  const links = page.locator('[data-slot="card"]', { hasText: 'Links' }).first()
+  const row = links.getByRole('row').filter({ hasText: 'core-a' })
+
+  await row.getByRole('button', { name: 'Capture' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('Capture — core-a')).toBeVisible()
+  // One end of a point-to-point link is ticked: both ends see the same packets.
+  const ticked = dialog.getByRole('checkbox', { checked: true })
+  await expect(ticked).toHaveCount(1)
+  const target = (await dialog.locator(`label[for="${await ticked.getAttribute('id')}"]`).textContent()) ?? ''
+
+  await dialog.getByLabel('Duration (seconds)').fill('3')
+  await dialog.getByRole('button', { name: 'Start capture' }).click()
+  // A capture that runs its course waits for a click before it downloads.
+  await expect(dialog.getByText(/^Capture finished/)).toBeVisible({ timeout: 30_000 })
+  const download = page.waitForEvent('download')
+  await dialog.getByRole('button', { name: 'Save file' }).click()
+  const file = await download
+  expect(file.suggestedFilename()).toMatch(new RegExp(`^${E2E_NET_NAME}-\\d{8}T\\d{6}Z\\.pcapng$`))
+  const bytes = readFileSync(await file.path())
+  // A pcapng Section Header Block, then the interface under its target name.
+  expect(bytes.readUInt32LE(0)).toBe(0x0a0d0d0a)
+  expect(bytes.includes(Buffer.from(target))).toBe(true)
+  await expect(dialog.getByText(/^Saved/)).toBeVisible()
+  await page.keyboard.press('Escape')
 })
 
 test('link impairment applies both ways and reads back as a summary', async ({ page }) => {

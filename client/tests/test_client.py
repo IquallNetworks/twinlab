@@ -24,6 +24,7 @@ from twinlab_client import (
     LayoutGroupStyle,
     LayoutPosition,
     NetemAction,
+    NodeLogLine,
     PowerAction,
     Principal,
     SshAccess,
@@ -1690,3 +1691,71 @@ async def test_lab_usage_parses_unmeasured_nodes(make_client: ClientFactory) -> 
     # A stopped node is unmeasured, NOT idle — every measure is None.
     assert r2.state == "stopped"
     assert (r2.cpu_percent, r2.memory_bytes, r2.pids) == (None, None, None)
+
+
+async def test_follow_node_logs_yields_lines_and_stops_at_end(make_client: ClientFactory) -> None:
+    body = (
+        ": connected\n\n"
+        'event: log\ndata: {"stream": "stdout", "line": "boot"}\n\n'
+        ": keepalive\n\n"
+        'event: log\ndata: {"stream": "stderr", "line": "oops"}\n\n'
+        "event: end\ndata: {}\n\n"
+        'event: log\ndata: {"stream": "stdout", "line": "after the end"}\n\n'
+    )
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path == "/api/v1/labs/lab1/nodes/r1/logs/stream"
+        assert request.url.params.get("tail") == "50"
+        return httpx2.Response(200, text=body)
+
+    async with make_client(handler) as client:
+        lines = [line async for line in client.follow_node_logs("lab1", "r1", tail=50)]
+    assert lines == [NodeLogLine(stream="stdout", line="boot"), NodeLogLine("stderr", "oops")]
+
+
+async def test_follow_node_logs_raises_the_refusal(make_client: ClientFactory) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            409, json={"code": "lab_not_running", "message": "not deployed", "extras": {}}
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabApiError) as raised:
+            _ = [line async for line in client.follow_node_logs("lab1", "r1")]
+    assert raised.value.code == "lab_not_running"
+
+
+async def test_capture_sends_every_target_and_yields_the_bytes(make_client: ClientFactory) -> None:
+    pcapng = b"\x0a\x0d\x0d\x0a" + b"\x00" * 24
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path == "/api/v1/labs/lab1/capture"
+        assert request.url.params.get_list("target") == ["r1:eth1", "r2:eth1"]
+        assert request.url.params.get("duration_seconds") == "30"
+        assert request.url.params.get("packet_limit") == "10"
+        assert "snap_length" not in request.url.params
+        return httpx2.Response(200, content=pcapng)
+
+    async with make_client(handler) as client:
+        received = b"".join(
+            [
+                chunk
+                async for chunk in client.capture(
+                    "lab1", ["r1:eth1", "r2:eth1"], duration_seconds=30, packet_limit=10
+                )
+            ]
+        )
+    assert received == pcapng
+
+
+async def test_capture_raises_the_refusal(make_client: ClientFactory) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            422,
+            json={"code": "invalid_capture_target", "message": "no such interface", "extras": {}},
+        )
+
+    async with make_client(handler) as client:
+        with pytest.raises(TwinlabApiError) as raised:
+            _ = [chunk async for chunk in client.capture("lab1", ["r1:eth9"], duration_seconds=5)]
+    assert raised.value.code == "invalid_capture_target"

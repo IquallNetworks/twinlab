@@ -25,6 +25,7 @@ from twinlab_client.models import (
     JOB_STEP_LEVELS,
     LAB_STATUSES,
     LINK_OPER_STATES,
+    LOG_STREAMS,
     NODE_CONFIG_STATUSES,
     PARSE_MODES,
     PRINCIPAL_TYPES,
@@ -90,6 +91,7 @@ from twinlab_client.models import (
     NodeImport,
     NodeInterface,
     NodeInterfaces,
+    NodeLogLine,
     NodeLogsResponse,
     NodeTemplate,
     NodeUsage,
@@ -913,6 +915,15 @@ def parse_node_logs_response(value: object) -> NodeLogsResponse:
         node=_get_str(obj, "node", where),
         container=_get_str(obj, "container", where),
         logs=_get_str(obj, "logs", where),
+    )
+
+
+def parse_node_log_line(value: object) -> NodeLogLine:
+    where = "NodeLogLine"
+    obj = as_object(value, where)
+    return NodeLogLine(
+        stream=_get_literal(obj, "stream", where, LOG_STREAMS),
+        line=_get_str(obj, "line", where),
     )
 
 

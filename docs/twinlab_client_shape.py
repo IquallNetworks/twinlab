@@ -525,6 +525,24 @@ docs/mcp-server.md.)
     ``oidc_email_domain_not_allowed``. Entries are bare lowercase domain
     names (≤253 characters, ≤64 entries), de-duplicated; anything else is
     a 422 validation_error.
+36. Packet capture (implemented 2026-11-17, awaiting review; design record
+    docs/live-streams.md). ``GET /labs/{name}/capture`` streams ONE pcapng
+    section of the named lab link interfaces (``target=<node>:<interface>``,
+    1-16, repeated), ending after the REQUIRED ``duration_seconds`` (1-1800),
+    at an optional ``packet_limit``, or when the client disconnects;
+    optional ``snap_length`` 64-262144. ``lab:read``: it observes and changes
+    nothing. Refusals arrive before the first byte as the envelope: 422
+    ``invalid_capture_target`` (malformed, or a node/interface clab-api does
+    not capture: the management interface is not a lab link), 409
+    ``lab_not_running`` / ``node_not_running``. Nothing is stored. Client:
+    ``capture()`` yields the bytes.
+37. Following a node's log (implemented 2026-11-17, awaiting review; same
+    record). ``GET /labs/{name}/nodes/{node}/logs/stream?tail=`` is SSE:
+    the last ``tail`` lines (0-10000, default 200), then each new one as a
+    ``log`` event (``NodeLogLine``), and ``end`` when the log ends (the node
+    stopped or was removed, or a 12-hour upstream limit). ``lab:read``. No
+    replay, like ``/events``. 409 ``lab_not_running``, 404
+    ``node_not_found``. Client: ``follow_node_logs()``.
 
 Conventions:
 
@@ -558,7 +576,7 @@ PROPOSED): missing endpoints — get/delete user, admin password reset,
 activate toggle, self password change, get group, API keys.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -1537,6 +1555,16 @@ class NodeLogsResponse:
     node: str  # short node name (echoed from the path)
     container: str
     logs: str
+
+
+@dataclass(frozen=True, slots=True)
+class NodeLogLine:
+    """PROPOSED (delta 37): one ``log`` event of the followed log stream.
+    Verbatim, Docker's timestamp prefix included. A container with a TTY
+    reports every line as stdout."""
+
+    stream: Literal["stdout", "stderr"]
+    line: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -3385,6 +3413,36 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
 
         (wire today: one unnamed event carrying the LabEvent payload;
         completion is discovered by polling only.)"""
+        raise NotImplementedError
+
+    def follow_node_logs(
+        self, name: str, node: str, *, tail: int = 200
+    ) -> AsyncGenerator[NodeLogLine, None]:
+        """PROPOSED (delta 37) GET /labs/{name}/nodes/{node}/logs/stream (SSE)
+        — lab:read. The last `tail` lines (0-10000), then every new one. The
+        generator ENDS at the server's ``end`` event: the node stopped or was
+        removed, or the 12-hour upstream limit. No replay: following again
+        asks for a tail again. Refusals (409 lab_not_running, 404
+        node_not_found) raise on the first iteration."""
+        raise NotImplementedError
+
+    def capture(
+        self,
+        name: str,
+        targets: Sequence[str],
+        *,
+        duration_seconds: int,
+        packet_limit: int | None = None,
+        snap_length: int | None = None,
+    ) -> AsyncGenerator[bytes, None]:
+        """PROPOSED (delta 36) GET /labs/{name}/capture — lab:read. Yields ONE
+        pcapng section chunk by chunk; write them to a file in order.
+        `targets`: 1-16 ``<node>:<interface>`` (LinkEndpoint.interface or its
+        alias). Ends after `duration_seconds` (required, 1-1800), at
+        `packet_limit`, or when the generator is closed. Refusals (422
+        invalid_capture_target, 409 lab_not_running / node_not_running) raise
+        on the first iteration; a failure after the first chunk can only end
+        the stream early."""
         raise NotImplementedError
 
     def terminal(

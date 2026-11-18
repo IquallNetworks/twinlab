@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronUp, Zap } from 'lucide-react'
 import { Fragment, useState } from 'react'
 
+import { CaptureDialog } from '@/components/lab/capture-dialog'
 import { LinkImpairment, linkImpairmentSummary } from '@/components/lab/link-impairment'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,7 +28,9 @@ import type { LabNodeState } from '@/lib/schemas'
  * It is also where a link is impaired BIDIRECTIONALLY: a row expands into the
  * shared editor, which writes the same shaping to every endpoint. Impairing one
  * direction only is the Interfaces card's job — netem is per-interface egress,
- * so an interface IS a direction. */
+ * so an interface IS a direction. And it is where a link's traffic is captured
+ * (delta 36): capture targets are exactly the link endpoints, and reading a
+ * capture needs only lab:read. */
 export function LabLinks({
   name,
   nodes,
@@ -50,10 +53,10 @@ export function LabLinks({
   // Shouldn't happen behind the `enabled` gate, but a stale cache can race a
   // definition wipe — render it as the not-authored copy, not as a failure.
   const noDefinition = error instanceof ApiError && error.code === 'no_definition'
-  // Impairment needs live state to read (and a running node to write), so the
-  // column travels with the State column.
+  // Impairment and capture need live state (and a running node), so their
+  // columns travel with the State column.
   const live = data?.live ?? false
-  const columns = live ? 6 : 4
+  const columns = live ? 7 : 4
 
   return (
     <Card>
@@ -97,6 +100,7 @@ export function LabLinks({
                   <TableHead>Prefix</TableHead>
                   {live ? <TableHead>State</TableHead> : null}
                   {live ? <TableHead>Impairment</TableHead> : null}
+                  {live ? <TableHead>Traffic</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -160,6 +164,11 @@ export function LabLinks({
                                 )}
                               </Button>
                             </div>
+                          </TableCell>
+                        ) : null}
+                        {live ? (
+                          <TableCell>
+                            <CaptureDialog name={name} link={link} nodes={nodes} />
                           </TableCell>
                         ) : null}
                       </TableRow>

@@ -326,7 +326,7 @@ each of the six supported platforms.
 The rest of [`docs/`](docs/) is design records, written for people changing the code:
 `twinlab_client_shape.py` is the reviewed API contract, and `rbac-v2.md`, `config-import.md`,
 `fact-namespace.md`, `frontend-rework.md`, `host-resources.md`, `mcp-server.md`,
-`resource-limits.md`,
+`resource-limits.md`, `live-streams.md`,
 `operator-guide-plan.md` and
 `nos-sweep/` cover the rest. [`ROADMAP.md`](ROADMAP.md) records what is shipped, deferred and why,
 and [`CHANGELOG.md`](CHANGELOG.md) logs notable changes as they land, including what an upgrade

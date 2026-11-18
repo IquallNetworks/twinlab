@@ -602,6 +602,15 @@ export const nodeLogsResponseSchema = z.object({
 })
 export type NodeLogsResponse = z.infer<typeof nodeLogsResponseSchema>
 
+// One `log` event of the followed log stream (delta 37): a line verbatim,
+// Docker's timestamp prefix included. A container with a TTY reports every
+// line as stdout.
+export const nodeLogLineSchema = z.object({
+  stream: z.enum(['stdout', 'stderr']),
+  line: z.string(),
+})
+export type NodeLogLine = z.infer<typeof nodeLogLineSchema>
+
 export const nodeInterfaceSchema = z.object({
   name: z.string(),
   alias: z.string(),

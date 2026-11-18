@@ -25,6 +25,7 @@ from twinlab_client import (
     LabDetail,
     LabEvent,
     NetemAction,
+    NodeLogLine,
     PowerAction,
     SuiteReport,
     TestCase,
@@ -126,6 +127,10 @@ async def test_deploy_lifecycle(admin: TwinlabClient, make_lab: LabFactory) -> N
     logs = await admin.node_logs(detail.name, "n1", tail=50)
     assert logs.node == "n1"
     assert logs.container == f"clab-{detail.name}-n1"
+    # Only the lab's own node names, never a container name.
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = await admin.node_logs(detail.name, f"clab-{detail.name}-n1")
+    assert (raised.value.status_code, raised.value.code) == (404, "node_not_found")
 
     # Delta 19: a SEMANTIC edit to the stored definition of a running lab
     # flags drift — a hint, never a gate. (A comment-only edit would NOT:
@@ -445,6 +450,118 @@ async def test_terminal_and_events(admin: TwinlabClient, make_lab: LabFactory) -
             _ = listener.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 _ = await listener
+
+
+def _pcapng_blocks(data: bytes) -> list[tuple[int, bytes]]:
+    """(block type, body) for every COMPLETE block of a little-endian pcapng
+    section; trailing bytes that do not make a whole block are an error."""
+    blocks: list[tuple[int, bytes]] = []
+    offset = 0
+    while offset < len(data):
+        block_type = int.from_bytes(data[offset : offset + 4], "little")
+        length = int.from_bytes(data[offset + 4 : offset + 8], "little")
+        assert length >= 12 and offset + length <= len(data), "truncated pcapng block"
+        blocks.append((block_type, data[offset + 8 : offset + length - 4]))
+        offset += length
+    return blocks
+
+
+def _interface_names(blocks: list[tuple[int, bytes]]) -> list[str]:
+    """The `if_name` option (code 2) of each Interface Description Block."""
+    names: list[str] = []
+    for block_type, body in blocks:
+        if block_type != 1:
+            continue
+        options = body[8:]  # linktype(2) reserved(2) snaplen(4)
+        while len(options) >= 4:
+            code = int.from_bytes(options[0:2], "little")
+            size = int.from_bytes(options[2:4], "little")
+            if code == 0:
+                break
+            if code == 2:
+                names.append(options[4 : 4 + size].decode())
+            options = options[4 + (size + 3) // 4 * 4 :]
+    return names
+
+
+async def test_capture_streams_the_named_interfaces(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    # Delta 36: one pcapng section, one interface per target named
+    # <node>:<interface>, carrying traffic made across the link meanwhile.
+    detail = await _deployed_lab(admin, make_lab)
+    (link,) = (await admin.links(detail.name)).links
+    targets = [f"{endpoint.node}:{endpoint.interface}" for endpoint in link.endpoints]
+    peer = next(endpoint for endpoint in link.endpoints if endpoint.node == "n2")
+    assert peer.ipv4 is not None
+    peer_ip = peer.ipv4.split("/")[0]
+
+    async def capture() -> bytes:
+        chunks = [chunk async for chunk in admin.capture(detail.name, targets, duration_seconds=6)]
+        return b"".join(chunks)
+
+    capturing = asyncio.create_task(capture())
+    await asyncio.sleep(1.5)  # let the capture start before making traffic
+    async with admin.terminal(detail.name, "n1", protocol="shell") as term:
+        # $((1+1)): the printed marker differs from the echoed command line.
+        await term.send(f"ping -c 3 -i 0.5 {peer_ip}; echo bb-pinged-$((1+1))\n".encode())
+        output = b""
+        while b"bb-pinged-2" not in output:
+            output += await term.recv(timeout=15)
+    data = await asyncio.wait_for(capturing, timeout=30)
+
+    assert data[:4] == b"\x0a\x0d\x0d\x0a"  # Section Header Block
+    blocks = _pcapng_blocks(data)
+    assert sorted(_interface_names(blocks)) == sorted(targets)
+    # Each echo is seen on both ends of the link: at least the requests.
+    assert sum(1 for block_type, _ in blocks if block_type == 6) >= 3
+
+    # The management interface is not a lab link, so it is not capturable.
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [chunk async for chunk in admin.capture(detail.name, ["n1:eth0"], duration_seconds=2)]
+    assert (raised.value.status_code, raised.value.code) == (422, "invalid_capture_target")
+    # Targets name the lab's nodes; a container name is not one, so nothing
+    # outside the lab's own node set reaches the capture.
+    container = f"clab-{detail.name}-n1:eth1"
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [chunk async for chunk in admin.capture(detail.name, [container], duration_seconds=2)]
+    assert (raised.value.status_code, raised.value.code) == (422, "invalid_capture_target")
+
+
+async def test_follow_node_logs_streams_new_lines_and_ends_on_stop(
+    admin: TwinlabClient, make_lab: LabFactory
+) -> None:
+    # Delta 37: lines written after the follow started arrive, and stopping
+    # the node ends the stream (the server's `end`), not a hang.
+    detail = await _deployed_lab(admin, make_lab)
+    marker = "bb-follow-marker"
+
+    # Only the lab's own node names are followed, never a container name.
+    with pytest.raises(TwinlabApiError) as raised:
+        _ = [line async for line in admin.follow_node_logs(detail.name, f"clab-{detail.name}-n1")]
+    assert (raised.value.status_code, raised.value.code) == (404, "node_not_found")
+
+    async def first_marker(stream: AsyncGenerator[NodeLogLine]) -> NodeLogLine:
+        async for line in stream:
+            if marker in line.line:
+                return line
+        raise AssertionError("log stream ended before the marker arrived")
+
+    async with aclosing(admin.follow_node_logs(detail.name, "n1", tail=0)) as stream:
+        waiting = asyncio.create_task(first_marker(stream))
+        await asyncio.sleep(1.0)  # the stream carries no subscription signal
+        async with admin.terminal(detail.name, "n1", protocol="shell") as term:
+            # PID 1's stdout IS the container log.
+            await term.send(f"echo {marker} > /proc/1/fd/1; echo bb-done-$((1+1))\n".encode())
+            output = b""
+            while b"bb-done-2" not in output:
+                output += await term.recv(timeout=15)
+        line = await asyncio.wait_for(waiting, timeout=30)
+        assert line.stream == "stdout"
+
+        _ = await admin.node_power(detail.name, "n1", "stop")
+        rest = [line async for line in stream]
+        assert all(marker not in line.line for line in rest)
 
 
 async def test_events_filtered_to_readable_labs(

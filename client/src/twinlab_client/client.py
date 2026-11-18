@@ -14,7 +14,7 @@ Conventions carried by every method (not repeated per docstring):
 import asyncio
 import json
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Literal
 from urllib.parse import urlencode
@@ -63,6 +63,7 @@ from twinlab_client.models import (
     NetworkTemplateSummary,
     NodeImport,
     NodeInterfaces,
+    NodeLogLine,
     NodeLogsResponse,
     NodePowerAction,
     NodeTemplate,
@@ -89,6 +90,28 @@ from twinlab_client.models import (
     WiringEntry,
     WiringSuggestion,
 )
+
+
+async def _sse_frames(response: httpx2.Response, path: str) -> AsyncGenerator[tuple[str, object]]:
+    """Split a Server-Sent Events body into (event name, JSON payload) pairs.
+    Comments (``: keepalive``) and fields other than ``event``/``data`` are
+    consumed; a ``data`` that is not JSON is a protocol error."""
+    data_lines: list[str] = []
+    name = ""
+    async for line in response.aiter_lines():
+        if line.startswith("event:"):
+            name = line[6:].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+        elif line == "" and data_lines:
+            payload_text = "\n".join(data_lines)
+            data_lines = []
+            event_name, name = name, ""
+            try:
+                payload: object = json.loads(payload_text)
+            except ValueError as exc:
+                raise TwinlabProtocolError(path, f"non-JSON event: {payload_text[:80]!r}") from exc
+            yield event_name, payload
 
 
 class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
@@ -1266,34 +1289,106 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
             if response.is_error:
                 _ = await response.aread()
                 raise error_from_response(response)
-            data_lines: list[str] = []
-            name = ""
-            async for line in response.aiter_lines():
-                if line.startswith("event:"):
-                    name = line[6:].strip()
-                elif line.startswith("data:"):
-                    data_lines.append(line[5:].lstrip())
-                elif line == "" and data_lines:
-                    payload_text = "\n".join(data_lines)
-                    data_lines = []
-                    event_name, name = name, ""
-                    try:
-                        payload: object = json.loads(payload_text)
-                    except ValueError as exc:
-                        raise TwinlabProtocolError(
-                            "/events", f"non-JSON event: {payload_text[:80]!r}"
-                        ) from exc
-                    match event_name:
-                        case "lab":
-                            yield _wire.parse_lab_event(payload)
-                        case "job":
-                            yield _wire.parse_job_event(payload)
-                        case _:
-                            # An event we have no shape for: skip it rather
-                            # than fail the stream, so the server can add one
-                            # without breaking older clients.
-                            continue
-                # comments (": keepalive") and other SSE fields are consumed
+            async for event_name, payload in _sse_frames(response, "/events"):
+                match event_name:
+                    case "lab":
+                        yield _wire.parse_lab_event(payload)
+                    case "job":
+                        yield _wire.parse_job_event(payload)
+                    case _:
+                        # An event we have no shape for: skip it rather than
+                        # fail the stream, so the server can add one without
+                        # breaking older clients.
+                        continue
+
+    def follow_node_logs(
+        self, name: str, node: str, *, tail: int = 200
+    ) -> AsyncGenerator[NodeLogLine]:
+        """GET /labs/{name}/nodes/{node}/logs/stream (SSE, delta 37) — lab:read.
+        The node's last `tail` lines (0-10000; 200 like `node_logs`), then
+        every new line as it is written. Iterate with `async for`.
+
+        The generator ENDS when the server says the log ended: the node was
+        stopped or removed, or the server's 12-hour limit was reached. No
+        replay: following again asks for a tail again, so lines may repeat or
+        be missed across the gap.
+
+        Refusals raise on the first iteration: 409 ``lab_not_running`` (the
+        lab is not deployed), 404 ``node_not_found``. Close an abandoned
+        stream deterministically (e.g. `contextlib.aclosing`)."""
+        return self._log_stream(name, node, tail)
+
+    async def _log_stream(self, name: str, node: str, tail: int) -> AsyncGenerator[NodeLogLine]:
+        path = f"/labs/{name}/nodes/{node}/logs/stream"
+        timeout = httpx2.Timeout(self._timeout, read=None)
+        async with self._http.stream(
+            "GET", path, params={"tail": tail}, timeout=timeout
+        ) as response:
+            if response.is_error:
+                _ = await response.aread()
+                raise error_from_response(response)
+            async for event_name, payload in _sse_frames(response, path):
+                match event_name:
+                    case "log":
+                        yield _wire.parse_node_log_line(payload)
+                    case "end":
+                        return
+                    case _:
+                        continue
+
+    def capture(
+        self,
+        name: str,
+        targets: Sequence[str],
+        *,
+        duration_seconds: int,
+        packet_limit: int | None = None,
+        snap_length: int | None = None,
+    ) -> AsyncGenerator[bytes]:
+        """GET /labs/{name}/capture (delta 36) — lab:read. Captures lab link
+        interfaces and yields ONE pcapng section, chunk by chunk, as it is
+        produced: write the chunks to a ``.pcapng`` file in order.
+
+        `targets` names 1-16 interfaces as ``<node>:<interface>``: the
+        container-side name `LinkEndpoint.interface` carries, or its alias.
+        The management interface is not capturable. The capture ends after
+        `duration_seconds` (required, 1-1800), at `packet_limit` packets, or
+        when the generator is closed. `snap_length` (64-262144) truncates each
+        packet.
+
+        Refusals raise on the first iteration: 422 ``invalid_capture_target``
+        (malformed, or a node/interface the lab does not capture), 409
+        ``lab_not_running``, 409 ``node_not_running``. A failure after the
+        first chunk can only end the stream early."""
+        return self._capture_stream(name, targets, duration_seconds, packet_limit, snap_length)
+
+    async def _capture_stream(
+        self,
+        name: str,
+        targets: Sequence[str],
+        duration_seconds: int,
+        packet_limit: int | None,
+        snap_length: int | None,
+    ) -> AsyncGenerator[bytes]:
+        # `target` repeats, one query parameter per interface.
+        params: dict[str, int | list[str]] = {
+            "target": list(targets),
+            "duration_seconds": duration_seconds,
+        }
+        if packet_limit is not None:
+            params["packet_limit"] = packet_limit
+        if snap_length is not None:
+            params["snap_length"] = snap_length
+        # No read timeout: a quiet link sends nothing until the capture ends.
+        timeout = httpx2.Timeout(self._timeout, read=None)
+        async with self._http.stream(
+            "GET", f"/labs/{name}/capture", params=params, timeout=timeout
+        ) as response:
+            if response.is_error:
+                _ = await response.aread()
+                raise error_from_response(response)
+            async for chunk in response.aiter_bytes():
+                yield chunk
 
     def terminal(
         self,

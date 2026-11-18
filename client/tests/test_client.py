@@ -39,6 +39,7 @@ from twinlab_client import (
     TwinlabProtocolError,
     ValidationTest,
 )
+from twinlab_client import client as client_module
 from twinlab_client.client import TwinlabClient
 
 ClientFactory = Callable[[Callable[[httpx2.Request], httpx2.Response]], TwinlabClient]
@@ -559,6 +560,41 @@ async def test_wait_job_polls_to_terminal(make_client: ClientFactory) -> None:
         job = await client.wait_job("lab1", UUID(_JOB_ID), poll_interval=0.01)
     assert len(polls) == 3
     assert job.status == "succeeded"
+
+
+async def test_wait_job_starts_fast_and_backs_off_to_the_interval(
+    make_client: ClientFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(client_module.asyncio, "sleep", fake_sleep)
+    polls: list[int] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        polls.append(1)
+        if len(polls) < 8:
+            return httpx2.Response(200, json=_job_detail_wire())
+        return httpx2.Response(
+            200,
+            json=_job_detail_wire(
+                kind="destroy",
+                status="succeeded",
+                result={"status": "destroyed", "detail": "torn down"},
+                finished_at="2026-07-29T10:05:00+00:00",
+            ),
+        )
+
+    async with make_client(handler) as client:
+        _ = await client.wait_job("lab1", UUID(_JOB_ID), timeout=600)
+        assert slept == pytest.approx([0.2, 0.4, 0.8, 1.6, 2.0, 2.0, 2.0])
+        # A smaller interval is the ceiling from the start.
+        slept.clear()
+        polls.clear()
+        _ = await client.wait_job("lab1", UUID(_JOB_ID), timeout=600, poll_interval=0.5)
+        assert slept == pytest.approx([0.2, 0.4, 0.5, 0.5, 0.5, 0.5, 0.5])
 
 
 async def test_wait_job_deadline_raises_timeout(make_client: ClientFactory) -> None:

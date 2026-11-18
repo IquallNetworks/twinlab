@@ -3137,6 +3137,9 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         """Poll `get_job` until the job is terminal; return the terminal Job —
         a `JobDetail`, so the step log of what just happened comes with it.
         Pure client-side convenience — no wire surface beyond the polling.
+        `poll_interval` is the CEILING of a backoff (2026-11-18): the first
+        wait is 0.2 s, doubling up to it, so a job that ends at once is seen
+        at once.
 
         Does NOT raise on a failed job — the caller inspects
         status/result/error (APPROVED: no raise-on-failure flag). Raises

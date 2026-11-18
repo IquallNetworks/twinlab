@@ -91,6 +91,11 @@ from twinlab_client.models import (
     WiringSuggestion,
 )
 
+# wait_job's first wait: short enough that a job finishing at once is seen
+# at once, long enough that a slow one costs only a few extra reads before the
+# backoff reaches the caller's interval.
+_FIRST_POLL_SECONDS = 0.2
+
 
 async def _sse_frames(response: httpx2.Response, path: str) -> AsyncGenerator[tuple[str, object]]:
     """Split a Server-Sent Events body into (event name, JSON payload) pairs.
@@ -965,20 +970,29 @@ class TwinlabClient(AbstractAsyncContextManager["TwinlabClient"]):
         a `JobDetail`, so the step log of what just happened comes with it.
         Pure client-side convenience — no wire surface beyond the polling.
 
+        Polls quickly at first and backs off: the first wait is 0.2 s and
+        each next one doubles, up to `poll_interval`. Many jobs finish in
+        well under a second (destroying a lab that never deployed), and a
+        fixed interval made every one of them cost the whole interval; a long
+        deploy costs a handful of extra reads before settling.
+
         Does NOT raise on a failed job — the caller inspects
         status/result/error. Raises TimeoutError when `timeout` (default:
         the client's `action_timeout`) elapses with the job still running —
         the job keeps running server-side; the caller can resume waiting."""
         deadline = time.monotonic() + (timeout if timeout is not None else self._action_timeout)
+        interval = min(_FIRST_POLL_SECONDS, poll_interval)
         while True:
             job = await self.get_job(lab_name, job_id)
             if job.status != "running":
                 return job
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 raise TimeoutError(
                     f"job {job_id} on lab {lab_name!r} still running after the wait deadline"
                 )
-            await asyncio.sleep(poll_interval)
+            await asyncio.sleep(min(interval, remaining))
+            interval = min(interval * 2, poll_interval)
 
     # ------------------------------------------------------------------ #
     # Labs — test suites

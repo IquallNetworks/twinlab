@@ -43,8 +43,8 @@ JsonObject = dict[str, object]
 # Bounds one tool call. A deploy can take many minutes; the agent calls
 # wait_job again rather than holding a request open for all of it.
 WAIT_JOB_MAX_SECONDS = 120
-# How often wait_job re-reads the job. The job's own step log changes on this
-# order, and a poll is one cheap GET.
+# The slowest wait_job re-reads the job: the client backs off from 0.2 s up to
+# this. The job's own step log changes on this order, and a poll is one cheap GET.
 WAIT_JOB_POLL_SECONDS = 2.0
 NODE_LOGS_MAX_LINES = 1000
 

@@ -219,3 +219,19 @@ Two new ways to watch a running lab, both open to anyone who can read it (`lab:r
 **API and `twinlab-client`:** two new routes (contract deltas 36 and 37). The client gains
 `capture()`, which yields the pcapng bytes, and `follow_node_logs()`, which yields the new
 `NodeLogLine`. New error codes: `invalid_capture_target` and `node_not_running`.
+
+## 2026-11-18: `wait_job` sees a finished job sooner
+
+`twinlab-client`'s `wait_job` now polls quickly at first and backs off: the first wait is 0.2
+seconds and each next one doubles, up to `poll_interval`. Before, it always waited the whole
+`poll_interval` (2 seconds by default), so a job that finished at once, such as destroying a
+lab that was never deployed, still cost 2 seconds. A long deploy now costs a few extra reads
+of the job before polling settles at the interval.
+
+- `poll_interval` keeps its name and its 2-second default, but is now the longest wait between
+  reads rather than the only one.
+- The MCP server's `wait_job` tool gets the same behaviour.
+- The last wait before the deadline is trimmed to the time left, so `timeout` is kept more
+  closely.
+
+**API:** unchanged.

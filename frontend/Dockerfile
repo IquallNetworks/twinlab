@@ -50,7 +50,10 @@ RUN test -f src/content/guide/README.md \
 # Production: nginx (BSD-2-Clause) serves the bundle and proxies /api/v1 to
 # the backend — HTTP, WebSocket (the node terminal) and SSE (the event
 # stream) alike. nginx.conf carries the routing details.
-FROM nginx:1.29-alpine AS prod
+# The STABLE branch: it gets security fixes until the next one forks each
+# April, and only then. A retired branch's tag still pulls, just never changes
+# again (1.29 sat on Alpine 3.23 that way), so move this up every spring.
+FROM nginx:1.30-alpine AS prod
 ARG BASE_PATH=""
 COPY --from=build /app/nginx.rendered.conf /etc/nginx/conf.d/default.conf
 # At the root this is html/ exactly as before; a subpath build nests the

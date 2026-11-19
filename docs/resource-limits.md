@@ -63,7 +63,10 @@ Deploy can give the nodes a containerlab `startup-delay` so they boot in waves, 
 nodes 10 seconds apart, in definition order. A node whose definition already sets
 `clab.startup-delay` keeps it and takes no slot; a definition may set at most 30 seconds
 (2026-11-18), since the delay is slept inside clab-api's deploy call, which holds the lock every
-other lab needs, and a lab editor must not be able to stall the fleet. It shipped on by default and was turned **off**
+other lab needs, and a lab editor must not be able to stall the fleet. For the same reason a
+definition may not set `clab.stages` or `clab.healthcheck`, which make the deploy wait on
+other nodes; `clab.exec` stays allowed, so a slow command run during the deploy remains a
+known way to hold the lock until clab-api stops holding one lock per deploy. It shipped on by default and was turned **off**
 the same day, for the reason in [Waves stall every other lab](#waves-stall-every-other-lab):
 `BOOT_WAVE_INTERVAL_SECONDS` defaults to 0, and setting it turns waves on. The
 deploy job's `clab_deploy_started` step says when a lab boots in waves, so a slower deploy

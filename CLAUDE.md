@@ -619,7 +619,11 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   `defaults.providers.clab` setting but `bridge_type`: netlab passes `clab:` to containerlab
   verbatim, and its only bind check is that the source exists where netlab RUNS, so
   `clab.binds: ["/:/host"]` mounted the host's root into a node for any `lab:edit` holder
-  (proven live). The deploy SUBMIT re-runs the gate, so a definition stored before a key joined
+  (proven live). Since 2026-11-18 it also refuses `clab.stages`, `clab.healthcheck` and a
+  `clab.startup-delay` over 30 s, which make containerlab WAIT inside clab-api's deploy call
+  under its global lock (`clab.exec` stays allowed, a known residual); `clab` counts as a
+  node/group NAME only in exactly `nodes.clab.<attr>`/`groups.clab.<attr>`, since matching
+  the text instead let a node named `nodes` carry `clab.binds` past it. The deploy SUBMIT re-runs the gate, so a definition stored before a key joined
   the list cannot deploy. Still open: lab nodes run PRIVILEGED (a plain linux node sees the
   host's block devices), so `lab:terminal`/any `image:` remain host-level trust — parked as the
   privileged-node investigation, and the definition's top-level `message:` rides `LabDetail` —

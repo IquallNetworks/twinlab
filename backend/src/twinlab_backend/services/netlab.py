@@ -734,6 +734,19 @@ _HOST_REACHING_CLAB_KEYS = {
 _MAX_STARTUP_DELAY_SECONDS = 30
 
 
+# containerlab settings that make the deploy call WAIT on a condition the
+# definition chooses, holding clab-api's lock (see the cap above) for as long
+# as that takes: deploy stages (`wait-for` other nodes or their health) and
+# the health checks those waits poll. Twinlab's own device data may still set
+# them; only the DEFINITION is refused. `exec` is deliberately NOT here: it is
+# the in-node setting people use, and its residual risk (a slow command run
+# during the deploy) stays until clab-api stops holding one lock per deploy.
+_LOCK_HOLDING_CLAB_KEYS = {
+    "stages": "makes the deploy wait on other nodes",
+    "healthcheck": "gives deploy stages a health condition to wait for",
+}
+
+
 def _clab_attribute(path: tuple[str, ...], key: str) -> bool:
     """Whether `path` sets the `clab.<key>` attribute, decided by POSITION:
     `clab` is a node or group NAME only in exactly `nodes.clab.<attr>` /
@@ -755,6 +768,13 @@ def _startup_delay_refused(path: tuple[str, ...], value: object) -> bool:
     if isinstance(value, bool) or not isinstance(value, int):
         return True
     return not 0 <= value <= _MAX_STARTUP_DELAY_SECONDS
+
+
+def _lock_holding_key(path: tuple[str, ...]) -> str | None:
+    """The lock-holding `clab.<key>` a path sets, if any."""
+    if len(path) < 2 or path[-1] not in _LOCK_HOLDING_CLAB_KEYS:
+        return None
+    return path[-1] if _clab_attribute(path, path[-1]) else None
 
 
 def _clab_key(path: tuple[str, ...]) -> str | None:
@@ -825,6 +845,13 @@ def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
                 f"`clab.startup-delay` must be a whole number of seconds up to "
                 f"{_MAX_STARTUP_DELAY_SECONDS}: containerlab waits it out holding a lock "
                 "every other lab needs — use the deployment's boot waves for longer",
+            )
+        elif (lock_key := _lock_holding_key(path)) is not None:
+            key = _display_path(path)
+            found[key] = UnsupportedDirective(
+                key,
+                f"`clab.{lock_key}` {_LOCK_HOLDING_CLAB_KEYS[lock_key]}, holding a lock "
+                "every other lab needs — refused so one lab cannot stall the rest",
             )
         elif (clab_key := _clab_key(path)) is not None:
             key = _display_path(path)

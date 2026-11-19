@@ -296,3 +296,21 @@ save or deploy, naming the key.
 **API and `twinlab-client`:** no new types. `PUT /labs/{name}` and `POST /labs/{name}/deploy`
 refuse more values, and `GET /labs/{name}/nodes/{node}/logs/stream` sends `end` after an hour.
 `follow_node_logs()` stops there, as it does when the node stops.
+
+## 2026-11-18: Definitions can no longer set `clab.stages` or `clab.healthcheck`
+
+Deploy stages and health checks make containerlab wait during a deploy, for other nodes or for
+a health condition. That waiting happens inside the containerlab API's deploy call, which holds
+a lock every other lab needs, the same reason `clab.startup-delay` is now capped (the previous
+entry). Saving or deploying a definition that sets either, on a node, a group or
+`defaults.devices.<device>`, is refused with 422 `unsupported_directive`.
+
+`clab.exec` stays allowed, because it is how commands are run in a node after it starts. A
+slow command there can still hold up other labs' deploys and node actions for as long as it
+runs, until the containerlab API stops holding one lock for a whole deploy.
+
+**Upgrading:** a stored definition that sets either key is refused at its next save or deploy,
+naming the key.
+
+**API and `twinlab-client`:** no new types. `PUT /labs/{name}` and `POST /labs/{name}/deploy`
+refuse more keys.

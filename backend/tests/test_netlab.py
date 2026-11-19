@@ -662,3 +662,31 @@ def test_find_unsupported_directives_caps_startup_delay(
 ) -> None:
     found = [d.key for d in find_unsupported_directives(where.format(v=value))]
     assert any(key.endswith("startup-delay") for key in found) is refused, found
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "nodes:\n  r1:\n    clab:\n      stages:\n"
+        "        create:\n          wait-for: [{node: r2}]\n",
+        "nodes:\n  r1:\n    clab:\n      healthcheck: {test: [CMD, 'false'], retries: 999}\n",
+        "groups:\n  g:\n    clab.stages: {}\n",
+        "defaults.devices.linux.clab.healthcheck: {}\n",
+        "nodes:\n  groups:\n    clab:\n      stages: {}\n",
+    ],
+)
+def test_find_unsupported_directives_refuses_clab_keys_that_hold_the_deploy(
+    definition: str,
+) -> None:
+    # Deploy stages and health checks make containerlab wait INSIDE clab-api's
+    # deploy call, under the lock every other lab needs.
+    found = [d.key for d in find_unsupported_directives(definition)]
+    assert len(found) == 1 and found[0].rsplit(".", 1)[-1] in ("stages", "healthcheck"), found
+
+
+def test_find_unsupported_directives_keeps_clab_exec_and_names() -> None:
+    definition = (
+        "nodes:\n  r1:\n    clab:\n      exec: ['ip link']\n"
+        "  clab:\n    stages: x\n"  # a node NAMED clab, attribute `stages`
+    )
+    assert find_unsupported_directives(definition) == []

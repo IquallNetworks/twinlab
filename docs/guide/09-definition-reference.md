@@ -31,14 +31,16 @@ Each of these is a legal netlab key that Twinlab rejects at save time with
 | `clab.binds`, `clab.license`, `clab.startup-config`, `clab.srl-agents` | each reads files from the host into a node | nothing — a lab must not reach outside itself |
 | `clab.network-mode`, `clab.ports`, link `clab.uplink`, link `clab.vxlan` | each connects a node to the host's network, its interfaces, another container or a remote address | the SSH jump host for access to a node |
 | `clab.kind`, `clab.runtime` | some kinds act on the host or on other containers, and Twinlab fixes the runtime | `device:` chooses the kind |
+| `clab.stages`, `clab.healthcheck` | each makes the deploy wait, holding a lock every other lab needs | nothing; `clab.startup-delay` up to 30 seconds staggers a boot |
 | any other `defaults.providers.clab` setting | containerlab provider settings belong to the deployment | nothing |
 
 The `clab.*` keys are refused wherever netlab accepts them: on a node, a group,
 or `defaults.devices.<device>`. Other `clab.*` settings stay inside the node and
 are fine, for example `env`, `dns`, `cmd`, `exec` and `restart-policy`.
 `startup-delay` is fine up to 30 seconds: containerlab waits it out while
-holding a lock every other lab needs, so a longer one is refused the same way. A definition saved before a key joined this list can no longer
-be deployed. Its deploy is refused the same way until you remove the key.
+holding a lock every other lab needs, so a longer one is refused the same way. A
+definition saved before a key joined this list can no longer be deployed. Its
+deploy is refused the same way until you remove the key.
 
 **Twinlab refuses rather than ignoring.** That is the point of the list.
 Accepting a key and silently dropping it is what people expect, and it is worse:

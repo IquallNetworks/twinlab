@@ -9,7 +9,8 @@ upstream, so it is closed whichever side ends first.
 """
 
 import re
-from collections.abc import AsyncGenerator
+import time
+from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Annotated
@@ -203,17 +204,34 @@ async def capture(
     )
 
 
-async def log_events(upstream: UpstreamStream) -> AsyncGenerator[str]:
+# How long one follow may run. A stream is authorized once, at its start, so
+# revoking a user, key or grant does not cut a follow already running; the cap
+# bounds that exposure, and following again re-authorizes. Checked per line
+# and per keepalive (clab-api sends one every 25 s), so a follow ends within
+# 25 s of its limit.
+_FOLLOW_LIFETIME_SECONDS = 3600.0
+
+
+async def log_events(
+    upstream: UpstreamStream,
+    *,
+    lifetime_seconds: float,
+    clock: Callable[[], float] = time.monotonic,  # every caller but a test's
+) -> AsyncGenerator[str]:
+    deadline = clock() + lifetime_seconds
     try:
         yield ": connected\n\n"  # flush headers so EventSource fires `open`
         async for line in follow_log_lines(upstream):
+            if clock() >= deadline:
+                break
             if line is None:
                 yield ": keepalive\n\n"
                 continue
             payload = NodeLogLine(stream=line.stream, line=line.line)
             yield f"event: log\ndata: {payload.model_dump_json()}\n\n"
-        # Upstream ended (container removed, or clab-api's 12h limit): say so,
-        # or EventSource reconnects forever and replays the tail each time.
+        # Upstream ended (node stopped or removed, clab-api's 12h limit) or the
+        # follow reached its lifetime: say so, or an EventSource client
+        # reconnects forever and replays the tail each time.
         yield "event: end\ndata: {}\n\n"
     finally:
         await upstream.aclose()
@@ -242,5 +260,8 @@ async def follow_node_logs(
             )
         raise ApiError(502, "upstream_error", opened.error.message)
     return UpstreamResponse(
-        opened.value, log_events(opened.value), media_type="text/event-stream", headers=_SSE_HEADERS
+        opened.value,
+        log_events(opened.value, lifetime_seconds=_FOLLOW_LIFETIME_SECONDS),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
     )

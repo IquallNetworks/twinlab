@@ -112,7 +112,8 @@ function followNote(state: StreamState, count: number): string {
     case 'live':
       return `following · ${count} lines`
     case 'ended':
-      return 'the log ended: the node stopped or was removed'
+      // The server also ends a follow after an hour (it is authorized once).
+      return 'the log ended: the node stopped, or an hour of following passed'
     case 'lost':
       return 'the stream stopped; follow again to resume'
     case 'refused':

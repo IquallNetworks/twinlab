@@ -84,11 +84,11 @@ The logs dialog **follows** the log as it opens, appending new lines as the
 node writes them, which is how to watch a node boot. **Stop following** turns
 it into a snapshot with **Refresh**, and **Follow** goes back. It starts from
 the last 200 lines, keeps the newest 5,000, and stops scrolling while you read
-further up. Following ends when the node stops; the dialog says so and offers
-to follow again. It does not reconnect on its own, because following again
-starts from a fresh tail, so lines from the gap can repeat or go missing. If
-Twinlab refuses to follow (the lab was destroyed meanwhile, say), the dialog
-shows its reason.
+further up. Following ends when the node stops, or after an hour; the dialog
+says so and offers to follow again. It does not reconnect on its own, because
+following again starts from a fresh tail, so lines from the gap can repeat or
+go missing. If Twinlab refuses to follow (the lab was destroyed meanwhile,
+say), the dialog shows its reason.
 
 **The web terminal** opens a session in a node from the browser. It needs
 `lab:terminal`.

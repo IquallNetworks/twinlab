@@ -274,3 +274,25 @@ refuses it everywhere but as the name of a node or group directly under `nodes:`
 with `unsupported_directive`, naming the key.
 
 **API and `twinlab-client`:** unchanged.
+
+## 2026-11-18: Limits on `clab.startup-delay` and on following a log
+
+Two limits from a security review, so that one user cannot hold up others:
+
+- **`clab.startup-delay` in a definition is capped at 30 seconds.** containerlab waits the
+  delay out inside the containerlab API's deploy call, which holds a lock every other lab
+  needs, so a long delay set by anyone allowed to edit a lab stalled every other lab. Saving
+  or deploying a definition with a longer delay, or one that is not a whole number of seconds,
+  is refused with 422 `unsupported_directive`. For longer staggers, use the deployment's boot
+  waves (`BOOT_WAVE_SIZE`, `BOOT_WAVE_INTERVAL_SECONDS`).
+- **Following a node's log ends after an hour.** The stream is authorized once, when it
+  starts, so revoking a user, an API key or a grant did not stop a follow already running.
+  After an hour the stream sends `end`, as when the node stops; following again checks access
+  again. In the UI, the logs dialog says so and offers **Follow again**.
+
+**Upgrading:** a stored definition with a longer `clab.startup-delay` is refused at its next
+save or deploy, naming the key.
+
+**API and `twinlab-client`:** no new types. `PUT /labs/{name}` and `POST /labs/{name}/deploy`
+refuse more values, and `GET /labs/{name}/nodes/{node}/logs/stream` sends `end` after an hour.
+`follow_node_logs()` stops there, as it does when the node stops.

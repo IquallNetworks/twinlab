@@ -102,12 +102,33 @@ async def test_log_events_frame_lines_keepalives_and_the_end() -> None:
     )
     raw = _Closing(body)
     upstream = UpstreamStream(httpx2.Response(200, stream=raw))
-    frames = [frame async for frame in lab_streams.log_events(upstream)]
+    frames = [frame async for frame in lab_streams.log_events(upstream, lifetime_seconds=60)]
     assert frames == [
         ": connected\n\n",
         'event: log\ndata: {"stream":"stdout","line":"boot \\"ok\\""}\n\n',
         ": keepalive\n\n",
         'event: log\ndata: {"stream":"stderr","line":"bad"}\n\n',
+        "event: end\ndata: {}\n\n",
+    ]
+    assert raw.closed
+
+
+async def test_a_follow_ends_at_its_lifetime_and_closes_upstream() -> None:
+    # Authorized once at its start, a follow must not outlive a revocation for
+    # long: past its lifetime it ends like an upstream end, and closes clab-api.
+    body = b'{"containerName":"c","line":"a","stream":"stdout"}\n' * 3
+    raw = _Closing(body)
+    upstream = UpstreamStream(httpx2.Response(200, stream=raw))
+    ticks = iter([0.0, 10.0, 70.0])  # start, first line, second line
+    frames = [
+        frame
+        async for frame in lab_streams.log_events(
+            upstream, lifetime_seconds=60, clock=lambda: next(ticks)
+        )
+    ]
+    assert frames == [
+        ": connected\n\n",
+        'event: log\ndata: {"stream":"stdout","line":"a"}\n\n',
         "event: end\ndata: {}\n\n",
     ]
     assert raw.closed

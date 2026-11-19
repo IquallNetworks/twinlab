@@ -97,7 +97,10 @@ GET /labs/{name}/nodes/{node}/logs/stream?tail=200
   merges the two, so every line reads `stdout` there.
 - **`end`** is sent when the upstream stream ends: the node was stopped (Docker stops
   following a stopped container, measured), the container was removed, or clab-api's 12-hour
-  limit was reached. It tells a client to stop, because `EventSource` otherwise reconnects
+  limit was reached; and when the follow has run for an hour (2026-11-18). The stream is
+  authorized once, at its start, so revoking a user, key or grant does not cut a follow already
+  running: the hour bounds that, and following again re-authorizes. It is checked per line and
+  per keepalive, so a follow ends within 25 seconds of the hour. It tells a client to stop, because `EventSource` otherwise reconnects
   forever, and each reconnect would replay the tail.
 - clab-api's blank keepalive becomes an SSE comment. That also makes a write reach a browser
   that left, which is how the backend notices and closes the upstream stream.

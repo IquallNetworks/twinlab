@@ -973,7 +973,8 @@ The project is a `docker compose` stack (`compose.yaml`, project name `twinlab`)
   slice, which throttles and swaps but never kills. Every Docker memory limit is a
   `memory.max` (a kill line), which is why there are NO per-node limits. Deploy CAN boot
   nodes in WAVES (containerlab `startup-delay`, `BOOT_WAVE_INTERVAL_SECONDS`, definition
-  order, an explicit `clab.startup-delay` wins): a NOS boot is a CPU burst (7 VyOS nodes
+  order, an explicit `clab.startup-delay` wins, and a definition may set at most 30 s of it
+  since 2026-11-18 because the delay is slept under clab-api's global lock): a NOS boot is a CPU burst (7 VyOS nodes
   took ~6 of 8 cores for 30s), and containerlab's `max-workers` was measured and does NOT
   stagger boots, only container creation. **Waves are OFF by default** (shipped on, turned
   off the same day): since v0.7.0 clab-api holds ONE process-wide lock (`containerlabMu`)

@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from typing import cast
 
+import pytest
 import yaml
 
 from twinlab_backend.result import Err, Ok
@@ -636,3 +637,28 @@ def test_find_unsupported_directives_sees_clab_on_nodes_named_like_sections() ->
             definition = f"{section}:\n  {name}:\n    clab:\n      binds: ['/:/host']\n"
             found = [d.key for d in find_unsupported_directives(definition)]
             assert found == [f"{section}.{name}.clab.binds"], (section, name, found)
+
+
+@pytest.mark.parametrize(
+    ("where", "value", "refused"),
+    [
+        ("nodes:\n  r1:\n    clab:\n      startup-delay: {v}\n", "30", False),
+        ("nodes:\n  r1:\n    clab:\n      startup-delay: {v}\n", "0", False),
+        ("nodes:\n  r1:\n    clab:\n      startup-delay: {v}\n", "31", True),
+        ("nodes:\n  r1:\n    clab:\n      startup-delay: {v}\n", "-1", True),
+        ("nodes:\n  r1:\n    clab:\n      startup-delay: {v}\n", "'600'", True),
+        ("nodes:\n  r1:\n    clab:\n      startup-delay: {v}\n", "2.5", True),
+        ("nodes:\n  r1:\n    clab:\n      startup-delay: {v}\n", "true", True),
+        ("nodes:\n  r1:\n    clab.startup-delay: {v}\n", "600", True),
+        ("groups:\n  g:\n    clab:\n      startup-delay: {v}\n", "600", True),
+        ("defaults.devices.linux.clab.startup-delay: {v}\n", "600", True),
+        ("nodes:\n  nodes:\n    clab:\n      startup-delay: {v}\n", "600", True),
+        # A node NAMED clab with an attribute called startup-delay is a name.
+        ("nodes:\n  clab:\n    startup-delay: {v}\n", "600", False),
+    ],
+)
+def test_find_unsupported_directives_caps_startup_delay(
+    where: str, value: str, refused: bool
+) -> None:
+    found = [d.key for d in find_unsupported_directives(where.format(v=value))]
+    assert any(key.endswith("startup-delay") for key in found) is refused, found

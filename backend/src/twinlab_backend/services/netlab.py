@@ -726,18 +726,43 @@ _HOST_REACHING_CLAB_KEYS = {
 }
 
 
+# The longest `clab.startup-delay` a definition may set. containerlab waits it
+# out INSIDE clab-api's deploy call, which holds clab-api's one process-wide
+# lock, so every other lab's actions wait too: a long delay from any lab
+# editor would stall the fleet. Staggering a boot needs seconds; the
+# operator's boot waves (BOOT_WAVE_*) remain for anything longer.
+_MAX_STARTUP_DELAY_SECONDS = 30
+
+
+def _clab_attribute(path: tuple[str, ...], key: str) -> bool:
+    """Whether `path` sets the `clab.<key>` attribute, decided by POSITION:
+    `clab` is a node or group NAME only in exactly `nodes.clab.<attr>` /
+    `groups.clab.<attr>` (legal, like a node named `tc`). Matching the text
+    before it instead let a node NAMED `nodes` (or `groups`) carry
+    `clab.binds` past the gate (`nodes.nodes.clab.binds`); anything ambiguous
+    counts as the attribute."""
+    if len(path) < 2 or path[-2] != "clab" or path[-1] != key:
+        return False
+    return not (len(path) == 3 and path[0] in ("nodes", "groups"))
+
+
+def _startup_delay_refused(path: tuple[str, ...], value: object) -> bool:
+    """A `clab.startup-delay` that is not a whole number of seconds up to the
+    cap. Fail closed: a value containerlab might read some other way is
+    refused, not interpreted."""
+    if not _clab_attribute(path, "startup-delay"):
+        return False
+    if isinstance(value, bool) or not isinstance(value, int):
+        return True
+    return not 0 <= value <= _MAX_STARTUP_DELAY_SECONDS
+
+
 def _clab_key(path: tuple[str, ...]) -> str | None:
-    """The host-reaching `clab.<key>` a path sets, if any. `clab` must be the
-    ATTRIBUTE, not a node or group that happens to be named `clab` (legal, like
-    a node named `tc`). Decided by POSITION: `clab` is a name only in exactly
-    `nodes.clab.<attr>` / `groups.clab.<attr>`. Matching the text before it
-    instead let a node NAMED `nodes` (or `groups`) carry `clab.binds` past
-    the gate (`nodes.nodes.clab.binds`); anything ambiguous is refused."""
-    if len(path) < 2 or path[-2] != "clab" or path[-1] not in _HOST_REACHING_CLAB_KEYS:
+    """The host-reaching `clab.<key>` a path sets, if any (see
+    `_clab_attribute` for when `clab` is the attribute rather than a name)."""
+    if len(path) < 2 or path[-1] not in _HOST_REACHING_CLAB_KEYS:
         return None
-    if len(path) == 3 and path[0] in ("nodes", "groups"):
-        return None
-    return path[-1]
+    return path[-1] if _clab_attribute(path, path[-1]) else None
 
 
 def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
@@ -792,6 +817,14 @@ def find_unsupported_directives(definition: str) -> list[UnsupportedDirective]:
             key = _display_path(path)
             found[key] = UnsupportedDirective(
                 key, "containerlab provider settings belong to the deployment"
+            )
+        elif _startup_delay_refused(path, value):
+            key = _display_path(path)
+            found[key] = UnsupportedDirective(
+                key,
+                f"`clab.startup-delay` must be a whole number of seconds up to "
+                f"{_MAX_STARTUP_DELAY_SECONDS}: containerlab waits it out holding a lock "
+                "every other lab needs — use the deployment's boot waves for longer",
             )
         elif (clab_key := _clab_key(path)) is not None:
             key = _display_path(path)

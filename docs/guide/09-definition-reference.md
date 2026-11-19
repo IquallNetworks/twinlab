@@ -35,8 +35,9 @@ Each of these is a legal netlab key that Twinlab rejects at save time with
 
 The `clab.*` keys are refused wherever netlab accepts them: on a node, a group,
 or `defaults.devices.<device>`. Other `clab.*` settings stay inside the node and
-are fine, for example `env`, `dns`, `cmd`, `exec`, `startup-delay` and
-`restart-policy`. A definition saved before a key joined this list can no longer
+are fine, for example `env`, `dns`, `cmd`, `exec` and `restart-policy`.
+`startup-delay` is fine up to 30 seconds: containerlab waits it out while
+holding a lock every other lab needs, so a longer one is refused the same way. A definition saved before a key joined this list can no longer
 be deployed. Its deploy is refused the same way until you remove the key.
 
 **Twinlab refuses rather than ignoring.** That is the point of the list.

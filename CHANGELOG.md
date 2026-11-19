@@ -314,3 +314,26 @@ naming the key.
 
 **API and `twinlab-client`:** no new types. `PUT /labs/{name}` and `POST /labs/{name}/deploy`
 refuse more keys.
+
+## 2026-11-18: Dependency security updates
+
+The locked dependencies of every image were updated past known advisories: in the backend
+Authlib 1.9, joserfc 1.8, Mako 1.4, urllib3 2.8, certifi, filelock 4 and paramiko 5 (with
+netmiko 4.8, the first release that accepts it); in the netlab-runner cryptography 50,
+urllib3, certifi, filelock and paramiko 5 with netmiko 4.8; in the MCP server PyJWT 2.15 and
+opentelemetry-api 1.45. The frontend's packages moved to their latest compatible releases
+(seroval, Vite 7.3.8 and others), and minimatch is held at 11 or later through a pnpm
+override, because the shadcn tooling would otherwise lock a vulnerable 10.x.
+
+Only the lockfiles changed, not the version ranges, except that the frontend's
+`package.json` now names the versions it was tested with as its minimums.
+
+The frontend image now serves from nginx 1.30, the stable branch, on Alpine 3.24. It was
+built on `nginx:1.29-alpine`, a branch nginx retired in April: that tag still pulls but no
+longer changes, so even a `--pull` rebuild kept Alpine 3.23 and its unpatched packages.
+
+**Upgrading:** rebuild every image, pulling fresh base images (`docker compose build --pull`),
+so the system packages under them are current too. paramiko 5 no longer reads DSA keys; no
+Twinlab path uses one.
+
+**API and `twinlab-client`:** no change. The client's own dependencies are unchanged.
